@@ -190,7 +190,7 @@ mole robot <domain> <verb> [options] [< request.json]
 |---|---|---|---|
 | `robot clean plan [--sections a,b] [--external <path>]` | 可选 section 过滤 / 外置卷目标 | progress* → item* → insight* → done | 否 |
 | `robot clean apply --plan <id>` | stdin: item id 每行一个 | result* → done | **是** |
-| `robot apps list` | — | item*（app 条目）→ done | 否 |
+| `robot apps list` | — | **透传 `uninstall --list` 的 JSON 数组文档**（协议例外：非 NDJSON 事件流，MoleKit 用 JSONDecoder 单独解；避免在 bash 侧重编码） | 否 |
 | `robot uninstall plan` | stdin: `{"bundle_ids":[…]}` 或 `{"paths":[…]}` | item*（主体+残留，含分组）→ done | 否 |
 | `robot uninstall apply --plan <id>` | stdin: item id 每行一个 | result* → done | **是** |
 | `robot apps updates list` | — | item*（可更新项：来源/当前/最新）→ done | 否 |
@@ -202,7 +202,7 @@ mole robot <domain> <verb> [options] [< request.json]
 | `robot purge plan [--paths …]` | 扫描根 | 同 clean plan | 否 |
 | `robot purge apply` | 同 clean apply | 同 clean apply | **是** |
 | `robot installer plan/apply` | 同上 | 同上 | plan 否 / apply 是 |
-| `robot history list [--limit n] [--json]` | — | item*（历史记录）→ done | 否 |
+| `robot history list [--limit n] [--deletions]` | 默认会话摘要（operations.log）；`--deletions` 逐项明细（deletions.log TSV） | item* → done | 否 |
 | `robot whitelist list/add/remove --mode clean\|optimize` | pattern + 模式（两套白名单文件，见 §5.7） | done（含更新后列表） | 否（改配置） |
 
 注：`--sections` 是**协议层**的机器过滤参数（GUI 分 tab/分域调用用），不是复活已移除的用户向 `mo clean --select`（`bin/clean.sh:1463` 明确拒绝该 flag）——TUI 用户面保持不变，robot 过滤只存在于机器接口。
@@ -902,9 +902,9 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 |---|---|
 | `lib/core/robot.sh`（emit/plan 文件管理）+ `bin/robot.sh` 路由 —— **✅ 已落地（2026-07-06，`tests/robot_core.bats` 14 用例全绿）**；节流与取消语义随真实 section 接入补 | bats：事件格式、错误码、plan 过期、安全链（protected/whitelisted/missing/dry-run） |
 | `robot clean plan/apply` —— **plan 基于 dry-run 导出文件构建（EXPORT_LIST_FILE），"GUI plan == CLI dry-run"由构造保证**；apply 逐 id 重验（存在性→保护→白名单→mole_delete）。**✅ 骨架已落地**，待 macOS 上对真实 clean 输出做端到端验证 | §11.4 一致性由同源构造保证 + macOS 端到端 bats |
-| `robot apps list` / `robot history list --json` / `robot whitelist *` | bats 全绿 |
+| `robot apps list`（透传）/ `robot history list`（双日志解析）/ `robot whitelist --mode` —— **✅ 已落地** | bats 全绿（24 用例）|
 | `cmd/analyze --serve`（scan/children/cancel，先不含 delete） | go test 协议用例 |
-| `contracts/*.ndjson` golden 初版 | 契约测试框架在两端跑通 |
+| `contracts/robot_v1/*.ndjson` golden（取自真机验证输出）—— **✅ 已落地**，CLI bats 校验 schema，Swift GoldenContractTests 消费同一批文件 | 契约测试框架在两端跑通 |
 
 **里程碑判据**：不写一行 Swift，用 `jq` 脚本即可完成一次"plan → 勾选 → apply → 废纸篓验证"的完整演练。
 

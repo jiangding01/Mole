@@ -1,0 +1,5 @@
+{"v":1,"event":"progress","phase":"scan","section":"app_caches","current":"/Users/x/Library/Caches/com.apple.helpd","done":9,"total":-1,"bytes_found":331350016}
+{"v":1,"event":"item","id":"cl.user_essentials.69a9ddf0","section":"user_essentials","label":"/Users/x/Library/Caches","path":"/Users/x/Library/Caches","bytes":199500000,"kind":"cache","reversible":true,"default_selected":true,"risk":"safe"}
+{"v":1,"event":"item","id":"cl.browsers.7a0a6048","section":"browsers","label":"/Users/x/Library/Caches/Google/Chrome/Default","path":"/Users/x/Library/Caches/Google/Chrome/Default","bytes":64000000,"kind":"cache","reversible":true,"default_selected":true,"risk":"safe"}
+{"v":1,"event":"insight","section":"large_files","label":"/Users/x/Movies/big.mov","bytes":8000000000}
+{"v":1,"event":"done","ok":true,"plan_id":"pl_20260706233619_51500_4352","summary":{"items":3,"bytes_total":263500000}}

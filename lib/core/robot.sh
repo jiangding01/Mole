@@ -248,6 +248,186 @@ robot_clean_plan_from_export() {
     robot_emit_done "true" "$plan_id" "\"items\":$items,\"bytes_total\":$bytes_total"
 }
 
+# --- clean plan: incremental progress -----------------------------------------
+# While the wrapped clean dry-run is writing EXPORT_LIST_FILE, the router
+# polls it and calls this to summarize newly appended complete lines.
+# Echoes: "<section_slug>\t<last_path>\t<delta_bytes>\t<delta_items>".
+# State (current section) is carried by the caller via $3.
+
+robot_scan_export_delta() {
+    local file="$1" from_line="$2" carry_section="${3:-}"
+    local line section_slug="$carry_section" last_path="" delta_bytes=0 delta_items=0
+    local path size_part
+
+    while IFS= read -r line; do
+        case "$line" in
+            "" | "#"*) continue ;;
+            "=== "*" ===")
+                section_slug=$(robot_section_slug "${line#=== }")
+                section_slug=${section_slug%_}
+                continue
+                ;;
+        esac
+        [[ -n "$section_slug" ]] || continue
+        path="${line%%  \#*}"
+        size_part="${line##*  \# }"
+        size_part="${size_part%%,*}"
+        delta_bytes=$((delta_bytes + $(robot_human_to_bytes "$size_part")))
+        delta_items=$((delta_items + 1))
+        last_path="$path"
+    done < <(sed -n "$((from_line + 1)),\$p" "$file" 2> /dev/null)
+
+    printf '%s\t%s\t%s\t%s\n' "$section_slug" "$last_path" "$delta_bytes" "$delta_items"
+}
+
+# --- history: parse the structured logs ----------------------------------------
+# deletions.log line format (lib/core/file_ops.sh):
+#   <iso_ts>\t<mode>\t<size_kb>\t<status>\t<path>
+# operations.log session markers (lib/core/log.sh):
+#   # ========== <cmd> session started at <ts> ==========
+#   # ========== <cmd> session ended at <ts>, <N> items, <SIZE> ==========
+
+robot_history_deletions() {
+    local log_file="$1" limit="${2:-100}"
+    local count=0 n=0
+    local ts mode size_kb status path bytes
+
+    [[ -f "$log_file" ]] || {
+        robot_emit_done "true" "" "\"items\":0"
+        return 0
+    }
+
+    while IFS=$'\t' read -r ts mode size_kb status path; do
+        [[ -n "$path" ]] || continue
+        n=$((n + 1))
+        bytes=$((${size_kb:-0} * 1024))
+        robot_emit "item" "$(printf '"id":"hist.del.%s","section":"deletions","label":"%s","path":"%s","bytes":%s,"kind":"log_entry","detail":"%s %s %s"' \
+            "$n" "$(robot_json_escape "$path")" "$(robot_json_escape "$path")" "$bytes" \
+            "$(robot_json_escape "$ts")" "$(robot_json_escape "$mode")" "$(robot_json_escape "$status")")"
+        count=$((count + 1))
+    done < <(tail -n "$limit" "$log_file")
+
+    robot_emit_done "true" "" "\"items\":$count"
+}
+
+robot_history_sessions() {
+    local log_file="$1" limit="${2:-20}"
+    local count=0
+
+    [[ -f "$log_file" ]] || {
+        robot_emit_done "true" "" "\"items\":0"
+        return 0
+    }
+
+    # Emit one item per completed session (the "ended" marker carries the
+    # command, timestamp, item count and freed size).
+    while IFS=$'\t' read -r cmd ts items size; do
+        [[ -n "$cmd" ]] || continue
+        count=$((count + 1))
+        robot_emit "item" "$(printf '"id":"hist.ses.%s","section":"sessions","label":"%s","bytes":%s,"kind":"log_entry","detail":"%s · %s items"' \
+            "$count" "$(robot_json_escape "$cmd")" \
+            "$(robot_human_to_bytes "$size")" \
+            "$(robot_json_escape "$ts")" "$(robot_json_escape "$items")")"
+    done < <(awk '
+        /^# ========== .* session ended at / {
+            line = $0
+            sub(/^# ========== /, "", line)
+            cmd = line
+            sub(/ session ended at .*/, "", cmd)
+            rest = line
+            sub(/^.* session ended at /, "", rest)
+            sub(/ ==========$/, "", rest)
+            # rest: "<ts>, <N> items, <SIZE>"
+            n = split(rest, parts, ", ")
+            ts = parts[1]
+            items = parts[2]
+            sub(/ items$/, "", items)
+            size = (n >= 3) ? parts[3] : "0B"
+            printf "%s\t%s\t%s\t%s\n", cmd, ts, items, size
+        }
+    ' "$log_file" | tail -n "$limit")
+
+    robot_emit_done "true" "" "\"items\":$count"
+}
+
+# --- whitelist ------------------------------------------------------------------
+# Thin structured wrapper over lib/manage/whitelist.sh. Dependencies
+# (load_whitelist, save_whitelist_patterns, CURRENT_WHITELIST_PATTERNS) must
+# be loaded by the router (or stubbed in tests); fails closed when missing.
+
+robot_whitelist_cmd() {
+    local verb="$1" mode="$2" pattern="${3:-}"
+    local dep p found=0 count=0
+    local -a next=()
+
+    for dep in load_whitelist save_whitelist_patterns; do
+        if ! type "$dep" > /dev/null 2>&1; then
+            robot_emit_error "E_INTERNAL" "whitelist dependency not loaded: $dep" "true"
+            return 1
+        fi
+    done
+    case "$mode" in
+        clean | optimize) ;;
+        *)
+            robot_emit_error "E_INTERNAL" "invalid whitelist mode: $mode" "true"
+            return 1
+            ;;
+    esac
+
+    load_whitelist "$mode"
+
+    case "$verb" in
+        list) ;;
+        add)
+            [[ -n "$pattern" ]] || {
+                robot_emit_error "E_INTERNAL" "add requires a pattern" "true"
+                return 1
+            }
+            if [[ ${#CURRENT_WHITELIST_PATTERNS[@]} -gt 0 ]]; then
+                for p in "${CURRENT_WHITELIST_PATTERNS[@]}"; do
+                    [[ "$p" == "$pattern" ]] && found=1
+                done
+            fi
+            if [[ $found -eq 0 ]]; then
+                CURRENT_WHITELIST_PATTERNS+=("$pattern")
+                save_whitelist_patterns "$mode" "${CURRENT_WHITELIST_PATTERNS[@]}"
+            fi
+            ;;
+        remove)
+            [[ -n "$pattern" ]] || {
+                robot_emit_error "E_INTERNAL" "remove requires a pattern" "true"
+                return 1
+            }
+            if [[ ${#CURRENT_WHITELIST_PATTERNS[@]} -gt 0 ]]; then
+                for p in "${CURRENT_WHITELIST_PATTERNS[@]}"; do
+                    [[ "$p" == "$pattern" ]] || next+=("$p")
+                done
+            fi
+            CURRENT_WHITELIST_PATTERNS=()
+            if [[ ${#next[@]} -gt 0 ]]; then
+                CURRENT_WHITELIST_PATTERNS=("${next[@]}")
+                save_whitelist_patterns "$mode" "${CURRENT_WHITELIST_PATTERNS[@]}"
+            else
+                save_whitelist_patterns "$mode"
+            fi
+            ;;
+        *)
+            robot_emit_error "E_INTERNAL" "unsupported whitelist verb: $verb" "true"
+            return 1
+            ;;
+    esac
+
+    # Always emit the resulting list so add/remove callers see the new state.
+    if [[ ${#CURRENT_WHITELIST_PATTERNS[@]} -gt 0 ]]; then
+        for p in "${CURRENT_WHITELIST_PATTERNS[@]}"; do
+            count=$((count + 1))
+            robot_emit "item" "$(printf '"id":"wl.%s.%s","section":"whitelist_%s","label":"%s","kind":"whitelist_pattern"' \
+                "$mode" "$count" "$mode" "$(robot_json_escape "$p")")"
+        done
+    fi
+    robot_emit_done "true" "" "\"items\":$count"
+}
+
 # --- clean apply --------------------------------------------------------------
 # Re-validates every id against the live filesystem and the CLI safety layers
 # before deleting (§7.4 chain). Deletion goes through mole_delete only.

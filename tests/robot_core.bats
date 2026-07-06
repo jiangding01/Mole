@@ -194,6 +194,130 @@ setup_apply_plan() {
     [ -e "$BATS_TEST_TMPDIR/data/exists" ] || return 1
 }
 
+# --- progress delta scanning ----------------------------------------------------
+
+@test "robot_scan_export_delta summarizes newly appended lines" {
+    make_export_fixture
+    # Whole file from line 0: 3 items (insight lines counted as entries here is
+    # fine — the watcher only uses this for progress totals, not for the plan).
+    run robot_scan_export_delta "$BATS_TEST_TMPDIR/export.txt" 0 ""
+    [ "$status" -eq 0 ] || return 1
+    delta_items=$(printf '%s' "$output" | cut -f4)
+    [ "$delta_items" -eq 4 ] || return 1
+    # Carry-over: scanning from the middle keeps the caller's section context.
+    total_lines=$(wc -l < "$BATS_TEST_TMPDIR/export.txt" | tr -d ' ')
+    run robot_scan_export_delta "$BATS_TEST_TMPDIR/export.txt" "$total_lines" "developer_tools"
+    [ "$(printf '%s' "$output" | cut -f1)" = "developer_tools" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f4)" = "0" ] || return 1
+}
+
+# --- history parsing --------------------------------------------------------------
+
+@test "robot_history_deletions parses the TSV deletions log" {
+    require_jq
+    printf '2026-07-06T10:00:00\ttrash\t1024\tTRASHED\t/Users/x/Library/Caches/foo\n' > "$BATS_TEST_TMPDIR/deletions.log"
+    printf '2026-07-06T10:00:01\trm\t50\tREMOVED\t/Users/x/Library/Logs/bar.log\n' >> "$BATS_TEST_TMPDIR/deletions.log"
+    run robot_history_deletions "$BATS_TEST_TMPDIR/deletions.log" 100
+    echo "$output" | jq -se '[.[] | select(.event == "item")] | length == 2' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][0].bytes == 1048576' > /dev/null || return 1
+    echo "$output" | jq -se '.[-1].event == "done" and .[-1].summary.items == 2' > /dev/null || return 1
+}
+
+@test "robot_history_sessions parses session end markers" {
+    require_jq
+    cat > "$BATS_TEST_TMPDIR/operations.log" << 'EOF'
+
+# ========== clean session started at 2026-07-06 14:30:00 ==========
+[2026-07-06 14:30:01] [clean] TRASH /Users/x/Library/Caches/foo
+# ========== clean session ended at 2026-07-06 14:32:10, 129 items, 8.90GB ==========
+
+# ========== uninstall session started at 2026-07-06 15:00:00 ==========
+# ========== uninstall session ended at 2026-07-06 15:01:00, 4 items, 493.8MB ==========
+EOF
+    run robot_history_sessions "$BATS_TEST_TMPDIR/operations.log" 20
+    echo "$output" | jq -se '[.[] | select(.event == "item")] | length == 2' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][0].label == "clean"' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][0].bytes == 8900000000' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][1].detail | contains("4 items")' > /dev/null || return 1
+}
+
+@test "robot_history handles missing log files gracefully" {
+    require_jq
+    run robot_history_deletions "$BATS_TEST_TMPDIR/nope.log" 10
+    echo "$output" | jq -se '.[0].event == "done" and .[0].summary.items == 0' > /dev/null || return 1
+}
+
+# --- whitelist ----------------------------------------------------------------------
+
+setup_whitelist_stubs() {
+    CURRENT_WHITELIST_PATTERNS=("~/keep/one" "~/keep/two")
+    load_whitelist() { :; }
+    # robot_whitelist_cmd runs inside $(...) in these tests, so report the
+    # save call through files rather than shell variables.
+    save_whitelist_patterns() {
+        printf '%s\n' "$1" > "$BATS_TEST_TMPDIR/saved_mode"
+        shift
+        printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/saved_patterns"
+    }
+}
+
+@test "whitelist list emits current patterns" {
+    require_jq
+    setup_whitelist_stubs
+    output=$(robot_whitelist_cmd list clean "")
+    echo "$output" | jq -se '[.[] | select(.event == "item")] | length == 2' > /dev/null || return 1
+    echo "$output" | jq -se '.[-1].summary.items == 2' > /dev/null || return 1
+}
+
+@test "whitelist add appends and saves; duplicate add is a no-op" {
+    require_jq
+    setup_whitelist_stubs
+    output=$(robot_whitelist_cmd add clean "~/keep/three")
+    echo "$output" | jq -se '.[-1].summary.items == 3' > /dev/null || return 1
+    grep -q 'keep/three' "$BATS_TEST_TMPDIR/saved_patterns" || return 1
+    [ "$(cat "$BATS_TEST_TMPDIR/saved_mode")" = "clean" ] || return 1
+
+    # Duplicate add: pattern already present -> no save call.
+    # (robot_whitelist_cmd ran in a subshell above, so seed the parent
+    # array explicitly to model the post-add state.)
+    CURRENT_WHITELIST_PATTERNS+=("~/keep/three")
+    rm -f "$BATS_TEST_TMPDIR/saved_patterns"
+    output=$(robot_whitelist_cmd add clean "~/keep/three")
+    [ ! -f "$BATS_TEST_TMPDIR/saved_patterns" ] || return 1
+}
+
+@test "whitelist remove drops the pattern; invalid mode fails closed" {
+    require_jq
+    setup_whitelist_stubs
+    output=$(robot_whitelist_cmd remove optimize "~/keep/one")
+    [ "$(cat "$BATS_TEST_TMPDIR/saved_mode")" = "optimize" ] || return 1
+    echo "$output" | jq -se '.[-1].summary.items == 1' > /dev/null || return 1
+
+    output=$(robot_whitelist_cmd list bogus "" || true)
+    echo "$output" | jq -se '.[0].code == "E_INTERNAL" and .[0].fatal == true' > /dev/null || return 1
+}
+
+@test "whitelist fails closed when save/load helpers are missing" {
+    require_jq
+    output=$(robot_whitelist_cmd list clean "" || true)
+    echo "$output" | jq -se '.[0].code == "E_INTERNAL" and .[0].fatal == true' > /dev/null || return 1
+}
+
+# --- golden contract files -----------------------------------------------------------
+
+@test "golden contract files are valid protocol v1 NDJSON" {
+    require_jq
+    for f in "$REPO_ROOT"/contracts/robot_v1/*.ndjson; do
+        [ -f "$f" ] || return 1
+        # Every line is JSON with the v1 envelope and a known event type.
+        jq -se 'all(.[]; .v == 1 and (.event | IN("progress","item","insight","result","task_status","done","error")))' "$f" > /dev/null || return 1
+        # Every result status is from the documented set.
+        jq -se 'all(.[] | select(.event == "result"); .status | IN("trashed","deleted","skipped_whitelisted","skipped_protected","skipped_missing","dry_run","failed"))' "$f" > /dev/null || return 1
+        # Every error code is from the documented table (§14.1).
+        jq -se 'all(.[] | select(.event == "error"); .code | startswith("E_"))' "$f" > /dev/null || return 1
+    done
+}
+
 @test "clean apply rejects expired plan with E_PLAN_EXPIRED" {
     require_jq
     setup_apply_plan
