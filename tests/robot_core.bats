@@ -184,6 +184,16 @@ setup_apply_plan() {
     [ -e "$BATS_TEST_TMPDIR/data/exists" ] || return 1
 }
 
+@test "clean apply fails closed when a safety dependency is missing" {
+    require_jq
+    setup_apply_plan
+    unset -f is_whitelisted
+    output=$(printf 'cl.a.exists\n' | robot_clean_apply "$plan_id" || true)
+    echo "$output" | jq -se '.[0].code == "E_INTERNAL" and .[0].fatal == true' > /dev/null || return 1
+    # Nothing deleted: the run was refused before entering the loop.
+    [ -e "$BATS_TEST_TMPDIR/data/exists" ] || return 1
+}
+
 @test "clean apply rejects expired plan with E_PLAN_EXPIRED" {
     require_jq
     setup_apply_plan

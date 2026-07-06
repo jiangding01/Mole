@@ -98,10 +98,14 @@ run_clean_apply() {
         exit 2
     fi
 
-    # Deletion chain dependencies (mole_delete / should_protect_path /
-    # is_whitelisted) come from the shared core libs.
+    # Deletion chain dependencies: mole_delete / should_protect_path from the
+    # shared core, is_whitelisted + patterns from the whitelist module.
+    # robot_clean_apply refuses to run (fail closed) if any of them is missing.
     # shellcheck source=lib/core/common.sh
     source "$SCRIPT_DIR/lib/core/common.sh"
+    # shellcheck source=lib/manage/whitelist.sh
+    source "$SCRIPT_DIR/lib/manage/whitelist.sh"
+    load_whitelist "clean"
 
     robot_clean_apply "$plan_id"
 }

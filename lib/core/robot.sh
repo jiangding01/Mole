@@ -257,6 +257,17 @@ robot_clean_apply() {
     local plan_id="$1"
     local item_id row path bytes freed=0 ok=0 skipped=0 failed=0
 
+    # Fail closed: if any safety-chain dependency is missing we refuse to run.
+    # A missing is_whitelisted would otherwise silently evaluate false and
+    # delete paths the user explicitly protected.
+    local dep
+    for dep in mole_delete should_protect_path is_whitelisted; do
+        if ! type "$dep" > /dev/null 2>&1; then
+            robot_emit_error "E_INTERNAL" "safety dependency not loaded: $dep" "true"
+            return 1
+        fi
+    done
+
     case "$(
         robot_plan_check "$plan_id"
         echo $?
