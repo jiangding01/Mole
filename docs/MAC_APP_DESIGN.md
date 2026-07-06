@@ -365,31 +365,47 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 → {"op":"scan","id":"q1","path":"/Users/x","mode":"overview"}
 ← {"event":"scan_progress","id":"q1","files":183025,"bytes":214748364800}
 ← {"event":"node","id":"q1","path":"/Users/x/Library","size":89123456789,"is_dir":true,
-   "cleanable":false,"child_count":42}   // 首层节点逐个吐出
-← {"event":"scan_done","id":"q1","total_size":…}
-→ {"op":"children","id":"q2","path":"/Users/x/Library"}      // 下钻懒加载
-→ {"op":"delete","id":"q3","path":"/Users/x/Library/Caches/Foo"}   // 经 mole_delete 语义
+   "cleanable":false,"child_count":42,"last_access":"2026-06-01"}   // 当前层子项逐个吐出
+← {"event":"scan_done","id":"q1","dir":"/Users/x","total_size":…,"item_count":228}
+→ {"op":"children","id":"q2","path":"/Users/x/Library"}   // 下钻：已扫过命中缓存，未扫过触发扫描
+→ {"op":"rescan","id":"q4","path":"/Users/x/Library"}     // 刷新按钮：绕过缓存强制重扫当前目录
 → {"op":"cancel","id":"q1"}
 ```
 
-复用点：并发扫描器（`scanner.go`）、结果缓存（`cache.go`，同会话内返回上层无需重扫）、cleanable 判定（`cleanable.go`）、大文件堆（`heap.go`）。delete op 不在 Go 内实现删除，而是 exec `mole robot`（保证 Trash + oplog + 保护判定单源）——或等价地由 GUI 直接对选中路径调 robot；实现取其一，**推荐后者**（analyze-serve 保持纯只读，权责更清晰）。
+复用点：并发扫描器（`scanner.go`）、结果缓存（`cache.go`，同会话内下钻/回退不重扫）、cleanable 判定（`cleanable.go`）、大文件堆（`heap.go`）。引擎返回**当前层的完整子项列表**（含每项 size / is_dir / cleanable / child_count / last_access）；**聚合与渲染是 GUI 侧职责**（见下）。delete 不在 analyze-serve 内实现——由 GUI 直接对选中路径调 `mole robot`（保证 Trash + oplog + 保护判定单源），**analyze-serve 保持纯只读**，权责清晰。
 
-**UI 结构**：
-- 左栏：当前目录条目列表（大小降序、占比条、cleanable 高亮色点、文件/目录图标）。
-- 主区：Squarified Treemap（自绘，Canvas）。节点着色：目录按层级色阶、cleanable 节点用主题强调色、当前 hover 提亮 + tooltip（完整路径/大小/最后访问）。单击下钻、双击在 Finder 显示、右键菜单（在 Finder 显示 / 移到废纸篓 / 加入白名单）。
-- 顶部：面包屑 + 当前层总量 + 磁盘总览进度条（`df` 数据来自 status snapshot）。
-- 首屏：overview 模式先出用户目录/应用/Library 等一级快照（对应 `insights.go` 的 insight entries），点击任意块进入精确扫描。
-- 大文件视图 tab：全盘 Top-N 大文件列表（来自 large_files），支持直接 Trash。
+**UI 结构**（对照参考图逐点落实）：
 
-**性能策略**：Treemap 只渲染当前层级 + hover 预取下一层；节点数>500 时聚合尾部为"其他"；扫描进度事件节流 200ms；`children` 懒加载避免全树驻留内存（目标 <300MB，见 §10）。
+- **左栏**：
+  - 顶部：当前目录头像/图标 + 汇总"N 项, X GB"。
+  - 目录条目列表（大小降序、占比条、文件/目录图标）；**cleanable 目录用专属图标 + 主题色**标注（如开发缓存 `.cache`）。
+  - 每个条目：**单击 = 下钻进入**（等同点击 treemap 对应块）；条目尾部 `>` 箭头提示可进入；**右键菜单 = 在 Finder 中打开 / 移到废纸篓**（与 treemap 块的右键菜单完全对等）。
+  - 列表可滚动，展示当前层全部真实子项（不做聚合——聚合只发生在 treemap 视觉层）。
+- **主区 Treemap**（Squarified，自绘 Canvas）：
+  - 块内容：文件夹/文件图标 + 名称 + 大小；块太小放不下标签时仅 hover tooltip。
+  - **小项聚合（核心特性，参考图的"186 项 54.05 GB""49 项 960.8 MB"）**：占比过小、渲染出来标签不可读的尾部子项，**合并为一个聚合块**，块内用网格图标 + "N 项 · X GB"（中性灰着色，区别于真实目录块）。聚合规则见下方"聚合策略"。**点击聚合块** = 进入"其他 N 项"子视图（面包屑追加"其他 N 项"，该子集自成一张 treemap，可继续下钻），而不是无操作。
+  - 着色：真实目录块按大小/层级走暖色系深浅；cleanable 块用主题强调色；聚合块中性灰；hover 提亮 + 阴影抬升 + tooltip（完整路径 / 大小 / 最后访问时间）。
+  - 交互：**单击块 = 下钻**（未扫过的目录触发扫描，块上显示 loading；扫完进入该层，面包屑更新）；右键菜单 = 在 Finder 中打开 / 移到废纸篓 / 加入白名单。
+  - 下钻转场：被点击块放大铺满 → 内部子块级联浮现（~350ms）；返回为逆过程。
+- **顶部**：
+  - **面包屑**（`根目录 > jiangding > … > Application Support > Google > Chrome`）：可点击任意层级跳转到对应目录视图；**路径过深时中间层折叠为 `…`**，点击 `…` 展开被折叠层级的下拉选择。首段固定为"根目录"带 home 图标。
+  - 右侧状态区：**当前目录总量 + 磁盘用量（`当前 X GB · 磁盘 已用/总量 GB`，`df` 来自 status snapshot）**；扫描进行中显示**旋转进度指示**，完成后显示**刷新按钮**（触发 `rescan` op 重扫当前目录）。
+- **首屏**：overview 模式先出用户目录/应用/Library 等一级快照（对应 `insights.go` 的 insight entries），点击任意块进入精确扫描。
+- **大文件视图 tab**：全盘 Top-N 大文件列表（来自 large_files），支持直接 Trash。
 
-**删除安全**：删除动作一律经 robot（mole_delete 语义：保护路径拒绝、Trash、oplog）。保护路径节点在 UI 上直接禁用删除项并显示原因（GUI 侧预判用 robot 提供的 `whitelist list` + 一个新增只读判定命令 `robot guard check <path>`，M2 实现）。
+**聚合策略**（GUI 侧，参考 DaisyDisk/GrandPerspective 的做法）：在当前视口内，保留能容纳可读标签的大块（约 top 若干项 + 面积高于最小可读阈值的项），其余尾部合并为一个"N 项 · X GB"聚合块。阈值随视口面积自适应（窗口越大展示越多真实块）；聚合是纯渲染决策，底层数据完整保留，`rescan`/删除后重算。左栏列表始终展示完整真实子项，用户想看被聚合的项可在左栏找到或点聚合块展开。
+
+**性能策略**：Treemap 只渲染当前层级 + hover 预取下一层；聚合避免海量小块渲染；扫描进度事件节流 200ms；`children` 懒加载避免全树驻留内存（目标 <300MB，见 §10）。
+
+**删除安全**：删除动作一律经 robot（mole_delete 语义：保护路径拒绝、Trash、oplog）。保护路径节点在 UI 上直接禁用"移到废纸篓"项并显示原因（GUI 侧预判用 robot 提供的 `whitelist list` + 只读判定命令 `robot guard check <path>`，M2 实现）。
 
 **AC**：
 1. 扫描 300GB 家目录：首屏 overview <3s，全量精确扫描期间 UI 可交互可取消。
-2. Treemap 与左栏列表数据一致；下钻-返回后不重扫（命中缓存）。
-3. 删除节点后父链大小即时修正（无需全量重扫）。
-4. 对 `/System` 等保护路径删除入口不可用。
+2. Treemap 与左栏列表数据一致；下钻-返回后不重扫（命中缓存）；刷新按钮强制重扫。
+3. 面包屑任意层级、`…` 折叠层级均可跳转，路径与视图始终同步。
+4. 聚合块点击可进入并继续下钻；聚合不丢数据（左栏可见全部真实项）。
+5. 删除节点后父链大小即时修正（无需全量重扫）。
+6. 对 `/System` 等保护路径"移到废纸篓"入口不可用。
 
 ### 5.5 状态（Status）
 
