@@ -2,7 +2,7 @@ name: Mole
 options:
   bundleIdPrefix: com.tw93
   deploymentTarget:
-    macOS: "13.0"
+    macOS: "14.0"
   createIntermediateGroups: true
   xcodeVersion: "16.0"
 
@@ -38,7 +38,7 @@ targets:
       path: MoleApp/Info.plist
       properties:
         CFBundleDisplayName: Mole
-        LSMinimumSystemVersion: "13.0"
+        LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
         # 非沙盒（设计 ADR-3）：Developer ID 直发 + 公证
     # 内嵌 CLI 核心：fetch_core.sh 产出后取消注释下列资源拷贝

@@ -107,7 +107,8 @@ External volume / System(需 sudo) / User essentials / App caches / Browsers / C
 ### 3.1 选型决策记录（ADR）
 
 **ADR-1：GUI 壳采用 SwiftUI 原生 App，而非 Electron/Tauri。**
-理由：状态页需要低开销高频刷新；分析页需要大数据量 Treemap 渲染；清理工具的用户对"这软件本身干不干净"敏感，原生包体与内存占用是产品力。SwiftUI 在 macOS 13+ 足够成熟。
+理由：状态页需要低开销高频刷新；分析页需要大数据量 Treemap 渲染；清理工具的用户对"这软件本身干不干净"敏感，原生包体与内存占用是产品力。SwiftUI 在 macOS 14+ 足够成熟。
+**最低系统 = macOS 14 Sonoma**（2026-07 骨架编译验证时定）：`@Observable`/Observation 框架硬性要求 macOS 14，而它是全部 Store 层的写法基础；SMAppService 只需 13+，同时满足。2026 年 Sonoma 已是三个版本前的系统，覆盖面可接受。
 
 **ADR-2：清理/卸载/优化逻辑不重写，内嵌 CLI 核心，通过结构化协议驱动。**
 候选对比：
@@ -131,7 +132,7 @@ Go 扫描器已有并发遍历、缓存（`cache.go`）、cleanable 识别（`cl
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│ Mole.app（SwiftUI，macOS 13+，universal binary）                │
+│ Mole.app（SwiftUI，macOS 14+，universal binary）                │
 │                                                               │
 │ ┌───────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
 │ │ Feature Views │→ │ Feature      │→ │ MoleKit (SwiftPM)     │ │

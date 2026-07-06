@@ -9,7 +9,7 @@
 
 | 层 | 选型 | 版本约束 |
 |---|---|---|
-| UI | SwiftUI（`@Observable` Store，无第三方状态框架） | macOS 13.0+ |
+| UI | SwiftUI（`@Observable` Store，无第三方状态框架） | macOS 14.0+（Observation 框架要求）  |
 | 语言 | Swift | 5.10+（Xcode 16+） |
 | 工程生成 | XcodeGen（`Project.yml` 声明式，`.xcodeproj` 不入库） | 2.41+ |
 | 核心逻辑包 | MoleKit（本地 SwiftPM 包，不 import SwiftUI） | — |
