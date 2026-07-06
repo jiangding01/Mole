@@ -395,17 +395,28 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 
 ### 5.3 优化（Optimize）
 
-**数据流**：`robot optimize list` → 任务清单（含 category / needs_admin / 预估时长 / 人话说明）→ 用户勾选 → `robot optimize run` → task_status 流。
+**交互形态（参考图确认：一键流水线，不是清单勾选）**：优化页默认是**一键式**——idle 一个"优化 Mac"大按钮，点击后直接跑整套维护流水线（约 23 项任务），全程展示逐项打钩流，无中间勾选步骤。理由：优化任务都是"安全、可解释、无破坏性"的系统维护（重启服务、重建缓存、刷新数据库），逐项让用户勾选反而增加决策负担；一键 + 事后透明（每项如实报告做了什么）比事前勾选更符合这类操作。**自定义勾选降级为可选入口**（详见下方）。
 
-**任务分组建议**（映射现有 `opt_*` 函数）：
+**四态**：
+- **idle**：焦点视觉（光谱环养护形态）静息 + 轮播标语（如"近日疾如电，纤毫定乾坤"）+ 白色主按钮"优化 Mac"。
+- **执行**：焦点视觉进入养护动效 + 标题"正在深度优化系统" + 当前任务名 + 进度 `10/23`；下方**分组任务流**——任务按大类分组（"修复小毛病"、"启动加速"…每组一个带 ✦ 图标的小标题），组内逐项打钩（✓），当前项高亮。
+- **完成**：标题"Mac 已深度优化" + 摘要"修复 N 项小毛病 · 优化 M 大类 · **累计 K 次**"（累计次数本地持久化，见下）+ 一个呼应星球视觉的彩蛋按钮（如"水星，休息吧"）返回 idle。
+- （失败项不中断流水线，完成态如实标注 skipped/failed 与原因。）
+
+**数据流**：`robot optimize run`（默认全量）→ task_status 流（含 `category` 用于分组、`task_id`、`status`、`detail`）。`robot optimize list` 仍提供（供"自定义"入口和事前说明）。
+
+**任务分组**（映射现有 `opt_*` 函数，category 字段驱动 UI 分组）：
 - 日常维护：DNS 缓存刷新、Saved State 清理、定期维护脚本、通知中心清理。
 - 修复小毛病：Dock 重启、输入法/LaunchServices 重建、损坏配置修复、共享文件列表修复、Spotlight 孤儿规则清理。
+- 启动加速 / 缓存重建：重启隔空投送、重启聚焦搜索、重启通知中心、重建快速预览缓存/缩略图、重建字体缓存、重建 Launch Services 数据库、重启 iCloud 同步（对应截图任务名）。
 - 深度维护（部分需 admin）：SQLite vacuum、Spotlight 索引优化、磁盘权限修复、内存压力释放、网络栈优化。
-- 审计类（只读报告）：登录项审计（`opt_login_items_audit`）、LaunchAgents 体检、磁盘校验（`opt_disk_verify`）。
+- 审计类（只读报告）：LaunchAgents 体检、磁盘校验（`opt_disk_verify`）。（登录项管理已提升到软件页 §5.2.3。）
 
-**UI**：任务清单卡片式，每张卡：名称、一句话说明、"会做什么"展开详情（内容来自 task_meta，等价于 CLI 的 explain-before-execute）、预估时长、admin 徽标。执行时整页变为参考图式的任务打钩流 + 当前任务高亮。
+**自定义入口（可选，非默认路径）**：优化页提供一个次要入口（如右上角"自定义"）展开任务清单（`robot optimize list` 的 category/needs_admin/预估时长/人话说明 + "会做什么"详情），允许取消勾选某些任务后再执行。默认路径仍是一键全量。这样既保留 CLI 的 explain-before-execute 精神，又不挡住主流程。
 
-**权限编排**：勾选集中含 `needs_admin` 任务时，执行前一次性弹 helper 授权说明；helper 不可用 → 这些任务标 `skipped`（"需要管理员权限，可在设置中启用"），**绝不弹 osascript 密码框**。
+**累计次数**：完成页"累计 K 次"来自本地持久化计数（`~/Library/Application Support/Mole/`，每次优化 +1），纯本地、无遥测。
+
+**权限编排**：流水线含 `needs_admin` 任务时，执行前一次性弹 helper 授权说明；helper 不可用 → 这些任务标 `skipped`（"需要管理员权限，可在设置中启用"），**绝不弹 osascript 密码框**，其余任务照常跑完。
 
 **白名单联动**：优化任务涉及 plist 清理时沿用 CLI 的 protected/whitelisted 跳过逻辑（CLAUDE.md 工作规则），跳过项在结果中如实展示为 skipped 而非隐藏。
 
@@ -413,6 +424,8 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 1. `MOLE_TEST_NO_AUTH=1` 下全部任务可跑完（admin 任务 skipped），无任何授权弹窗。
 2. 每个任务的 detail 文案在 done 后如实反映动作（不允许"优化成功"这类空话，必须像 CLI 一样给出具体数字/动作）。
 3. 任务失败不中断队列，队列结束后统一呈现。
+4. 一键流水线按 category 正确分组显示；完成页累计次数正确 +1 且纯本地。
+5. "自定义"入口可取消勾选后执行，取消的任务不运行。
 
 ### 5.4 分析（Analyze）
 
