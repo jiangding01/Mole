@@ -497,7 +497,13 @@ robot_clean_apply() {
         fi
 
         if mole_delete "$path"; then
-            robot_emit_result "$item_id" "trashed" "$bytes"
+            # Report what actually happened: mole_delete honors
+            # MOLE_DELETE_MODE (permanent unless the router set trash).
+            if [[ "${MOLE_DELETE_MODE:-permanent}" == "trash" ]]; then
+                robot_emit_result "$item_id" "trashed" "$bytes"
+            else
+                robot_emit_result "$item_id" "deleted" "$bytes"
+            fi
             ok=$((ok + 1))
             freed=$((freed + bytes))
         else

@@ -133,6 +133,14 @@ run_clean_apply() {
         exit 2
     fi
 
+    # User-facing robot deletions are Trash-recoverable by default, exactly
+    # like bin/uninstall.sh:1369 — mole_delete would otherwise default to
+    # permanent while the protocol promises reversible:true/"trashed"
+    # (docs/ROBOT_AUDIT_FOLLOWUP.md blocker). MOLE_CURRENT_COMMAND keeps
+    # oplog attribution on [clean].
+    export MOLE_DELETE_MODE="${MOLE_DELETE_MODE:-trash}"
+    export MOLE_CURRENT_COMMAND="clean"
+
     # Deletion chain dependencies: mole_delete / should_protect_path from the
     # shared core, is_whitelisted + patterns from the whitelist module.
     # robot_clean_apply refuses to run (fail closed) if any of them is missing.

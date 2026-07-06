@@ -162,7 +162,7 @@ setup_apply_plan() {
 @test "clean apply validates every id through the safety chain" {
     require_jq
     setup_apply_plan
-    output=$(printf 'cl.a.exists\ncl.a.missing\ncl.a.protected\ncl.a.white\ncl.a.unknown\n' | robot_clean_apply "$plan_id")
+    output=$(printf 'cl.a.exists\ncl.a.missing\ncl.a.protected\ncl.a.white\ncl.a.unknown\n' | MOLE_DELETE_MODE=trash robot_clean_apply "$plan_id")
 
     echo "$output" | jq -se '[.[] | select(.event == "result")] | length == 5' > /dev/null || return 1
     echo "$output" | jq -se '[.[] | select(.id == "cl.a.exists")][0].status == "trashed"' > /dev/null || return 1
@@ -173,6 +173,16 @@ setup_apply_plan() {
     [ ! -e "$BATS_TEST_TMPDIR/data/exists" ] || return 1
     [ -e "$BATS_TEST_TMPDIR/data/protected" ] || return 1
     [ -e "$BATS_TEST_TMPDIR/data/whitelisted" ] || return 1
+}
+
+@test "clean apply reports the real deletion mode, never claims trash for permanent" {
+    require_jq
+    setup_apply_plan
+    # Without trash mode the result must say "deleted" — claiming "trashed"
+    # for a permanent removal was the PR #1 audit blocker
+    # (docs/ROBOT_AUDIT_FOLLOWUP.md).
+    output=$(printf 'cl.a.exists\n' | MOLE_DELETE_MODE=permanent robot_clean_apply "$plan_id")
+    echo "$output" | jq -se '[.[] | select(.event == "result")][0].status == "deleted"' > /dev/null || return 1
 }
 
 @test "clean apply under MOLE_DRY_RUN deletes nothing" {
