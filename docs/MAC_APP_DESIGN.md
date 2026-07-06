@@ -553,14 +553,14 @@ GUI 勾选(id) → robot apply → 核心逐项: 重新 stat → should_protect_
 
 ### 8.2 视觉语言（原创方向）
 
-- 每个模块一个主题色相 + 一个"焦点视觉"承载扫描/执行状态（如清理页的粒子聚散球、优化页的脉冲环）；避免参考图的写实星球素材，用程序化生成的抽象几何（Canvas/Metal shader），既原创又轻量。
+- 每个模块一个主题色相 + 统一的"焦点视觉"承载扫描/执行状态：**数据地层（Data Strata）**——横置的磁盘沉积层剖面，层 = 清理分组（层厚 ∝ 体积）、发光碎片 = 真实发现项、清理 = 碎片被采掘消散且地层压实变薄。数据驱动而非装饰，且可交互（hover 层显示分组、点击跳转）。呼应 Mole"鼹鼠挖掘"的品牌隐喻；避免写实星球素材与通用粒子球，程序化生成（Canvas，Metal 备选）。完整五状态动效规格见 `docs/UI_DESIGN_PROMPT.md` §4.1。
 - 数字优先排版：结论用大号等宽数字（SF Mono/SF Pro Rounded），说明文字退后。
 - 列表密度中等，行高 36，路径类文本中间截断 + hover 完整 tooltip。
 - 动效克制：数值滚动、卡片过渡 ≤200ms，全部 `reduceMotion` 适配。
 
 ### 8.3 组件库（DesignSystem 模块的交付清单）
 
-`MoleCard`、`StatBadge`、`ProgressOrb`（焦点视觉）、`SectionList`（分组勾选列表）、`ResultLog`（滚动结果流）、`TreemapView`、`SparklineView`、`RiskBadge`、`EmptyState`、`PermissionBanner`。每个组件配 Preview + 快照测试。
+`MoleCard`、`StatBadge`、`StrataView`（数据地层焦点视觉）、`SectionList`（分组勾选列表）、`ResultLog`（滚动结果流）、`TreemapView`、`SparklineView`、`RiskBadge`、`EmptyState`、`PermissionBanner`。每个组件配 Preview + 快照测试。
 
 ### 8.4 文案与本地化
 
