@@ -191,6 +191,10 @@ mole robot <domain> <verb> [options] [< request.json]
 | `robot apps list` | — | item*（app 条目）→ done | 否 |
 | `robot uninstall plan` | stdin: `{"bundle_ids":[…]}` 或 `{"paths":[…]}` | item*（主体+残留，含分组）→ done | 否 |
 | `robot uninstall apply` | stdin: `{"plan_id":"…","ids":[…]}` | progress* → result* → done | **是** |
+| `robot apps updates list` | — | item*（可更新项：来源/当前/最新）→ done | 否 |
+| `robot apps update` | stdin: `{"id":"…"}` | result*（cask 委派 brew / 其余返回引导信号）→ done | **委派**（不改 bundle） |
+| `robot launchitems list` | 可选筛选 | item*（登录项/agent/daemon）→ done | 否 |
+| `robot launchitems disable/enable` | stdin: `{"ids":[…]}` | result*（隔离/恢复）→ done | **是**（可恢复，非删除） |
 | `robot optimize list` | — | item*（任务描述）→ done | 否 |
 | `robot optimize run` | stdin: `{"task_ids":[…]}` | task_status* → done | **部分** |
 | `robot purge plan [--paths …]` | 扫描根 | 同 clean plan | 否 |
@@ -319,22 +323,56 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 
 ### 5.2 软件（Apps）
 
+软件页顶部有**三个子 tab：卸载 / 更新 / 启动项**，共用顶部工具栏（排序、筛选、刷新、搜索）。三者是同一"软件治理"域的三个视角。
+
+#### 5.2.1 卸载（Uninstall）子 tab
+
 **数据流**：`robot apps list`（复用 `uninstall_list_apps`）→ GUI 侧补充装饰数据（并行、可失败降级）：图标 `NSWorkspace.icon(forFile:)`、最近使用 `mdls kMDItemLastUsedDate`、安装来源（core 已能判定 brew cask；App Store 用收据存在性 `Contents/_MASReceipt` 判定）。
 
 **UI 结构**：
-- 主视图：应用网格/列表可切换；排序（大小/名称/最近使用）；筛选（全部/大体积>1GB/超过 180 天未用/brew 安装）；搜索。
-- 详情抽屉：图标、版本、bundle id、路径、占用构成（app 本体 + 数据），操作：卸载 / 在 Finder 显示。
-- 卸载确认页 = `robot uninstall plan` 结果：主体 + 残留文件分组清单（Application Support / Caches / Preferences / Containers / LaunchAgents…），逐项路径与大小，全部默认勾选但可去勾。红字提示"将移至废纸篓"。
-- 批量卸载：多选 → 一次 plan 多个 bundle id → 合并确认页。
-- **残留清理 tab**：展示已卸载应用的孤儿文件（数据来自 clean 的 App leftovers section，plan 时 `--sections app_leftovers`），按"疑似所属应用"分组。
+- 顶部工具栏：排序（名称/大小/最近使用/安装日期，各带升降箭头）、刷新、搜索；筛选（全部/大体积>1GB/超过 180 天未用/brew 安装）。
+- 列表头：`已安装应用 N 个 · X GB` 汇总。
+- 列表行：图标、名称、版本、大小、最近使用（区分"活跃"近期使用 vs "N 个月前 打开过"）。
+- **行内展开选择模型（参考图的核心交互）**：勾选某应用后该行展开为一条 review 摘要——`4 个已选 · 493.8 MB + 12.9 MB 需复核`，即高置信残留自动计入总量，低置信残留标 **"需复核"** 单列（对应 §4.3 的 `risk:caution`，默认不勾、需展开确认）。行右侧勾选框 + 展开箭头看完整残留清单。
+- **底部批量操作栏**：`<App名> · N 个 App · X MB` + "取消全选" + 右侧主按钮"移除 N 项"。多选累加。
+- 完整残留清单来自 `robot uninstall plan`（主体 + 分组残留：Application Support / Caches / Preferences / Containers / LaunchAgents…），逐项路径与大小；执行走 `robot uninstall apply`，全部移入废纸篓。
+- 详情抽屉（可选二级）：图标、版本、bundle id、路径、占用构成（app 本体 + 数据）。
 
-**安全红线（原样平移，实现者不得放宽）**：残留匹配只用 bundle id / 应用名精确变体（`lib/core/app_protection.sh` 现有逻辑）；批量卸载执行序完全走 `lib/uninstall/batch.sh`（含 sibling guard、launch service teardown）；受保护应用（`app_protection_data.sh`）在 GUI 中显示盾牌徽标且卸载按钮禁用并说明原因。
+**安全红线（原样平移，实现者不得放宽）**：残留匹配只用 bundle id / 应用名精确变体（`lib/core/app_protection.sh` 现有逻辑），"需复核"项永不默认勾选；批量卸载执行序完全走 `lib/uninstall/batch.sh`（含 sibling guard、launch service teardown）；受保护应用（`app_protection_data.sh`）在 GUI 中显示盾牌徽标且卸载按钮禁用并说明原因。
+
+**残留清理**：已卸载应用的孤儿文件（数据来自 clean 的 App leftovers section，plan 时 `--sections app_leftovers`）在卸载 tab 内以"疑似所属应用"分组呈现，或并入清理页残留分组，二选一实现。
+
+#### 5.2.2 更新（Update）子 tab
+
+第三方应用更新**检测与路由**。**重要设计约束（解决与 §6.10 的张力）**：Mole 绝不自己下载并替换/打补丁任何 app bundle——那违反 CLAUDE.md"不改写第三方 app bundle、签名资源"的红线，也是应用更新器维护成本与风险的爆炸点。Mole 只做两件事：**(1) 检测**可用更新；**(2) 把"更新"动作委派给该 app 现有的、最可信的更新机制**，自己绝不碰二进制。
+
+- **检测来源（按可靠性分级，行内以徽标标注）**：
+  - `Homebrew`（最可信）：`brew outdated --cask` 精确给出 `当前 → 最新`；复用现有 brew 集成（`lib/uninstall/brew.sh`、`run_brew_command`）。
+  - `Sparkle`：读取 app `Info.plist` 的 `SUFeedURL` appcast，比对版本（只读检测）。
+  - `App Store`：收据 + `softwareupdate`/`mas`（若可用）检测。
+  - `Electron`：尽力检测（electron-updater/Squirrel 元数据不统一），检测不到就不显示。
+- **更新动作委派**：cask → `brew upgrade --cask <name>`（预览候选、mocked-brew 测试，绝不在验证中执行真实升级，遵守 CLAUDE.md "Homebrew 预览优先"）；App Store → 打开 App Store 到该 app；Sparkle → 唤起 app 自带 Sparkle 更新器；Electron → 交给 app 自带更新器。**没有任何"Mole 直接替换 .app"的路径。**
+- **UI**：列表头 `可在 Mole 内更新 N 个` + "全部更新"；来源筛选下拉；行 = 图标、名称、来源徽标（可点进详情）、`旧版本 → 新版本`（新版本橙色）、"忽略更新"（记住并从列表移除，可在设置恢复）、"更新"按钮。"全部更新"只对可安全委派的来源（主要是 cask）批量执行，其余逐个引导。
+- CLI 侧新增 `robot apps updates list`（检测）+ `robot apps update --id`（委派执行，cask 路径经 brew，其余返回"请在 App Store/应用内更新"的引导信号）。
+- **降级诚实**：无法可靠检测的来源不虚报"已是最新"，而是不列出；"更新"失败（如 brew 网络问题）如实报错并给手动路径。
+
+#### 5.2.3 启动项（Login Items）子 tab
+
+登录项与后台服务管理（即原 §6.5 提升为核心 tab）。参考图分两组：`登录项 N 个`（Login Items，用户级）与 `后台服务 M 个`（LaunchDaemons/LaunchAgents）。
+
+- 数据：`robot launchitems list`——列出登录项 + LaunchAgents + LaunchDaemons，每项标注：图标、名称、类型（App / LaunchDaemon / LaunchAgent）、标签（bundle helper id / plist label）、归属应用、是否孤儿（对应 app 已卸载）、当前开启状态。
+- UI：分组列表 + 每行开关；顶部筛选下拉（已开启/全部/孤儿）；hover 行显示"在 Finder 中显示"文件夹图标。
+- **操作 = 禁用/启用，不是删除**：切换开关 → `robot launchitems disable/enable`（launchctl bootout / SMAppService 注销 + plist 移入隔离区 `~/Library/Application Support/Mole/Quarantine/`，可恢复），入 oplog。
+- **安全约束**：系统项与 `com.apple.*` **只读展示**（开关禁用并说明）；LaunchDaemon 的禁用需 root → 走 helper，helper 不可用时该开关标"需要管理员权限"；plist 解析遵守既有约定（绝对路径 Program、拒绝 PlistBuddy 错误文本当数据，CLAUDE.md）。
+- CLI 侧逻辑放 `lib/optimize/launch_items.sh`。
 
 **AC**：
-1. 应用列表与 `mo uninstall --list` 输出一致（数量、大小）。
-2. 卸载一个测试应用后，`robot uninstall plan` 对同一 bundle id 再次执行返回空主体。
+1. 卸载列表与 `mo uninstall --list` 输出一致（数量、大小）。
+2. 卸载一个测试应用后，`robot uninstall plan` 对同一 bundle id 再次执行返回空主体；"需复核"残留不被默认勾选。
 3. 受保护应用（如 CLI 自身、浏览器默认保护名单）无法从 GUI 发起卸载。
 4. 装有同 bundle id 的 /Volumes 副本时，卸载不误删副本（sibling guard 的 bats 场景在 GUI 链路重放）。
+5. 更新 tab 在任何路径下都不替换 app bundle；cask 升级在测试中走 mocked brew，零真实升级。
+6. 启动项：系统/`com.apple.*` 项开关不可用；禁用是可恢复的（隔离区 + oplog），非删除。
 
 ### 5.3 优化（Optimize）
 
@@ -500,11 +538,12 @@ oplog 已记录每个被 Trash 项的原路径。历史页对最近一次操作�
 - CLI 侧新增 `robot history restore`（stdin 传 oplog 记录 id 列表），实现于 `lib/core/history.sh` 扩展；不可恢复（已清空废纸篓）时如实报告。
 - 这是"可撤销"承诺的完整闭环，CLI 未来也可受益（`mo history restore`）。
 
-### 6.5 登录项与启动项管理器 — v1.2
+### 6.5 应用更新（App Update）与启动项（Login Items）— 已提升为软件页核心子 tab
 
-`opt_login_items_audit` 目前只读审计。GUI 升级为管理器：列出 Login Items / LaunchAgents / LaunchDaemons，标注归属应用、是否孤儿（对应 app 已卸载）、上次加载状态；支持禁用（launchctl bootout + 文件移入隔离区而非删除）与恢复。
-- 安全约束：系统与 `com.apple.*` 项只读展示；禁用而非删除；隔离区放 `~/Library/Application Support/Mole/Quarantine/` 并入 oplog。
-- CLI 侧新增 `robot launchitems list/disable/enable`，逻辑放 `lib/optimize/launch_items.sh`，遵守既有 plist 解析规则（绝对路径 Program 解析，CLAUDE.md 既有约定）。
+这两项原为独立扩展功能，因参考设计将其定为软件页的核心 tab，规格已并入 **§5.2.2（更新）** 与 **§5.2.3（启动项）**。要点回顾：
+- **更新**：只做检测 + 委派，绝不 Mole 自己替换 app bundle（红线）；来源分级（brew 最可信）。
+- **启动项**：禁用而非删除（隔离区可恢复），系统/`com.apple.*` 只读，daemon 禁用需 helper。
+- 落地版本见 ROADMAP（§13）：启动项检测/禁用可较早（brew 检测 + 用户级登录项），daemon 禁用依赖 helper（Phase 3）；更新 tab 的多来源检测建议 Phase 5+ 逐步铺开（先 brew cask 单来源）。
 
 ### 6.6 卸载监听（Uninstall Watcher）— v1.3，默认关闭
 
@@ -535,7 +574,7 @@ oplog 已记录每个被 Trash 项的原路径。历史页对最近一次操作�
 |---|---|
 | 内存加速/一键释放 RAM 常驻球 | 伪优化，损害产品可信度（`opt_memory_pressure_relief` 保留为手动任务即可） |
 | 浏览器隐私清理 | 触碰会话/凭据，违反安全红线 |
-| 应用自动更新器 | 与 brew/App Store 职责重叠，维护面大 |
+| **自己下载/替换 app bundle 的更新器** | 违反"不改写第三方 bundle"红线，维护与风险爆炸。更新 tab（§5.2.2）只做检测 + 委派给 brew/App Store/app 自带更新器，绝不 Mole 亲自打补丁——这条边界是"做更新检测"与"不做 bundle 打补丁"的分界 |
 | 云端规则下发（远程更新清理规则） | 规则必须随版本走审计流程，远程下发破坏"单一来源 + 可 review"链条 |
 | 擦屏模式（清洁屏幕时锁键盘） | 与清理/维护产品域无关的小工具，稀释产品定位 |
 | 屏幕常亮（咖啡因）快捷键 | 同上，Amphetamine 等专门工具已做得很好 |
@@ -810,14 +849,14 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 ### Phase 2 — 清理闭环（M2，约 4 周）【双仓库并行】
 
 - CLI：clean 其余 section 的 robot 化（每 section 一 PR）；`robot uninstall plan/apply`；`robot guard check`。
-- App：清理页全交互（§5.1 状态机）、软件页卸载流、历史页 v1。
+- App：清理页全交互（§5.1 状态机）、软件页**卸载子 tab**（行内展开选择 + 底部批量栏 + 需复核残留）、历史页 v1。
 - 安全回归集（§11.3）落地为自动化。
 - 判据：E2E 冒烟绿；内部用户用 GUI 完成真实清理且可在废纸篓/历史中对账。
 
 ### Phase 3 — 分析与优化（M3，约 4 周）
 
-- CLI：`robot optimize list/run` + task_meta；purge/installer robot 化。
-- App：分析页（Treemap + 下钻 + Trash 删除 + 大文件 tab）；优化页任务流；清理页接入 purge/installer tab。
+- CLI：`robot optimize list/run` + task_meta；purge/installer robot 化；`robot launchitems list/disable/enable`。
+- App：分析页（Treemap + 下钻 + Trash 删除 + 大文件 tab）；优化页任务流；清理页接入 purge/installer tab；软件页**启动项子 tab**（登录项 + 后台服务，用户级即时可用，daemon 禁用走 helper）。
 - Helper（SMAppService + 白名单 4 任务）+ 权限中心。
 - 判据：五大模块全通；性能预算首次全量测量并达标。
 
@@ -834,6 +873,7 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 
 - 结构化撤销（§6.4，含 CLI `robot history restore`）。
 - 空间趋势 Timeline（§6.3）。
+- **软件页更新子 tab（§5.2.2）**：先接 `Homebrew cask` 单来源检测 + brew 委派升级（最可信、复用现有 brew 集成），Sparkle/App Store/Electron 多来源检测在 v1.2+ 逐步铺开。
 - 根据 1.0 反馈的体验修补。
 
 ### Phase 6 — 能力扩展（v1.2，约 4 周）
