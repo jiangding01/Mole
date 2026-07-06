@@ -1,0 +1,29 @@
+included:
+  - MoleApp
+  - MoleKit/Sources
+excluded:
+  - Resources
+
+line_length:
+  warning: 140
+  error: 200
+
+identifier_name:
+  min_length: 2
+
+# 安全 lint（设计 §7.4 / §9.2）：
+# Features 层禁止直接起进程 / 删文件 / 回收站操作——
+# 一切删除必须经 MoleKit → robot → CLI 安全层。
+custom_rules:
+  no_process_in_features:
+    name: "No Process() in Features"
+    regex: 'Process\('
+    included: ".*MoleApp/Features/.*"
+    message: "Feature 层禁止直接起子进程，走 MoleKit RobotSession（设计 §7.4）"
+    severity: error
+  no_direct_file_removal:
+    name: "No direct file removal"
+    regex: '(removeItem|trashItem|NSWorkspace[\s\S]{0,40}recycle)'
+    included: ".*MoleApp/.*"
+    message: "禁止直接删除用户数据，必须经 robot apply（设计 §7.4）"
+    severity: error

@@ -1,0 +1,9 @@
+# XcodeGen 生成物（Project.yml 是唯一工程真源）
+*.xcodeproj
+# 构建产物与内嵌核心装配物（由 fetch_core.sh 生成）
+Resources/mole-core/
+Resources/mole-core.sha256
+.build/
+DerivedData/
+# XcodeGen 从 Project.yml 的 info.properties 生成
+MoleApp/Info.plist

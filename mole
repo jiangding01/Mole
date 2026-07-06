@@ -42,6 +42,22 @@ mole_dispatch_history_early() {
 
 mole_dispatch_history_early "$@"
 
+# Robot machine mode (docs/MAC_APP_DESIGN.md §4) dispatches before common.sh
+# so stdout stays pure NDJSON with no interactive/update-check noise.
+mole_dispatch_robot_early() {
+    [[ "${MOLE_TEST_MODE:-0}" == "1" && "${MOLE_SKIP_MAIN:-0}" == "1" ]] && return 0
+
+    mole_collect_cli_args "$@"
+    [[ "${MOLE_CLI_ARGS[0]:-}" == "robot" ]] || return 0
+
+    if [[ "${#MOLE_CLI_ARGS[@]}" -gt 1 ]]; then
+        exec "$SCRIPT_DIR/bin/robot.sh" "${MOLE_CLI_ARGS[@]:1}"
+    fi
+    exec "$SCRIPT_DIR/bin/robot.sh"
+}
+
+mole_dispatch_robot_early "$@"
+
 source "$SCRIPT_DIR/lib/core/common.sh"
 source "$SCRIPT_DIR/lib/core/commands.sh"
 

@@ -347,6 +347,7 @@ Key coverage areas include:
 - Users who want immediate removal of app data should use explicit uninstall flows rather than waiting for orphan cleanup.
 - Release artifacts include checksums and attestations, but downstream package-manager trust also depends on external distribution infrastructure.
 - `mo history --json` escapes strings byte by byte under `LC_ALL=C` (`history_json_escape`) for portable behavior on bash 3.2. Printable multibyte bytes are emitted verbatim, so the emitted JSON stays valid UTF-8, but the escaper does not perform Unicode-aware codepoint iteration. This is a known display-layer detail, not a correctness issue.
+- A native macOS GUI (Mole for Mac) is in design (`docs/MAC_APP_DESIGN.md`), **not yet implemented**. It reuses this CLI's protection layers as the single source of truth via a machine-readable "robot" command layer and routes user-facing deletions through Trash + operation logging; its planned privilege surfaces (the robot plan/apply layer and an optional `SMAppService` privileged helper with a closed task enumeration) will be documented and audited here once built. This audit describes only the shipped CLI on `main`.
 - Planned follow-up work includes stronger destructive-command threat modeling, more regression coverage for high-risk paths, and continued hardening of release integrity and disclosure workflow.
 
 For reporting procedures and supported versions, see [SECURITY.md](SECURITY.md).
