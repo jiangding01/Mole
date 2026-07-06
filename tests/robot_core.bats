@@ -45,11 +45,16 @@ require_jq() {
 
 # --- size parsing --------------------------------------------------------------
 
-@test "robot_human_to_bytes converts units" {
-    [ "$(robot_human_to_bytes '545 B')" = "545" ] || return 1
-    [ "$(robot_human_to_bytes '97 KB')" = "99328" ] || return 1
-    [ "$(robot_human_to_bytes '1.5 MB')" = "1572864" ] || return 1
-    [ "$(robot_human_to_bytes '2 GB')" = "2147483648" ] || return 1
+@test "robot_human_to_bytes converts bytes_to_human compact 1000-base format" {
+    # Real format from lib/core/base.sh bytes_to_human: no space, 1000 base.
+    [ "$(robot_human_to_bytes '545B')" = "545" ] || return 1
+    [ "$(robot_human_to_bytes '743KB')" = "743000" ] || return 1
+    [ "$(robot_human_to_bytes '198.5MB')" = "198500000" ] || return 1
+    [ "$(robot_human_to_bytes '1.20GB')" = "1200000000" ] || return 1
+    # Spaced input tolerated
+    [ "$(robot_human_to_bytes '97 KB')" = "97000" ] || return 1
+    # Garbage degrades to 0, never breaks the stream
+    [ "$(robot_human_to_bytes 'n/a')" = "0" ] || return 1
 }
 
 @test "robot_section_slug produces stable machine keys" {
@@ -96,14 +101,14 @@ make_export_fixture() {
 # comment lines are ignored
 
 === App caches ===
-/Users/x/Library/Caches/com.google.Chrome  # 487 MB
-/Users/x/Library/Caches/com.tencent.xinWeChat  # 1.2 GB, 3 items
+/Users/x/Library/Caches/com.google.Chrome  # 487.0MB
+/Users/x/Library/Caches/com.tencent.xinWeChat  # 1.20GB, 3 items
 
 === Developer tools ===
-/Users/x/.docker/buildx  # 4 KB
+/Users/x/.docker/buildx  # 4KB
 
 === Large files ===
-/Users/x/Movies/big.mov  # 8 GB
+/Users/x/Movies/big.mov  # 8.00GB
 EOF
 }
 

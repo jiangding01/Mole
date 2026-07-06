@@ -89,18 +89,23 @@ robot_emit_error() {
 
 # --- Size parsing ------------------------------------------------------------
 
-# Convert human sizes from the dry-run export ("487 MB", "1.2 GB", "97 KB",
-# "545 B") back to approximate bytes (1024 base, matching bytes_to_human).
+# Convert human sizes from the dry-run export back to approximate bytes.
+# bytes_to_human (lib/core/base.sh) emits compact 1000-base values with no
+# space ("198.5MB", "743KB", "1.20GB", "545B"); accept spaced input too.
 robot_human_to_bytes() {
     local value="$1" number unit
-    number=$(printf '%s' "$value" | awk '{print $1}')
-    unit=$(printf '%s' "$value" | awk '{print $2}' | tr '[:lower:]' '[:upper:]')
+    number=$(printf '%s' "$value" | sed 's/[^0-9.].*$//')
+    unit=$(printf '%s' "$value" | sed 's/^[0-9. ]*//' | tr '[:lower:]' '[:upper:]')
+    [[ -n "$number" ]] || {
+        printf '0'
+        return 0
+    }
     case "$unit" in
         B | "") awk "BEGIN {printf \"%d\", $number}" ;;
-        KB) awk "BEGIN {printf \"%d\", $number * 1024}" ;;
-        MB) awk "BEGIN {printf \"%d\", $number * 1024 * 1024}" ;;
-        GB) awk "BEGIN {printf \"%d\", $number * 1024 * 1024 * 1024}" ;;
-        TB) awk "BEGIN {printf \"%d\", $number * 1024 * 1024 * 1024 * 1024}" ;;
+        KB) awk "BEGIN {printf \"%d\", $number * 1000}" ;;
+        MB) awk "BEGIN {printf \"%d\", $number * 1000 * 1000}" ;;
+        GB) awk "BEGIN {printf \"%d\", $number * 1000 * 1000 * 1000}" ;;
+        TB) awk "BEGIN {printf \"%d\", $number * 1000 * 1000 * 1000 * 1000}" ;;
         *) printf '0' ;;
     esac
 }
