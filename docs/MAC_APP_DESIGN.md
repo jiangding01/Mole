@@ -220,6 +220,7 @@ mole robot <domain> <verb> [options] [< request.json]
 ```
 - `id`：`<domain缩写>.<section>.<path短哈希>`，**仅在本次 plan 会话内有效**。
 - `kind ∈ {cache, log, leftover, installer_pkg, project_artifact, app_bundle, app_data, launch_item}`。
+- **i18n 约定**：`section`、`kind`、`risk` 是稳定机器键，GUI 侧本地化其显示名；`label` 中的应用名/路径片段为原样数据不翻译；`detail` 同时携带 `detail_key` + `detail_params`（如 `{"detail_key":"rebuilt_on_relaunch"}`），GUI 优先按 key 查本地化表渲染，未知 key 时回退显示核心输出的英文 `detail` 文本。核心（shell 层）保持英文单语，不做多语言。
 - `risk ∈ {safe, caution, info}`：`caution` 默认不勾选且 UI 需要展开确认；`info` 仅展示（对应 Large files / System Data clues 这类洞察 section）。
 - `reversible=false` 的项（如某些系统级缓存）UI 必须单独标注。
 
@@ -416,11 +417,34 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 
 ### 5.7 设置（Settings）
 
-- 通用:语言（跟随系统/中/英）、启动页、刷新率。
+设置以窗口内浮层（sheet/panel）呈现，顶部小胶囊分 tab。逐 tab 定义：
+
+**通用**
+- 语言：`自动（跟随系统）/ 简体中文 / English`（运行时切换，见 §8.6）。
+- 温度单位：`自动 / °C / °F`（自动 = 按 Locale 测量体系推断；作用于状态页全部温度读数）。
+- 开机自动启动：`SMAppService.mainApp` 注册 Login Item（macOS 13+ 原生 API，系统设置中用户可见可撤销）。
+- 启动页：默认智能扫描，可改为任一模块；"跳过引导动画直接进入功能面板"开关。
+- 状态刷新率：1s / 2s / 5s。
+- 全局快捷键：唤起 Mole 主窗口（默认 ⌃⌥⌘M，可改可清空；用 KeyboardShortcuts 类实现录制控件）。
+
+**清理**
 - 白名单管理：列表 + 添加（路径选择器或手输 pattern）+ 删除，读写 `~/.config/mole/whitelist`（经 `robot whitelist`），与 CLI 完全互通。
-- 权限中心：完全磁盘访问状态（实时检测 + 深链 `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`）、helper 安装状态（安装/卸载按钮）。
-- 高级：诊断日志导出（App 日志 + 子进程 stderr 尾部 + 版本信息打包 zip）、重置 plan 缓存。
-- 关于：版本、内嵌核心版本与 SHA、开源许可、指向 CLI 的 cross-link。
+- 删除方式：`废纸篓（默认，可恢复）/ 立即删除（不可恢复）`。选择"立即删除"需要一次带后果说明的确认弹层，且该模式下清理确认页顶部常驻红色提示条"当前为立即删除模式"。实现上映射 robot apply 的 `--permanent` 选项（Phase 4 实现，核心侧仍经 `mole_delete` 的非 Trash 分支，oplog 照记）。**智能扫描一键流程强制废纸篓**，permanent 只对手动 review 后的执行生效。
+
+**权限**
+- 完全磁盘访问状态（实时检测 + 深链 `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`）、helper 安装状态（安装/卸载按钮）。每项右侧为状态徽标（已授权=绿 / 未授权=行动按钮），样式区分清楚"状态展示"与"可点击操作"。
+
+**菜单栏**（v1.3 模块启用后出现，见 §6.7）
+- 菜单栏图标开关、左键/右键行为对调、Cmd+Q 行为（`退出 Mole / 仅关窗口保留菜单栏`）、图标样式（`指标数字 / 奔跑的鼹鼠`）。
+
+**高级**
+- 诊断日志导出（App 日志 + 子进程 stderr 尾部 + 版本信息打包 zip）、重置 plan 缓存。
+
+**许可证**（商业化开启后出现，见 §7.7）
+- 未激活：显示试用剩余天数 + "输入许可证密钥"；已激活：显示"已激活，停用后可换到另一台 Mac" + "管理"（停用本机 / 查看已激活设备数）。
+
+**关于**
+- 版本、内嵌核心版本与 SHA、开源许可、指向 CLI 的 cross-link、检查更新。
 
 ### 5.8 首启引导（Onboarding）
 
@@ -471,10 +495,15 @@ oplog 已记录每个被 Trash 项的原路径。历史页对最近一次操作�
 用户从 Finder 删除 app 时（App 运行期间通过 FSEvents 监听 /Applications），弹一条应用内提示"检测到 X 已删除，存在 N 项残留，是否清理？"。
 - 明确边界：仅 App 前台运行时监听，不做 launchd 常驻（与产品克制原则一致）；设置中默认关闭。
 
-### 6.7 菜单栏迷你状态 — v1.3，默认关闭（谨慎项）
+### 6.7 菜单栏模式 — v1.3，默认关闭（谨慎项）
 
-可选的菜单栏 extra：仅显示可用磁盘空间与内存压力两个数字，点开是快照卡片 + "打开 Mole"。无告警、无动画、采样 30s 一次。
-- 与 CLI"不做菜单栏"准则的关系：CLI 准则约束的是 CLI 产品面；App 用户对此有真实需求。以**默认关闭 + 极简只读**的形态提供，作为一次有边界的试验。若数据表明使用率低于 10%，v2 移除。
+可选的菜单栏 extra，默认关闭。启用后的完整行为规格：
+
+- **图标样式二选一**：`指标`（可用磁盘 + 内存压力两个小数字）或 `奔跑的鼹鼠`（像素小动物动画，速度随 CPU 负载轻微变化——品牌趣味项，帧动画 ≤10fps、GPU 占用可忽略）。
+- **点击行为**：左键打开迷你状态 popover（磁盘/内存/CPU 三行快照 + "打开 Mole"按钮），右键打开菜单（打开 Mole / 快速清理 / 设置 / 退出）；提供"对调左右键"开关。
+- **仅菜单栏模式**：开关"不显示 Dock 图标，通过菜单栏运行"（`NSApp.setActivationPolicy(.accessory)`）；随之提供 **Cmd+Q 行为**选择：`退出 Mole / 仅关闭主窗口保留菜单栏`。
+- 数据采样 30s 一次（popover 打开时临时提到 2s），无告警、无通知。
+- 与 CLI"不做菜单栏"准则的关系：CLI 准则约束的是 CLI 产品面；App 用户对此有真实需求。以**默认关闭 + 只读**的形态提供，作为一次有边界的试验。若数据表明使用率低于 10%，v2 移除。
 
 ### 6.8 清理计划提醒 — v1.3，默认关闭
 
@@ -492,6 +521,13 @@ oplog 已记录每个被 Trash 项的原路径。历史页对最近一次操作�
 | 浏览器隐私清理 | 触碰会话/凭据，违反安全红线 |
 | 应用自动更新器 | 与 brew/App Store 职责重叠，维护面大 |
 | 云端规则下发（远程更新清理规则） | 规则必须随版本走审计流程，远程下发破坏"单一来源 + 可 review"链条 |
+| 擦屏模式（清洁屏幕时锁键盘） | 与清理/维护产品域无关的小工具，稀释产品定位 |
+| 屏幕常亮（咖啡因）快捷键 | 同上，Amphetamine 等专门工具已做得很好 |
+| 摄像头/麦克风使用提醒 | 需要常驻监控，违反"不做后台监控"原则，且系统自带指示灯 |
+| 蓝牙配件低电量提醒 | 需要常驻监控；状态页只读展示蓝牙设备电量即可 |
+| 电池充电上限（80% 养护）/ 风扇转速控制 | 需要 SMC 硬件层写入权限，风险域远超清理工具；充电管理 macOS 自带优化，风扇保持只读展示 |
+
+（后五项来自竞品设置页对照评估：竞品把系统小工具打包进清理软件，我们选择保持"清理与维护"的窄定位——这些功能每加一个，"这软件到底干什么"就模糊一分。）
 
 ---
 
@@ -541,7 +577,28 @@ GUI 勾选(id) → robot apply → 核心逐项: 重新 stat → should_protect_
 
 - 零遥测默认。可选的匿名崩溃报告（Sentry self-host 或 off-the-shelf，opt-in）。
 - 所有扫描数据、快照、历史仅存本地（`~/Library/Application Support/Mole/`）。
-- 网络访问仅两处：Sparkle 更新检查、（可选）崩溃上报。文档化在隐私声明中。
+- 网络访问仅：Sparkle 更新检查、（可选）崩溃上报、（商业化开启后）许可证激活/停用。文档化在隐私声明中。
+
+### 7.7 付费与授权（Licensing，预留设计）
+
+产品可能走付费授权。**v1.0 先免费发布建立口碑，但授权基础设施从 Phase 4 起随包交付（feature flag 暗置）**，商业化开关打开时无需改架构。
+
+**商业模型（预设，可由业务决策调整）**
+- 买断制 + 大版本付费升级（同类工具的主流模型），单许可证默认可激活 2 台 Mac，支持**自助停用换机**（参考竞品的"停用后可换到另一台 Mac"）。
+- 全功能试用 14 天（不阉割功能，到期后降级），不注册即可试用。
+- 支付与许可证签发托管给 Paddle 或 Lemon Squeezy（含全球税务/发票，自建成本不值得）。
+- **边界承诺**：CLI 永远开源免费；付费只发生在 GUI 层。robot 核心不含任何授权检查——授权是 App 的事，不是规则引擎的事。
+
+**LicenseKit 模块（MoleKit 内）**
+- 状态机：`unlicensed(trial_active) → trial_expired → activated → grace(离线宽限) / deactivated`。
+- **离线优先验证**：许可证为 Ed25519 签名的 license 文件（含 key、设备指纹哈希、版本上限、签发时间），公钥编译进 App；日常启动只做本地签名校验，**不联网**。激活/停用时才调用供应商 API（发送：license key + 匿名设备指纹哈希，不含任何个人/系统数据）。
+- 存储：license 文件在 Application Support，密钥材料入 Keychain；时间回拨检测（记录单调递增的最后见到时间）。
+- 离线宽限：激活后永久离线可用（买断制不做定期回连验证——对用户友好，也减少被破解的动机面）。
+- **功能门控**：`Entitlement` 枚举 + 各 Feature Store 入口处的 `gate.check(.pro)` 调用点。免费/付费功能怎么切由业务后定，代码侧只需要在模块入口预埋检查点；试用期内全开。门控降级行为必须是**温和禁用 + 说明**（按钮变"升级解锁"），禁止扫描到一半弹付费墙。
+- UI 交付物：设置页许可证行（§5.7）、激活 sheet（输入 key / 购买链接 / 恢复购买）、试用剩余天数的低调顶栏提示（仅最后 3 天出现）、到期降级说明页。
+- 反滥用姿态：不做激进 DRM。本地校验 + 设备数限制足够；把工程精力花在产品上。
+
+**测试**：LicenseKit 全状态机单测（含时间回拨、签名篡改、宽限)；UI 测试覆盖试用/激活/到期三态；商业化 flag 关闭时所有授权 UI 不可见且零网络调用（自动化断言）。
 
 ---
 
@@ -562,12 +619,23 @@ GUI 勾选(id) → robot apply → 核心逐项: 重新 stat → should_protect_
 
 `MoleCard`、`StatBadge`、`StrataView`（数据地层焦点视觉）、`SectionList`（分组勾选列表）、`ResultLog`（滚动结果流）、`TreemapView`、`SparklineView`、`RiskBadge`、`EmptyState`、`PermissionBanner`。每个组件配 Preview + 快照测试。
 
-### 8.4 文案与本地化
+### 8.4 文案语气
 
-- `String Catalog`（.xcstrings），中英双语同步交付；robot 事件里的 label/detail 由核心输出（跟随 CLI 的 locale 逻辑），GUI 自身 chrome 文案走 catalog。
-- 语气规范：说人话、说清楚后果（"将把 129 项移入废纸篓，共 8.9 GB"），禁止"深度优化你的 Mac"式空话。
+- 说人话、说清楚后果（"将把 129 项移入废纸篓，共 8.9 GB"），禁止"深度优化你的 Mac"式空话。所有语言版本同一语气标准。
 
-### 8.5 可访问性
+### 8.5 国际化（i18n）架构
+
+首发语言：**简体中文 + English**；架构上为 zh-Hant / ja 等后续语言零改造预留。
+
+- **资源**：Xcode String Catalog（`.xcstrings`）单一来源，key 采用 `feature.semantic` 命名（如 `clean.summary.freed`）；禁止代码内硬编码用户可见字符串（SwiftLint 自定义规则拦截 `Text("汉字|[A-Za-z]{2,}...")` 形态的字面量）。
+- **应用内语言切换**：设置项 `自动/简体中文/English`，实现为覆盖 `AppleLanguages` 后提示重启，或运行时自定义 Bundle 加载（选后者，免重启；MoleKit 提供 `L10n.bundle` 间接层）。
+- **格式化一律走 Locale**：字节数 `ByteCountFormatter`、日期 `Date.FormatStyle`、数字分隔符、相对时间（"3 天前"）；温度单位按 §5.7 设置（自动档从 `Locale.measurementSystem` 推断）。
+- **robot 协议的 i18n 分层**（见 §4.3）：核心输出稳定机器键（section/kind/detail_key），GUI 按 key 本地化；应用名与路径为数据不翻译；未知 key 回退英文原文。核心 shell 层保持英文单语，避免把本地化复杂度带进安全关键代码。
+- **布局韧性**：英文文案通常比中文长 30–60%，所有按钮/徽标/表头不允许定死宽度；快照测试矩阵覆盖 `zh-Hans × en × 深色 × 浅色`；CI 加伪本地化（pseudo-locale，加长 40% + 重音字符）巡检截断。
+- 不做 RTL（阿拉伯语等）适配承诺；若未来需要再立项。
+- 文档/官网/release notes 同步双语（沿用 CLI 仓库 release-notes skill 的双语规范）。
+
+### 8.6 可访问性
 
 VoiceOver 全流程可完成一次清理（AC 化）；键盘可达（tab 序、空格勾选、⌘↵ 执行）；色彩对比 ≥ WCAG AA；risk 信息不只靠颜色（配图标+文本）。
 
@@ -737,10 +805,13 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 - Helper（SMAppService + 白名单 4 任务）+ 权限中心。
 - 判据：五大模块全通；性能预算首次全量测量并达标。
 
-### Phase 4 — 1.0 发布（M4，约 2–3 周）
+### Phase 4 — 1.0 发布（M4，约 3 周）
 
 - 智能扫描首页（§6.1）、诊断报告导出（§6.9）。
-- 双语文案审校、可访问性 AC、Sparkle 双通道、签名公证流水线、官网下载页与 CLI README cross-link。
+- 设置页收尾：温度单位、开机自启、全局快捷键、删除方式（永久删除高级选项，含 robot `--permanent`）。
+- i18n 硬化（§8.5）：伪本地化巡检、zh×en 快照矩阵、双语文案审校。
+- **LicenseKit 基础设施随包交付但 feature flag 关闭**（§7.7）：状态机 + 本地校验 + 全部授权 UI（暗置），商业化开关打开时无需发新架构。
+- 可访问性 AC、Sparkle 双通道、签名公证流水线、官网下载页与 CLI README cross-link。
 - Beta ≥2 周 → **v1.0 stable**。
 
 ### Phase 5 — 信任增强（v1.1，约 3 周）
@@ -754,9 +825,10 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 - 重复文件查找（§6.2，`analyze-go --dupes`）。
 - 登录项/启动项管理器（§6.5）。
 
-### Phase 7 — 边界试验（v1.3，按数据决策）
+### Phase 7 — 边界试验与商业化（v1.3，按数据决策）
 
-- 卸载监听（§6.6）、菜单栏迷你状态（§6.7）、清理提醒（§6.8）——三者均默认关闭、独立开关、带使用率埋点（opt-in），数据不好即移除。
+- 卸载监听（§6.6）、菜单栏模式（§6.7，含仅菜单栏运行/Cmd+Q 行为/奔跑鼹鼠样式）、清理提醒（§6.8）——三者均默认关闭、独立开关、带使用率埋点（opt-in），数据不好即移除。
+- **商业化开关评估点**：v1.0 发布后依据装机量/留存决定是否开启付费（打开 §7.7 的 feature flag、接入 Paddle/Lemon Squeezy、上线购买页）。开启前完成免费/付费功能切分的业务决策，并保证存量用户的既得功能不回收。
 
 ### 长期观察项（不承诺）
 
