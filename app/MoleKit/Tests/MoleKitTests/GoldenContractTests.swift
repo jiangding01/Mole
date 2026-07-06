@@ -13,10 +13,11 @@ final class GoldenContractTests: XCTestCase {
         // <repo>/app/MoleKit/Tests/MoleKitTests/GoldenContractTests.swift
         // -> <repo>/contracts/robot_v1
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // MoleKitTests
-            .deletingLastPathComponent() // Tests
-            .deletingLastPathComponent() // MoleKit
-            .deletingLastPathComponent() // app
+            .deletingLastPathComponent() // strip filename -> MoleKitTests/
+            .deletingLastPathComponent() // -> Tests/
+            .deletingLastPathComponent() // -> MoleKit/
+            .deletingLastPathComponent() // -> app/
+            .deletingLastPathComponent() // -> <repo>/
             .appendingPathComponent("contracts/robot_v1")
     }
 
