@@ -2,8 +2,10 @@
 
 原生 macOS GUI，基于 Mole CLI 核心构建。完整技术方案见 [`docs/MAC_APP_DESIGN.md`](../docs/MAC_APP_DESIGN.md)，UI 规格见 [`docs/UI_DESIGN_PROMPT.md`](../docs/UI_DESIGN_PROMPT.md)。
 
-> 状态：工程骨架（Phase 1 起点）。robot 协议层（CLI 侧，M0）尚未实现，
-> MoleKit 中的协议模型以设计文档 §4 为准先行落地，契约测试随 M0 的 golden 文件接入。
+> 状态：工程骨架（Phase 1 起点），已在 macOS 上编译验证（MoleKit 8 测试全绿 + App target 构建通过）。
+> robot 协议层（CLI 侧，M0）的 `clean plan/apply` 已落地并经真机端到端验证
+> （`bin/robot.sh` + `lib/core/robot.sh`，`tests/robot_core.bats` 15 用例）；
+> 剩余 domain（apps/history/whitelist）按 ROADMAP 推进，契约 golden 文件随之接入。
 
 ## 技术栈
 
