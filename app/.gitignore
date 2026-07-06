@@ -5,3 +5,5 @@ Resources/mole-core/
 Resources/mole-core.sha256
 .build/
 DerivedData/
+# XcodeGen 从 Project.yml 的 info.properties 生成
+MoleApp/Info.plist
