@@ -677,6 +677,8 @@ GUI 勾选(id) → robot apply → 核心逐项: 重新 stat → should_protect_
 ```
 任何一环失败该项即 skip/fail，不影响其余项。**GUI 代码中不允许出现 `FileManager.removeItem` / `trashItem` 对用户数据的直接调用**（lint 规则挡住，见 §11.6；App 自身缓存除外，路径前缀白名单）。
 
+链路中的 `should_protect_path` / `validate_path_for_deletion` / app 保护判定 / Trash 路由全部是 CLI 现有安全层，契约见 `docs/SECURITY_DESIGN.md`（五层防护）与 `SECURITY_AUDIT.md`。**GUI 不新增、不复制、不放宽任何删除判定规则**——robot apply 只是重新进入这些层。这两份安全文档已加前向指针：robot 层与 helper 实现落地时必须回去补充文档与审计。
+
 ### 7.5 内嵌核心完整性
 
 构建期把 `mole-core/` 内容清单 + SHA256 写入 App 资源；MoleKit 启动子进程前校验入口脚本与二进制哈希，不匹配即拒绝执行并提示重装（防篡改 + 防半更新状态）。Hardened Runtime 下需要 `com.apple.security.cs.allow-unsigned-executable-memory` 吗——不需要；两个 Go 二进制与 shell 脚本正常随 App 签名。

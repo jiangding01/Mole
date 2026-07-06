@@ -224,12 +224,37 @@ a corresponding test that fails before your code lands.
 
 ---
 
+## Scope: this document describes the shipped CLI
+
+A native macOS GUI (Mole for Mac) is being designed; its full spec lives
+in `docs/MAC_APP_DESIGN.md`. That design deliberately **reuses these exact
+layers as the single source of truth**: the GUI never decides what may be
+deleted. It drives the shell library through a machine-readable "robot"
+command layer whose destructive commands re-run `validate_path_for_deletion`,
+`should_protect_path`, and the app-protection checks described here, and
+route all user-facing removals through `mole_delete` (Trash + oplog). The
+GUI's own security model (robot plan/apply two-phase protocol, an optional
+`SMAppService` privileged helper with a closed task enumeration, embedded-core
+integrity checks) is specified in `MAC_APP_DESIGN.md` §4 and §7.
+
+**None of the GUI or robot layer is implemented yet.** This document, and
+`SECURITY_AUDIT.md`, describe only the shipped CLI. When the robot layer or
+the privileged helper lands, their behavior must be documented and audited
+here — see the trigger below.
+
+---
+
 ## When to update this document
 
 - A new layer (e.g., a notarization check, a per-volume policy) is added.
 - The validator gains a new check class or relaxes an existing one.
 - A new app protection list is introduced.
+- **The GUI robot machine-mode layer (`bin/robot.sh`, plan/apply, plan-id
+  files) or the privileged helper is implemented.** Document the new
+  privilege surface and confirm it re-enters the layers above rather than
+  bypassing them.
 - An incident occurred where one of the layers failed and the writeup
   belongs in the "lessons" section here, not just the commit log.
 
-Last reviewed: 2026-05-21 (mole V1.39.0).
+Last reviewed: 2026-05-21 (mole V1.39.0). GUI/robot forward-scope note added
+2026-07-06; CLI security layers unchanged.
