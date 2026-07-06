@@ -52,6 +52,7 @@
 - 不做菜单栏常驻监控（P3 有一个可选的轻量方案，默认关闭，见 §6.7）。
 - 不做隐私清理（浏览记录、Cookie 等）、不做杀毒、不做内存"加速球"这类伪优化。
 - 首个大版本不做多语言以外的本地化（先中英双语）。
+- CLI 专属命令不进 GUI：`touchid`（sudo 免密配置）、`completion`（shell 补全）、`update`/`remove`（CLI 自身更新/卸载——App 用 Sparkle 与标准卸载）。这些留在 CLI，App 关于页 cross-link 即可。
 
 ---
 
@@ -186,7 +187,7 @@ mole robot <domain> <verb> [options] [< request.json]
 
 | 命令 | 输入 | 输出事件流 | 破坏性 |
 |---|---|---|---|
-| `robot clean plan [--sections a,b]` | 可选 section 过滤 | progress* → item* → insight* → done | 否 |
+| `robot clean plan [--sections a,b] [--external <path>]` | 可选 section 过滤 / 外置卷目标 | progress* → item* → insight* → done | 否 |
 | `robot clean apply` | stdin: `{"plan_id":"…","ids":[…]}` | progress* → result* → done | **是** |
 | `robot apps list` | — | item*（app 条目）→ done | 否 |
 | `robot uninstall plan` | stdin: `{"bundle_ids":[…]}` 或 `{"paths":[…]}` | item*（主体+残留，含分组）→ done | 否 |
@@ -201,7 +202,9 @@ mole robot <domain> <verb> [options] [< request.json]
 | `robot purge apply` | 同 clean apply | 同 clean apply | **是** |
 | `robot installer plan/apply` | 同上 | 同上 | plan 否 / apply 是 |
 | `robot history list [--limit n] [--json]` | — | item*（历史记录）→ done | 否 |
-| `robot whitelist list/add/remove` | pattern | done（含更新后列表） | 否（改配置） |
+| `robot whitelist list/add/remove --mode clean\|optimize` | pattern + 模式（两套白名单文件，见 §5.7） | done（含更新后列表） | 否（改配置） |
+
+注：`--sections` 是**协议层**的机器过滤参数（GUI 分 tab/分域调用用），不是复活已移除的用户向 `mo clean --select`（`bin/clean.sh:1463` 明确拒绝该 flag）——TUI 用户面保持不变，robot 过滤只存在于机器接口。
 
 ### 4.3 事件 Schema
 
@@ -316,7 +319,9 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
   - 白名单命中项以"已保护"分组或盾牌态展示（不可勾选），入口跳设置页白名单管理。
 - **执行态 / 完成态**：焦点视觉进入执行动效 + 大数字（累计已清理量）+ 进度标签"当前任务 · M/N"；下方**分阶段结果日志**——结果按阶段分组，阶段标题（如"正在准备清理"、"正在收尾"）带图标，其下逐项 result（成功打钩、跳过灰色、失败红色可展开原因），当前项外的历史行降透明度形成纵深。完成后过渡到小结（释放空间大数字 + 计数 + 历史入口）。
 
-**purge / installer**：清理页顶部三个 tab：`快速清理`（clean）、`项目产物`（purge，首次进入引导设置扫描根，读写 CLI 同一份 `purge --paths` 配置）、`安装包`（installer）。三者共用骨架，只是 domain 不同。
+**purge / installer**：清理页顶部三个 tab：`快速清理`（clean）、`项目产物`（purge，首次进入引导设置扫描根，读写 CLI 同一份 `purge --paths` 配置，配置管理 UI 对应 `lib/manage/purge_paths.sh`）、`安装包`（installer，覆盖 .dmg/.pkg/.mpkg/.iso/.xip/.zip）。三者共用骨架，只是 domain 不同。
+
+**外置卷清理（CLI 已有能力，v1.1 接入）**：CLI 支持 `mo clean --external <卷路径>`（`bin/clean.sh:1450`，含 `validate_external_volume_target` 目标校验）。GUI 在快速清理 tab 提供次要入口"清理外置卷…"——列出已挂载的非系统卷（来自 status 的 Disks 数组）供选择，plan/apply 走 `robot clean plan --external <path>`，校验与 section 逻辑完全复用 CLI。不自动扫描外置卷（尊重移动硬盘用户的预期）。
 
 **数据来源补充（参考图的两个派生特性）**：
 - **运行应用提示**：clean plan 对"因应用运行而无法完整清理"的项，emit 时带 `blocked_by:<app>` 字段；GUI 按 app 聚合出顶部副标题"关闭 X、Y… 后可再清理 N GB"。核心侧沿用现有"进程占用检测"逻辑，不新增判定。
@@ -484,8 +489,10 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 **卡片布局**（两行 8 卡固定区 + 进程表）：
 - 健康分（`metrics_health.go` 的评分 + 诊断短语）+ 硬件摘要徽标（芯片/内存/系统版本）+ uptime。
 - CPU：使用率大数字 + 温度徽标 + 近 60 采样柱状历史（Swift Charts）+ 负载/核数/负载评级。
-- GPU：使用率 + 温度 + 折线历史 + GPU 核数。内存：压力 + 使用/交换 + 面积图。磁盘：可用量 + 容量条 + 已用%。网络：上下行速率 + 双色 sparkline + 接口（Wi-Fi）。电池：电量/电源状态/健康/循环/功率/温度 + 最大能耗进程。
+- GPU：使用率 + 温度 + 折线历史 + GPU 核数。内存：压力 + 使用/交换 + 面积图。磁盘：可用量 + 容量条 + 已用% + **读写速率**（`DiskIO`）；**多卷支持**——`Disks` 是数组，接了外置盘/多分区时卡内可切换或展开显示各卷。网络：上下行速率 + 双色 sparkline + 接口（Wi-Fi）+ **代理徽标**（`Proxy` 检测到系统代理时显示，只读）。电池：电量/电源状态/健康/循环/功率/温度 + 最大能耗进程（`Batteries` 为数组，兼容多电池/无电池）。
 - **风扇卡**：转速 RPM + 负载% + 模式段控 `自动 / 降温 / 强冷`（详见下方"风扇控制"）。无风扇机型隐藏该卡。
+- **蓝牙设备**（`Bluetooth` 数组，快照已含）：已连接配件的名称 + 电量，以卡片或健康分卡下的紧凑行呈现，**只读**（呼应 §6.10"状态页只读展示蓝牙电量即可"，不做低电量提醒）。无配件时隐藏。
+- **废纸篓大小**（`TrashSize` 快照已含）：不单独成卡——供智能扫描页信息位与清理页"清空废纸篓"分类显示大小复用，避免重复扫描。
 
 **进程表**：
 - Top-N（默认 50，列头显示计数），列 = 名称+图标 / PID / CPU / 能耗 / 内存，**列头点击排序**（当前列高亮 + 升降箭头；`process_watch.go` 数据）。
@@ -517,7 +524,7 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 
 ### 5.6 历史（History）
 
-- 数据：`robot history list --json`（M0 给 `bin/history.sh` 加 JSON 出口，底层日志已结构化）。
+- 数据：`robot history list --json`（M0 给 `bin/history.sh` 加 JSON 出口）。底层是**两份日志**（`lib/core/history.sh:52-56`）：operations log（会话级摘要）与 deletions log（逐项删除明细）——正好映射历史页的"时间线分组 + 展开明细"两层，robot 输出需同时携带两层。
 - UI：按操作会话分组的时间线（"7月6日 14:32 · 清理 · 释放 8.9 GB · 129 项"），展开看逐项路径与大小；条目动作：在废纸篓显示（若仍在）、复制路径。
 - **撤销**：v1 提供"在废纸篓中显示"引导手动恢复；v2 做结构化恢复（§6.4）。
 
@@ -534,7 +541,7 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 - 全局快捷键：唤起 Mole 主窗口（默认 ⌃⌥⌘M，可改可清空；用 KeyboardShortcuts 类实现录制控件）。
 
 **清理**
-- 白名单管理：列表 + 添加（路径选择器或手输 pattern）+ 删除，读写 `~/.config/mole/whitelist`（经 `robot whitelist`），与 CLI 完全互通。
+- 白名单管理：列表 + 添加（路径选择器或手输 pattern）+ 删除，经 `robot whitelist --mode clean|optimize` 与 CLI 完全互通。**注意 CLI 实际有两套白名单**（`lib/manage/whitelist.sh:13-14`）：清理白名单 `~/.config/mole/whitelist` 与优化白名单 `~/.config/mole/whitelist_optimize`（保护 plist 不被优化任务清理）。设置页以两个分组/子 tab 呈现，不合并存储。
 - 删除方式：`废纸篓（默认，可恢复）/ 立即删除（不可恢复）`。选择"立即删除"需要一次带后果说明的确认弹层，且该模式下清理确认页顶部常驻红色提示条"当前为立即删除模式"。实现上映射 robot apply 的 `--permanent` 选项（Phase 4 实现，核心侧仍经 `mole_delete` 的非 Trash 分支，oplog 照记）。**智能扫描一键流程强制废纸篓**，permanent 只对手动 review 后的执行生效。
 
 **权限**
