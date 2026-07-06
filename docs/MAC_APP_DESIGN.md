@@ -351,7 +351,10 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
   - `Sparkle`：读取 app `Info.plist` 的 `SUFeedURL` appcast，比对版本（只读检测）。
   - `App Store`：收据 + `softwareupdate`/`mas`（若可用）检测。
   - `Electron`：尽力检测（electron-updater/Squirrel 元数据不统一），检测不到就不显示。
-- **更新动作委派**：cask → `brew upgrade --cask <name>`（预览候选、mocked-brew 测试，绝不在验证中执行真实升级，遵守 CLAUDE.md "Homebrew 预览优先"）；App Store → 打开 App Store 到该 app；Sparkle → 唤起 app 自带 Sparkle 更新器；Electron → 交给 app 自带更新器。**没有任何"Mole 直接替换 .app"的路径。**
+- **更新动作 = 委派，两种模式，均不越界**：
+  - **跳转委派（首选，最不越界）**：App Store → 打开 App Store 到该 app；Sparkle → 唤起 app 自带 Sparkle 更新器；Electron → 交给 app 自带更新器。Mole 只负责把用户送到对应更新入口，之后完全不参与。
+  - **包管理器委派**：cask → 调用用户已安装的 `brew upgrade --cask <name>`（等同用户在终端敲这条命令，由 brew 而非 Mole 完成替换；预览候选、mocked-brew 测试、绝不在验证中执行真实升级，遵守 CLAUDE.md "Homebrew 预览优先"）。
+  - **绝对禁止**：Mole 自己下载安装包、解压、替换 `.app`、改写 bundle 内容——**没有任何这样的路径**。这是"检测/跳转"与"打补丁"的红线。
 - **UI**：列表头 `可在 Mole 内更新 N 个` + "全部更新"；来源筛选下拉；行 = 图标、名称、来源徽标（可点进详情）、`旧版本 → 新版本`（新版本橙色）、"忽略更新"（记住并从列表移除，可在设置恢复）、"更新"按钮。"全部更新"只对可安全委派的来源（主要是 cask）批量执行，其余逐个引导。
 - CLI 侧新增 `robot apps updates list`（检测）+ `robot apps update --id`（委派执行，cask 路径经 brew，其余返回"请在 App Store/应用内更新"的引导信号）。
 - **降级诚实**：无法可靠检测的来源不虚报"已是最新"，而是不列出；"更新"失败（如 brew 网络问题）如实报错并给手动路径。
