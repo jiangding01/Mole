@@ -6,6 +6,12 @@
 > robot 协议层（CLI 侧，M0）的 `clean plan/apply` 已落地并经真机端到端验证
 > （`bin/robot.sh` + `lib/core/robot.sh`，`tests/robot_core.bats` 15 用例）；
 > 剩余 domain（apps/history/whitelist）按 ROADMAP 推进，契约 golden 文件随之接入。
+>
+> **⚠️ UI 开发冻结（2026-07-06 起）**：Claude Design 的设计稿进行中，定稿前
+> **不要动** `MoleApp/Features/*`（占位状态）、`DesignSystem/`（视觉 token/组件）、
+> 任何动效实现。可以继续的工作：CLI robot 层、MoleKit 非视觉逻辑
+> （协议模型/进程编排/ScanSession/权限探测）、契约 golden、`status-go --proc` 等
+> Go 侧只读增量。设计稿到位后解除本条。
 
 ## 技术栈
 
