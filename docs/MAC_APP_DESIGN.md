@@ -211,7 +211,7 @@ mole robot <domain> <verb> [options] [< request.json]
 
 所有事件公共字段：`{"v":1,"event":"<type>","ts":"<RFC3339>"}`。
 
-**progress** — 扫描/执行进度（节流：≥100ms 或每 20 项合并一次）
+**progress** — 扫描/执行进度（节流目标：≥100ms 或每 20 项合并一次。**M0 现状**：clean plan 的进度来自对增长中的 dry-run 导出文件的 1s 轮询——天然节流但粒度较粗，per-section 细粒度进度随 robot 深度接入 clean 时再提升）
 ```json
 {"v":1,"event":"progress","phase":"scan","section":"app_caches",
  "current":"~/Library/Caches/com.tencent.xinWeChat","done":36,"total":129,
@@ -228,6 +228,7 @@ mole robot <domain> <verb> [options] [< request.json]
 ```
 - `id`：`<domain缩写>.<section>.<path短哈希>`，**仅在本次 plan 会话内有效**。
 - `kind ∈ {cache, log, leftover, installer_pkg, project_artifact, app_bundle, app_data, launch_item}`。
+- **label 现状（M0）**：label 暂为路径原文（plan 基于 dry-run 导出构建，导出只含路径）。人性化 label（如"微信 缓存"）需核心侧在导出中携带 description，为后续增强；GUI 侧可先从路径尾段/bundle id 推断显示名。
 - **i18n 约定**：`section`、`kind`、`risk` 是稳定机器键，GUI 侧本地化其显示名；`label` 中的应用名/路径片段为原样数据不翻译；`detail` 同时携带 `detail_key` + `detail_params`（如 `{"detail_key":"rebuilt_on_relaunch"}`），GUI 优先按 key 查本地化表渲染，未知 key 时回退显示核心输出的英文 `detail` 文本。核心（shell 层）保持英文单语，不做多语言。
 - `risk ∈ {safe, caution, info}`：`caution` 默认不勾选且 UI 需要展开确认；`info` 仅展示（对应 Large files / System Data clues 这类洞察 section）。
 - `reversible=false` 的项（如某些系统级缓存）UI 必须单独标注。
@@ -259,7 +260,7 @@ mole robot <domain> <verb> [options] [< request.json]
  "summary":{"items":129,"bytes_total":9273483264,"selected_default":86,
             "failed":0,"skipped":2,"freed_bytes":8912345600}}
 ```
-plan 类命令的 `plan_id` 是后续 apply 的凭据：apply 时核心侧校验 plan 文件（写在 `~/.cache/mole/robot/<plan_id>.json`，含每个 id → 路径映射与生成时间）存在且未超过 30 分钟，超时要求 GUI 重新 plan。**GUI 永远不向 apply 传路径，只传 id。**
+plan 类命令的 `plan_id` 是后续 apply 的凭据：apply 时核心侧校验 plan 文件（`~/.cache/mole/robot/<plan_id>.plan`，**TSV 格式**：header 含 domain/created epoch，item 行为 `item\t<id>\t<path>\t<bytes>\t<reversible>`——bash 3.2 无 JSON 解析器，TSV 是核心侧可靠读回的格式）存在且未超过 30 分钟，超时要求 GUI 重新 plan。含 tab/换行的路径在写入时拒绝。**GUI 永远不向 apply 传路径，只传 id。**
 
 **error** — 错误（`fatal:true` 后进程即退出，退出码非 0）
 ```json
@@ -270,7 +271,7 @@ plan 类命令的 `plan_id` 是后续 apply 的凭据：apply 时核心侧校验
 
 ### 4.4 生命周期与健壮性约定
 
-- **取消**：GUI 发 SIGTERM。plan 阶段立即退出；apply 阶段完成"当前单项"后输出 done（`ok:false, summary.cancelled:true`）再退出，不留半删状态。核心侧沿用现有 `trap cleanup_temp_files EXIT INT TERM`。
+- **取消**：GUI 发 SIGTERM。plan 阶段立即退出；apply 阶段完成"当前单项"后输出 done（`ok:false, summary.cancelled:true`）再退出，不留半删状态。核心侧沿用现有 `trap cleanup_temp_files EXIT INT TERM`。**M0 现状：apply 的优雅取消（trap SIGTERM → 完成当前项 → emit done）尚未实现，是接 GUI 前的必做项**——当前 SIGTERM 直接终止，mole_delete 单项本身原子，但 GUI 收不到终态 done，需靠 history 对账（§4.4 崩溃恢复路径已覆盖此场景）。
 - **超时**：GUI 侧对 plan 设 10 分钟兜底、apply 设 30 分钟兜底；超时 = SIGTERM → 3 秒 → SIGKILL，UI 报"操作超时"。核心侧扫描沿用 CLI 既有 wall-clock 预算与检查点（CLAUDE.md 工作规则），超时降级为部分结果 + `insight` 说明跳过了慢扫描。
 - **背压**：Swift 侧按行读取，事件进 `AsyncThrowingStream`（buffer 上限 10k，超限丢弃 progress 保留 item/result）。
 - **崩溃恢复**：子进程非零退出且无 `done` 事件 → GUI 显示统一错误卡片，附 stderr 尾部 50 行进诊断日志。apply 崩溃后，GUI 用 `robot history list` 对账实际删除了哪些。
@@ -278,8 +279,8 @@ plan 类命令的 `plan_id` 是后续 apply 的凭据：apply 时核心侧校验
 
 ### 4.5 CLI 侧实现要点（给实现者）
 
-- 新增 `lib/core/robot.sh`：`robot_emit <event-json>`（含节流缓冲）、`robot_item`、`robot_progress` 等辅助函数；`MOLE_ROBOT!=1` 时这些函数是 no-op，**现有 TUI 输出路径一行不改**。
-- clean 各 section 函数中，现有"发现一个可删目标"的落点在调用 `mole_delete` 处；robot plan 模式下改为经一个新包装 `robot_collect <path> <label> <kind>`（内部：dry-run 语义 + emit item + 记入 plan 文件）。改造按 section 逐个进行，每个 section 一个 PR，配 bats。
+- `lib/core/robot.sh`（已落地）：emit 层（`robot_emit_*` 系列）+ plan 文件管理 + 导出解析 + apply 安全链。source 时零依赖（纯 bash + coreutils），可跨平台单测；删除链函数在调用时解析并 **fail-closed**（缺失即 `E_INTERNAL` fatal）。
+- **实际实现比原计划侵入性更小**：原计划在 clean 各 section 里包装 `robot_collect`，实际方案是 **plan 直接解析 clean dry-run 已有的 `EXPORT_LIST_FILE` 导出**——TUI 路径零改动、"GUI plan == CLI dry-run"由构造保证（§11.4）、不触碰 16 个 section 热点文件。代价是 label 暂为路径、进度粒度为轮询级（见上）。若未来需要 per-item 富元数据（description/kind 细分/blocked_by），再评估最小包装方案。
 - `execute_optimization`（`lib/optimize/tasks.sh:1401`）已经是任务调度器；robot optimize 在其外围包一层：任务注册表导出为 list、逐任务 emit task_status。任务元数据（名称/说明/是否需要 admin/预估时长）新建 `lib/optimize/task_meta.sh` 数据文件维护。
 - **本区域全部属于 destructive-sink 改造，遵守 CLAUDE.md：逐行 review、fallback 分支重点审、不放宽任何匹配。**
 
@@ -660,7 +661,7 @@ oplog 已记录每个被 Trash 项的原路径。历史页对最近一次操作�
 
 | 能力 | 所需权限 | 获取方式 | 降级行为 |
 |---|---|---|---|
-| 扫描/清理用户域 | 完全磁盘访问（FDA） | 引导授予 | 无 FDA：可扫非 TCC 目录；结果页顶部显示"N 个受保护目录未扫描"（扫描器统计 EPERM 计数，robot progress 带 `denied_dirs` 字段） |
+| 扫描/清理用户域 | 完全磁盘访问（FDA） | 引导授予 | 无 FDA：可扫非 TCC 目录；结果页顶部显示"N 个受保护目录未扫描"（扫描器统计 EPERM 计数，robot progress 带 `denied_dirs` 字段——**协议已预留，M0 未实现**，随 FDA 引导落地） |
 | Trash 删除 | 无特殊权限 | — | — |
 | 深度维护任务（少数） | root（helper） | SMAppService 安装 | 任务标记 skipped |
 | 进程结束 | 同用户进程无需授权 | — | 他人/系统进程按钮禁用 |
@@ -906,7 +907,7 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 | `cmd/analyze --serve`（scan/children/cancel，先不含 delete） | go test 协议用例 |
 | `contracts/robot_v1/*.ndjson` golden（取自真机验证输出）—— **✅ 已落地**，CLI bats 校验 schema，Swift GoldenContractTests 消费同一批文件 | 契约测试框架在两端跑通 |
 
-**里程碑判据**：不写一行 Swift，用 `jq` 脚本即可完成一次"plan → 勾选 → apply → 废纸篓验证"的完整演练。
+**里程碑判据**：不写一行 Swift，用 `jq` 脚本即可完成一次"plan → 勾选 → apply → 废纸篓验证"的完整演练。**✅ 已达成（2026-07-07 真机演练：plan 进度流 → dry-run apply → done 汇总闭环）**。
 
 ### Phase 1 — App 骨架与只读双页（M1，约 3 周）【App 仓库】
 
@@ -973,8 +974,8 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 |---|---|---|
 | `E_PLAN_EXPIRED` | plan 超 30 分钟 | 提示重新扫描 |
 | `E_PLAN_NOT_FOUND` | plan_id 无效 | 同上 |
-| `E_PATH_PROTECTED` | 命中保护路径 | 该项标记跳过并说明 |
-| `E_WHITELISTED` | 命中白名单 | 同上，附白名单管理入口 |
+| `E_PATH_PROTECTED` | 命中保护路径 | 该项标记跳过并说明。**注**：apply 流程中此语义经 `result.status=skipped_protected` 表达（非 error 事件）；错误码保留给显式判定请求（`robot guard check`） |
+| `E_WHITELISTED` | 命中白名单 | 同上（apply 中为 `result.status=skipped_whitelisted`），附白名单管理入口 |
 | `E_PERMISSION` | EPERM/TCC 拒绝 | 引导 FDA |
 | `E_TASK_UNKNOWN` | 未知任务 id | 版本不匹配提示（App/核心哈希校验兜底） |
 | `E_ADMIN_REQUIRED` | 需 helper | 任务 skipped + 设置入口 |
