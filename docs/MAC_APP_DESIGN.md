@@ -301,6 +301,12 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 - scanning 可取消回 idle；review 停留不限时（但 plan 30 分钟过期后置灰执行钮并提示重扫）；applying 可取消（完成当前项后停止）。
 - summary 展示：释放空间、成功/跳过/失败计数、"在历史中查看"、失败项可展开重试。
 
+**扫描结果跨页共享（关键导航语义）**：plan 是**应用级会话资产**（`ScanSession` 全局 Store 持有各 domain 的 plan_id + item 集），不是页面私有状态。规则：
+1. **智能扫描已完成** → 从结论卡"去处理"进入子模块 tab，或用户自行切到该 tab，**直接进入 review 态消费同一份 plan，不重复扫描**（智能扫描本就是并行跑各 domain 的 plan，结果按 domain 归属）。
+2. **未扫描过** → 子模块 tab 显示各自的 idle 静态页（扫描按钮 + 标语），点击后仅扫描该 domain，扫完进 review。
+3. **失效与重扫**：plan 30 分钟过期、或某 domain 已 apply 过 → 该 domain 回到 idle（其他 domain 的有效 plan 不受影响）；review 态提供"重新扫描"显式入口。
+4. **反向同步**：在子模块单独扫描的结果同样写入 ScanSession，智能扫描首页的结论卡随之更新（数据一份，两处视图）。
+
 ### 5.1 清理（Clean）
 
 **数据流**：进入页面不自动扫描（尊重用户）；点"扫描 Mac"→ `robot clean plan` → item 流实时入列 → done 后进 review。执行 → `robot clean apply`。
@@ -574,9 +580,10 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 
 ### 6.1 智能扫描首页（Smart Scan）— v1.0
 
-打开 App 的默认页：一键运行"清理 plan + 残留 plan + installer plan + 大文件洞察"的聚合扫描，输出一屏结论卡片："可安全清理 X GB / 发现 N 个卸载残留 / M 个安装包 / 最大目录是 …"，每张卡点进对应模块的 review 态。
+打开 App 的默认页：一键运行"清理 plan + 残留 plan + installer plan + 大文件洞察"的聚合扫描，输出一屏结论卡片："可安全清理 X GB / 发现 N 个卸载残留 / M 个安装包 / 最大目录是 …"。
+- **结果直达，不重复扫描**：每张结论卡"去处理"直接进入对应模块的 review 态，消费聚合扫描已产出的同一份 plan（跨页共享语义见 §5.0）；用户手动切 tab 同理。反之未跑过智能扫描时，各 tab 各自 idle、各自可单独扫描。
 - 价值：普通用户不需要理解模块划分；这是 GUI 相对 CLI 的核心体验增量。
-- 实现：纯 GUI 编排（并行跑多个 plan），核心零改造。
+- 实现：纯 GUI 编排（并行跑多个 plan，结果入全局 ScanSession），核心零改造。
 
 ### 6.2 重复文件与相似大文件查找 — v1.2
 
