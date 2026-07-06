@@ -769,7 +769,7 @@ VoiceOver 全流程可完成一次清理（AC 化）；键盘可达（tab 序、
 
 ### 9.1 仓库与目录
 
-App 独立仓库 `mole-mac`（本 CLI 仓库保持纯 CLI，互相 cross-link）：
+**落地位置（2026-07 决定）**：App 以 **monorepo 子目录 `app/` 起步**（骨架已提交），与 CLI 同仓便于 robot 协议、契约测试、golden 文件同步演进——M0 阶段协议每周都在变，跨仓同步成本不值得。发布 1.0 前评估拆分为独立仓库 `mole-mac`（`git subtree split` 保留历史即可，目录结构已按可拆分设计，`app/` 内不反向依赖 CLI 仓库路径，仅通过 `CoreBundle/fetch_core.sh` 消费 CLI 构建产物）。下述结构即 `app/` 目录结构（拆分后为仓库根）：
 
 ```
 mole-mac/
@@ -909,9 +909,9 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 
 ### Phase 1 — App 骨架与只读双页（M1，约 3 周）【App 仓库】
 
-- 工程脚手架（XcodeGen、CI、lint、DesignSystem 基础 token 与 5 个核心组件）。
-- MoleKit：ProcessRunner、RobotSession、契约测试接入。
-- **状态页**（现成 `--watch` 数据源）与**软件页列表**（现成 `--list`）先行——风险最低、见效最快。
+- 工程脚手架（XcodeGen、CI、lint、DesignSystem 基础 token 与 5 个核心组件）。**骨架已随设计稿预置于本仓库 `app/` 目录**（见 §9.1 落地位置），Phase 1 在其上继续。
+- MoleKit：ProcessRunner、RobotSession、ScanSession（§5.0 跨页共享）、契约测试接入。
+- **状态页**（现成 `--watch` 数据源）与**软件页列表**（现成 `--list`）先行——风险最低、见效最快。CLI 侧小增量：`status-go --proc <pid>`（进程详情弹窗数据源，纯只读）。
 - Onboarding + FDA 检测。
 - 判据：内部 alpha 可日常当 iStat 替代品用；崩溃率为 0 的一周。
 
@@ -943,6 +943,7 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 - 结构化撤销（§6.4，含 CLI `robot history restore`）。
 - 空间趋势 Timeline（§6.3）。
 - **软件页更新子 tab（§5.2.2）**：先接 `Homebrew cask` 单来源检测 + brew 委派升级（最可信、复用现有 brew 集成），Sparkle/App Store/Electron 多来源检测在 v1.2+ 逐步铺开。
+- **外置卷清理入口**（§5.1，`robot clean plan --external`，CLI 能力现成）。
 - 根据 1.0 反馈的体验修补。
 
 ### Phase 6 — 能力扩展（v1.2，约 4 周）

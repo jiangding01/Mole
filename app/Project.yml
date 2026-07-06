@@ -1,0 +1,62 @@
+name: Mole
+options:
+  bundleIdPrefix: com.tw93
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  xcodeVersion: "16.0"
+
+packages:
+  MoleKit:
+    path: MoleKit
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Automatic
+    DEAD_CODE_STRIPPING: YES
+
+targets:
+  MoleApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: MoleApp
+    dependencies:
+      - package: MoleKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tw93.MoleApp
+        PRODUCT_NAME: Mole
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        # 内容延伸到标题栏（设计 §8.1）在代码中以 windowStyle 处理
+    info:
+      path: MoleApp/Info.plist
+      properties:
+        CFBundleDisplayName: Mole
+        LSMinimumSystemVersion: "13.0"
+        NSHumanReadableCopyright: ""
+        # 非沙盒（设计 ADR-3）：Developer ID 直发 + 公证
+    # 内嵌 CLI 核心：fetch_core.sh 产出后取消注释下列资源拷贝
+    # postBuildScripts 阶段在 Phase 1 接 CI 时补充（拷贝 mole-core + 校验清单）
+
+  MoleAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/MoleAppTests
+    dependencies:
+      - target: MoleApp
+
+schemes:
+  Mole:
+    build:
+      targets:
+        MoleApp: all
+    test:
+      targets:
+        - MoleAppTests

@@ -1,0 +1,10 @@
+# SwiftFormat（与 SwiftLint 协同；CI 强制）
+--swiftversion 5.10
+--indent 4
+--maxwidth 140
+--wraparguments before-first
+--wrapcollections before-first
+--stripunusedargs closure-only
+--self remove
+--importgrouping testable-bottom
+--disable wrapMultilineStatementBraces
