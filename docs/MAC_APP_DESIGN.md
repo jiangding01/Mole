@@ -180,7 +180,7 @@ mole robot <domain> <verb> [options] [< request.json]
   verb   ∈ { plan, apply, list, run, restore }
 ```
 
-- 请求参数小的走 argv；大的（如勾选 id 列表）走 stdin 一次性 JSON 文档。
+- 请求参数走 argv（如 `--sections`、`--plan <plan_id>`）；批量 id（apply 的勾选集）经 **stdin 每行一个 id**。**核心侧只生成 JSON、从不解析 JSON**——bash 3.2 无可靠 JSON 解析器，行式输入消除了这个依赖（2026-07 M0 实现时定）。
 - 所有输出到 stdout，一行一个 JSON 事件（NDJSON）；stderr 仅用于协议外崩溃诊断，GUI 收集进日志不解析。
 - 环境变量：`MOLE_ROBOT=1`（核心内部据此走 emit_event 分支）由 robot 入口自动设置；GUI 不需要设置其他变量。测试时可叠加 `MOLE_DRY_RUN=1` / `MOLE_TEST_NO_AUTH=1`。
 
@@ -189,10 +189,10 @@ mole robot <domain> <verb> [options] [< request.json]
 | 命令 | 输入 | 输出事件流 | 破坏性 |
 |---|---|---|---|
 | `robot clean plan [--sections a,b] [--external <path>]` | 可选 section 过滤 / 外置卷目标 | progress* → item* → insight* → done | 否 |
-| `robot clean apply` | stdin: `{"plan_id":"…","ids":[…]}` | progress* → result* → done | **是** |
+| `robot clean apply --plan <id>` | stdin: item id 每行一个 | result* → done | **是** |
 | `robot apps list` | — | item*（app 条目）→ done | 否 |
 | `robot uninstall plan` | stdin: `{"bundle_ids":[…]}` 或 `{"paths":[…]}` | item*（主体+残留，含分组）→ done | 否 |
-| `robot uninstall apply` | stdin: `{"plan_id":"…","ids":[…]}` | progress* → result* → done | **是** |
+| `robot uninstall apply --plan <id>` | stdin: item id 每行一个 | result* → done | **是** |
 | `robot apps updates list` | — | item*（可更新项：来源/当前/最新）→ done | 否 |
 | `robot apps update` | stdin: `{"id":"…"}` | result*（cask 委派 brew / 其余返回引导信号）→ done | **委派**（不改 bundle） |
 | `robot launchitems list` | 可选筛选 | item*（登录项/agent/daemon）→ done | 否 |
@@ -243,7 +243,7 @@ mole robot <domain> <verb> [options] [< request.json]
 {"v":1,"event":"result","id":"cl.app_caches.7f3a9c","status":"trashed",
  "freed_bytes":58720256}
 ```
-`status ∈ {trashed, deleted, skipped_whitelisted, skipped_protected, skipped_missing, failed}`；failed 时附 `error{code,message}`。
+`status ∈ {trashed, deleted, skipped_whitelisted, skipped_protected, skipped_missing, dry_run, failed}`（`dry_run` 仅在 `MOLE_DRY_RUN=1` 测试模式出现）；failed 时附 `error{code,message}`。
 
 **task_status** — optimize 任务状态机
 ```json
@@ -900,8 +900,8 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 
 | 交付 | 验收 |
 |---|---|
-| `lib/core/robot.sh`（emit/节流/plan 文件管理）+ `bin/robot.sh` 路由 | bats：事件格式、错误码、plan 过期、取消语义 |
-| `robot clean plan/apply`（先做 3 个代表性 section：user essentials / app caches / app leftovers） | §11.4 一致性脚本对这 3 个 section 通过 |
+| `lib/core/robot.sh`（emit/plan 文件管理）+ `bin/robot.sh` 路由 —— **✅ 已落地（2026-07-06，`tests/robot_core.bats` 14 用例全绿）**；节流与取消语义随真实 section 接入补 | bats：事件格式、错误码、plan 过期、安全链（protected/whitelisted/missing/dry-run） |
+| `robot clean plan/apply` —— **plan 基于 dry-run 导出文件构建（EXPORT_LIST_FILE），"GUI plan == CLI dry-run"由构造保证**；apply 逐 id 重验（存在性→保护→白名单→mole_delete）。**✅ 骨架已落地**，待 macOS 上对真实 clean 输出做端到端验证 | §11.4 一致性由同源构造保证 + macOS 端到端 bats |
 | `robot apps list` / `robot history list --json` / `robot whitelist *` | bats 全绿 |
 | `cmd/analyze --serve`（scan/children/cancel，先不含 delete） | go test 协议用例 |
 | `contracts/*.ndjson` golden 初版 | 契约测试框架在两端跑通 |
