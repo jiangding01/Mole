@@ -610,14 +610,14 @@ GUI 勾选(id) → robot apply → 核心逐项: 重新 stat → should_protect_
 
 ### 8.2 视觉语言（原创方向）
 
-- 每个模块一个主题色相 + 统一的"焦点视觉"承载扫描/执行状态：**数据地层（Data Strata）**——横置的磁盘沉积层剖面，层 = 清理分组（层厚 ∝ 体积）、发光碎片 = 真实发现项、清理 = 碎片被采掘消散且地层压实变薄。数据驱动而非装饰，且可交互（hover 层显示分组、点击跳转）。呼应 Mole"鼹鼠挖掘"的品牌隐喻；避免写实星球素材与通用粒子球，程序化生成（Canvas，Metal 备选）。完整五状态动效规格见 `docs/UI_DESIGN_PROMPT.md` §4.1。
+- 每个模块一个主题色相 + 统一的"焦点视觉"承载扫描/执行状态：**光谱环（Spectrum Ring）**——一枚精密仪表般的圆环，原则是"形态跟随数据"：静息为呼吸的径向刻度环；扫描时为环形均衡器（扫描头沿环行进、刻度 ∝ 发现量、环心仪表滚动总量、进度双色弧）；完成时环**就地重组为甜甜圈占比图**（弧段角度 ∝ 各类真实占比，作为与结果卡片色彩联动的活图例）。数据驱动而非装饰、每状态都有职责（无残留自转小球）、完成态可交互（hover/点击弧段）。避免写实星球素材与通用粒子球，程序化生成（Canvas，Metal 备选）。完整状态机规格见 `docs/UI_DESIGN_PROMPT.md` §2.5、§4.1。
 - 数字优先排版：结论用大号等宽数字（SF Mono/SF Pro Rounded），说明文字退后。
 - 列表密度中等，行高 36，路径类文本中间截断 + hover 完整 tooltip。
 - 动效克制：数值滚动、卡片过渡 ≤200ms，全部 `reduceMotion` 适配。
 
 ### 8.3 组件库（DesignSystem 模块的交付清单）
 
-`MoleCard`、`StatBadge`、`StrataView`（数据地层焦点视觉）、`SectionList`（分组勾选列表）、`ResultLog`（滚动结果流）、`TreemapView`、`SparklineView`、`RiskBadge`、`EmptyState`、`PermissionBanner`。每个组件配 Preview + 快照测试。
+`MoleCard`、`StatBadge`、`SpectrumRingView`（光谱环焦点视觉，含 idle/scanning/donut 三态 + 结果重组转场）、`DonutBreakdownView`（占比图例，可与结果卡片联动）、`ResultCard`（含编号角标的结论卡）、`SectionList`（分组勾选列表）、`ResultLog`（滚动结果流）、`TreemapView`、`SparklineView`、`RiskBadge`、`EmptyState`、`PermissionBanner`。每个组件配 Preview + 快照测试。
 
 ### 8.4 文案语气
 
