@@ -17,11 +17,17 @@ import (
 )
 
 var (
-	jsonMode = flag.Bool("json", false, "output analysis as JSON instead of TUI")
+	jsonMode  = flag.Bool("json", false, "output analysis as JSON instead of TUI")
+	serveMode = flag.Bool("serve", false, "GUI engine: NDJSON requests on stdin, events on stdout")
 )
 
 func main() {
 	flag.Parse()
+
+	if *serveMode {
+		runServe(os.Stdin, os.Stdout)
+		return
+	}
 
 	target := os.Getenv("MO_ANALYZE_PATH")
 	if target == "" && len(flag.Args()) > 0 {
