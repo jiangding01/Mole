@@ -12,15 +12,15 @@ enum MainTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// 骨架阶段直接返回中文；Phase 4 i18n 时迁入 String Catalog（设计 §8.5）。
+    /// 文案走 String Catalog（设计 §8.5）；语言切换由 L10n 驱动即时刷新。
     var title: String {
         switch self {
-        case .smartScan: return "智能扫描"
-        case .clean: return "清理"
-        case .apps: return "软件"
-        case .optimize: return "优化"
-        case .analyze: return "分析"
-        case .status: return "状态"
+        case .smartScan: return L("nav.smartScan")
+        case .clean: return L("nav.clean")
+        case .apps: return L("nav.apps")
+        case .optimize: return L("nav.optimize")
+        case .analyze: return L("nav.analyze")
+        case .status: return L("nav.status")
         }
     }
 }
