@@ -10,7 +10,9 @@ struct StatusView: View {
 
     var body: some View {
         Group {
-            if store.snapshot == nil {
+            // ready = 有快照且进程表有数据（或等待超时兜底）：
+            // 避免"页面秒进但进程表还空着"的割裂体验
+            if !store.ready {
                 connectingView
             } else {
                 dashboard
@@ -54,6 +56,7 @@ struct StatusView: View {
                     .frame(maxWidth: 460)
                 Button("重试") { store.retry() }
                     .buttonStyle(.plain)
+                    .pointingCursor()
                     .font(Fonts.ui(12, .semibold))
                     .padding(.horizontal, 18).padding(.vertical, 7)
                     .background(Capsule().fill(accent.gradient))
@@ -75,7 +78,7 @@ struct StatusView: View {
                     .font(Fonts.serif(30, .semibold))
                     .foregroundStyle(look.text)
                     .padding(.top, 12)
-                Text("采集 CPU · 内存 · 磁盘 · 网络 · 传感器数据")
+                Text(store.snapshot == nil ? "采集 CPU · 内存 · 磁盘 · 网络 · 传感器数据" : "正在采集进程列表…")
                     .font(Fonts.ui(13))
                     .foregroundStyle(look.textDim)
                     .padding(.top, 10)
@@ -142,6 +145,7 @@ struct StatusView: View {
                         .foregroundStyle(store.refreshSeconds == s ? AnyShapeStyle(accent.onAccent) : AnyShapeStyle(look.textDim))
                 }
                 .buttonStyle(.plain)
+                .pointingCursor()
             }
         }
         .padding(3)
@@ -475,6 +479,7 @@ struct StatusView: View {
             .foregroundStyle(store.sortColumn == column ? look.text : look.textMute)
         }
         .buttonStyle(.plain)
+        .pointingCursor()
     }
 
     // MARK: - 小工具
@@ -663,6 +668,7 @@ private struct ProcessRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen) // 设计 §9.6：点击行弹进程详情
         .onHover { hovering = $0 }
+        .pointingCursor()
     }
 
     @ViewBuilder
@@ -741,6 +747,10 @@ private struct ProcessDetailSheet: View {
     var look: Look
     var accent: ModuleAccent
 
+    /// 原生探测数据（libproc/sysctl）：打开弹窗时取一次。
+    @State private var probe: ProcessProbe?
+    @State private var showRawCommand = false
+
     var body: some View {
         let gone = store.isGone(proc)
         let isSystem = store.isSystemProcess(proc)
@@ -754,6 +764,7 @@ private struct ProcessDetailSheet: View {
         }
         .background(look.surface)
         .presentationBackground(look.surfaceSolid)
+        .task(id: proc.pid) { probe = store.probe(proc) }
     }
 
     // 已退出：极简卡片 + 红字提示
@@ -804,6 +815,7 @@ private struct ProcessDetailSheet: View {
                     .background(Circle().fill(look.line.opacity(0.6)))
             }
             .buttonStyle(.plain)
+            .pointingCursor()
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
@@ -838,25 +850,49 @@ private struct ProcessDetailSheet: View {
         if let mem = proc.memoryBytes {
             parts.append("MEM " + ByteCountFormatter.string(fromByteCount: Int64(mem), countStyle: .memory))
         }
-        if proc.ppid == 1 { parts.append("由 launchd 启动") }
+        if let user = probe?.user { parts.append(user) }
+        if let probe, let from = store.origin(of: probe, selfPid: proc.pid) {
+            parts.append("来自 \(from)")
+        } else if proc.ppid == 1 {
+            parts.append("由 launchd 启动")
+        }
         return parts.joined(separator: " · ")
     }
 
-    /// 进程树行：parent pid > name pid（父进程不在 top 50 时只标 ppid）。
+    /// 进程树：完整祖先链 launchd 1 › … › 本进程 pid（探测失败时退化为 ppid 单级）。
+    @ViewBuilder
     private var processTree: some View {
-        HStack(spacing: 7) {
-            let parent = store.parent(of: proc)
-            Text(parent?.name ?? (proc.ppid == 1 ? "launchd" : "PPID"))
-                .foregroundStyle(look.textDim)
-            Text("\(proc.ppid ?? 0)").foregroundStyle(look.textMute)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(look.textMute)
-            Text(proc.name ?? "?").foregroundStyle(look.text)
-            Text("\(proc.pid)").foregroundStyle(look.textMute)
+        Group {
+            if let probe, probe.chain.count > 1 {
+                chainText(store.friendlyChain(probe))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(spacing: 7) {
+                    let parent = store.parent(of: proc)
+                    Text(parent?.name ?? (proc.ppid == 1 ? "launchd" : "PPID"))
+                        .foregroundStyle(look.textDim)
+                    Text("\(proc.ppid ?? 0)").foregroundStyle(look.textMute)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(look.textMute)
+                    Text(proc.name ?? "?").foregroundStyle(look.text)
+                    Text("\(proc.pid)").foregroundStyle(look.textMute)
+                }
+            }
         }
-        .font(Fonts.mono(13))
+        .font(Fonts.mono(12.5))
         .padding(.vertical, 14)
+    }
+
+    private func chainText(_ chain: [(pid: Int32, name: String)]) -> Text {
+        var result = Text("")
+        for (i, link) in chain.enumerated() {
+            if i > 0 { result = result + Text("  ›  ").foregroundStyle(look.textMute) }
+            let isLast = i == chain.count - 1
+            result = result + Text(link.name).foregroundStyle(isLast ? look.text : look.textDim)
+            result = result + Text(" \(link.pid)").foregroundStyle(look.textMute)
+        }
+        return result
     }
 
     @ViewBuilder
@@ -865,19 +901,99 @@ private struct ProcessDetailSheet: View {
             if let app, let bundle = app.bundleURL?.path {
                 infoRow("置信度", "高 · 正在运行的应用")
                 infoRow("识别依据", bundle)
+            } else if let bundle = inferredBundlePath {
+                infoRow("置信度", "中 · 从可执行路径推断")
+                infoRow("识别依据", bundle)
+            }
+            if let threads = probe?.threadCount { infoRow("线程数", "\(threads)") }
+            if let files = probe?.openFileCount { infoRow("打开文件", "\(files)") }
+            if let read = probe?.diskBytesRead, let written = probe?.diskBytesWritten {
+                infoRow("磁盘 I/O", "\(fmtIO(read)) R · \(fmtIO(written)) W")
             }
             infoRow("子进程", "\(store.childCount(of: proc))")
-            if let launched = app?.launchDate {
-                infoRow("启动时间", launched.formatted(.relative(presentation: .named)))
+            if let user = probe?.user { infoRow("用户", user) }
+            if let started = app?.launchDate ?? probe?.startTime {
+                infoRow("启动时间", elapsed(started))
             }
-            if let exec = store.executable(of: proc) {
+            if let dir = probe?.workingDirectory {
+                infoRow("工作目录", (dir as NSString).abbreviatingWithTildeInPath)
+            }
+            if let exec = executableDisplay {
                 infoRow("可执行文件", exec)
             }
-            if isSystem, let cmd = proc.command {
-                infoRow("命令", cmd)
-            }
+            rawCommandSection
         }
         .padding(.bottom, 8)
+    }
+
+    /// helper 无 NSRunningApplication 时，从真实路径推断所属 bundle。
+    private var inferredBundlePath: String? {
+        guard let path = probe?.executablePath,
+              let range = path.range(of: ".app/") else { return nil }
+        return String(path[..<range.lowerBound]) + ".app"
+    }
+
+    /// 官方样式："SunBrowser.app / SunBrowser Helper (Renderer)"；非 bundle 进程给全路径。
+    private var executableDisplay: String? {
+        guard let path = probe?.executablePath else { return nil }
+        let parts = path.split(separator: "/").map(String.init)
+        if let bundle = parts.last(where: { $0.hasSuffix(".app") }), let name = parts.last, bundle != name {
+            return "\(bundle) / \(name)"
+        }
+        return path
+    }
+
+    /// 原始路径与命令（可折叠，等宽字体盒子，可选中复制）。
+    @ViewBuilder
+    private var rawCommandSection: some View {
+        if let cmd = probe?.arguments ?? proc.command {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { showRawCommand.toggle() }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: showRawCommand ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                        Text("原始路径与命令")
+                        Text("1")
+                    }
+                    .font(Fonts.mono(11, .medium))
+                    .foregroundStyle(look.textDim)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(look.line.opacity(0.6)))
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+                if showRawCommand {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("命令").font(Fonts.mono(10)).foregroundStyle(look.textMute)
+                        Text(cmd)
+                            .font(Fonts.mono(11.5))
+                            .foregroundStyle(look.text)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.22)))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(look.line, lineWidth: 1))
+                }
+            }
+            .padding(.top, 10)
+        }
+    }
+
+    private func elapsed(_ date: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+        let days = seconds / 86400
+        let hours = (seconds % 86400) / 3600
+        let minutes = (seconds % 3600) / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
+    }
+
+    private func fmtIO(_ v: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(v), countStyle: .binary)
     }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
@@ -926,6 +1042,7 @@ private struct ProcessDetailSheet: View {
                         .background(RoundedRectangle(cornerRadius: 9).fill(Semantic.dangerFill))
                 }
                 .buttonStyle(.plain)
+                .pointingCursor()
             }
         }
         .padding(.horizontal, 24)
@@ -942,6 +1059,7 @@ private struct ProcessDetailSheet: View {
                 .overlay(RoundedRectangle(cornerRadius: 9).stroke(look.lineStrong, lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .pointingCursor()
     }
 }
 

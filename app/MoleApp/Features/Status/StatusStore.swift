@@ -41,6 +41,21 @@ final class StatusStore {
     private var watchdog: Task<Void, Never>?
     private var consecutiveFailures = 0
 
+    // MARK: - 就绪门槛（进程表比首个快照晚：ps CPU% 需要采样窗口）
+
+    /// 等进程数据的兜底开关：超时后即便没有进程也进仪表盘（骨架行接住）。
+    private(set) var procWaitExpired = false
+    private var procWaitTask: Task<Void, Never>?
+
+    var hasProcessData: Bool { !(snapshot?.topProcesses?.isEmpty ?? true) }
+
+    /// 页面级 loading → 仪表盘的切换条件：有快照且（有进程数据或等待超时）。
+    /// 避免"很快进页面但进程表还空着"的割裂体验。
+    var ready: Bool {
+        guard snapshot != nil else { return false }
+        return hasProcessData || procWaitExpired
+    }
+
     func start() {
         guard subscription == nil else { return }
         if case .failed = phase { return } // 失败态只能手动 retry
@@ -62,6 +77,8 @@ final class StatusStore {
         subscription = nil
         watchdog?.cancel()
         watchdog = nil
+        procWaitTask?.cancel()
+        procWaitTask = nil
         stream?.stop()
         stream = nil
     }
@@ -125,6 +142,16 @@ final class StatusStore {
         lastSnapshotAt = Date()
         phase = .live
         consecutiveFailures = 0
+        if hasProcessData {
+            procWaitTask?.cancel()
+            procWaitTask = nil
+        } else if procWaitTask == nil, !procWaitExpired {
+            procWaitTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled else { return }
+                self?.procWaitExpired = true
+            }
+        }
         push(&cpuHistory, snap.cpu?.usage ?? 0)
         push(&gpuHistory, snap.gpu?.first?.usage ?? 0)
         push(&memHistory, snap.memory?.usedPercent ?? 0)
@@ -191,30 +218,68 @@ final class StatusStore {
         snapshot?.topProcesses?.filter { $0.ppid == p.pid }.count ?? 0
     }
 
-    func executable(of p: MetricsSnapshot.ProcessInfo) -> String? {
-        executablePath(of: p)
+    /// 原生探测（libproc/sysctl）：线程数、打开文件、磁盘 I/O、工作目录、
+    /// 完整祖先链、真实可执行路径。弹窗打开时取一次。
+    func probe(_ p: MetricsSnapshot.ProcessInfo) -> ProcessProbe {
+        ProcessProber.probe(pid: Int32(p.pid))
     }
 
-    /// 「显示」：在 Finder 中定位可执行文件 / App bundle。
+    /// 祖先链的友好名：GUI 应用用 localizedName（"SunBrowser"），其余用可执行名。
+    func friendlyChain(_ probe: ProcessProbe) -> [(pid: Int32, name: String)] {
+        probe.chain.map { link in
+            if let app = NSRunningApplication(processIdentifier: link.pid),
+               app.bundleURL != nil, let name = app.localizedName {
+                return (link.pid, name)
+            }
+            return (link.pid, link.name)
+        }
+    }
+
+    /// 「来自 X」：链上最近的 GUI 祖先应用（helper 归属感知）。
+    func origin(of probe: ProcessProbe, selfPid: Int) -> String? {
+        for link in probe.chain.reversed() where link.pid != Int32(selfPid) {
+            if let app = NSRunningApplication(processIdentifier: link.pid),
+               app.bundleURL != nil {
+                return app.localizedName
+            }
+        }
+        return nil
+    }
+
+    /// 「显示」：在 Finder 中定位 App bundle / 可执行文件。
+    /// 用 proc_pidpath 真实路径（command 里带空格的路径解析不可靠）。
     func reveal(_ p: MetricsSnapshot.ProcessInfo) {
         if let url = runningApp(for: p)?.bundleURL {
             NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else if let path = executablePath(of: p) {
+            return
+        }
+        let path = ProcessProber.executablePath(Int32(p.pid)) ?? executablePath(of: p)
+        if let path, FileManager.default.fileExists(atPath: path) {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         }
     }
 
-    /// 「复制摘要」：一行可粘贴的进程概要。
+    /// 「复制摘要」：官方 Mole 格式——名称(pid) + 来自 + 完整链路 + 指标。
     func copySummary(_ p: MetricsSnapshot.ProcessInfo) {
-        var parts = ["\(p.name ?? "?") (PID \(p.pid))"]
-        if let cpu = p.cpu { parts.append(String(format: "CPU %.1f%%", cpu)) }
-        if let mem = p.memoryBytes {
-            parts.append("MEM " + ByteCountFormatter.string(fromByteCount: Int64(mem), countStyle: .memory))
+        let probed = probe(p)
+        var lines = ["\(p.name ?? "?") (\(p.pid))"]
+        if let from = origin(of: probed, selfPid: p.pid) {
+            lines.append("来自 \(from)。")
         }
-        if let cmd = p.command { parts.append(cmd) }
+        let chain = friendlyChain(probed)
+        if chain.count > 1 {
+            lines.append(chain.map { "\($0.name)(\($0.pid))" }.joined(separator: " -> "))
+        }
+        var metrics: [String] = []
+        if let cpu = p.cpu { metrics.append(String(format: "CPU %.1f%%", cpu)) }
+        if let mem = p.memoryBytes {
+            metrics.append("MEM " + ByteCountFormatter.string(fromByteCount: Int64(mem), countStyle: .memory))
+        }
+        if !metrics.isEmpty { lines.append(metrics.joined(separator: " · ")) }
+        if let exec = probed.executablePath { lines.append(exec) }
         let board = NSPasteboard.general
         board.clearContents()
-        board.setString(parts.joined(separator: " · "), forType: .string)
+        board.setString(lines.joined(separator: "\n"), forType: .string)
     }
 
     /// 终止：NSRunningApplication.terminate 优先，回退 SIGTERM；force = SIGKILL。
@@ -241,7 +306,9 @@ final class StatusStore {
                   let parent = NSRunningApplication(processIdentifier: pid_t(ppid)), let icon = parent.icon {
             // helper 子进程（渲染器等）挂到父应用图标
             image = icon
-        } else if let path = executablePath(of: p), FileManager.default.fileExists(atPath: path) {
+        } else if let path = ProcessProber.executablePath(Int32(p.pid)) ?? executablePath(of: p),
+                  FileManager.default.fileExists(atPath: path) {
+            // 优先 proc_pidpath：command 字段里带空格的路径没法按空格切
             image = NSWorkspace.shared.icon(forFile: path)
         }
         if let image {

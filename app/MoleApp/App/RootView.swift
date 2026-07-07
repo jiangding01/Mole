@@ -72,6 +72,7 @@ struct RootView: View {
             }
         }
         .buttonStyle(.plain)
+        .pointingCursor()
     }
 
     private func iconButton(_ symbol: String, action: @escaping () -> Void) -> some View {
@@ -84,6 +85,7 @@ struct RootView: View {
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(look.line, lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .pointingCursor()
     }
 
     private var navigationCapsule: some View {
@@ -109,6 +111,7 @@ struct RootView: View {
                         .foregroundStyle(tab == selectedTab ? tabAccent.onAccent : look.textDim)
                 }
                 .buttonStyle(.plain)
+                .pointingCursor()
             }
         }
         .padding(4)
