@@ -52,7 +52,7 @@
         }
       }
     },
-    "analyze.header.total" : {
+    "analyze.header.current" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -69,19 +69,36 @@
         }
       }
     },
-    "analyze.list.summary" : {
+    "analyze.header.disk" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld items · %@"
+            "value" : "Disk %@ / %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 项 · %@"
+            "value" : "磁盘 %@ / %@"
+          }
+        }
+      }
+    },
+    "analyze.list.header" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This folder · %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前目录 · %lld"
           }
         }
       }
@@ -154,36 +171,19 @@
         }
       }
     },
-    "analyze.progress" : {
+    "analyze.rescan" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Found %@"
+            "value" : "Rescan"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已发现 %@"
-          }
-        }
-      }
-    },
-    "analyze.rescan.help" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Force-rescan this folder"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "强制重扫当前目录"
+            "value" : "重新扫描"
           }
         }
       }
@@ -205,19 +205,70 @@
         }
       }
     },
-    "analyze.scanning.title" : {
+    "analyze.scanning.prefix" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Measuring disk space"
+            "value" : "Scanning"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在统计磁盘空间"
+            "value" : "正在扫描"
+          }
+        }
+      }
+    },
+    "analyze.scanning.sub" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Measuring folder sizes · %lld items"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计目录大小 · %lld 个项目"
+          }
+        }
+      }
+    },
+    "analyze.sort.name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称"
+          }
+        }
+      }
+    },
+    "analyze.sort.size" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Size"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大小"
           }
         }
       }

@@ -26,15 +26,38 @@ final class AnalyzeStore {
         let target: Target
     }
 
+    enum ListSort { case size, name }
+
     var phase: Phase = .idle
     private(set) var crumbs: [Crumb] = []
     private(set) var nodes: [AnalyzeSession.Node] = []
     private(set) var totalSize: Int64 = 0
     private(set) var progress: AnalyzeSession.Progress?
     private(set) var isCached = false
+    /// 列表 ↔ treemap 双向 hover 联动的共享焦点（path）。
+    var hoveredPath: String?
+    /// 左栏排序（treemap 恒按大小）。
+    var listSort: ListSort = .size
+    /// 扫描覆盖层标题（当前目标目录名）。
+    private(set) var scanningTitle = ""
 
     private let session = AnalyzeSession()
     private var scanTask: Task<Void, Never>?
+
+    var listNodes: [AnalyzeSession.Node] {
+        switch listSort {
+        case .size: nodes
+        case .name: nodes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
+    }
+
+    /// 磁盘用量（设计稿页头"磁盘 481 / 494 GB"）。
+    var diskUsage: (used: Int64, total: Int64)? {
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()),
+              let total = (attrs[.systemSize] as? NSNumber)?.int64Value,
+              let free = (attrs[.systemFreeSize] as? NSNumber)?.int64Value else { return nil }
+        return (total - free, total)
+    }
 
     // MARK: - 入口与导航
 
@@ -98,10 +121,11 @@ final class AnalyzeStore {
 
     private func scan(path: String, rescan: Bool) {
         scanTask?.cancel()
-        nodes = []
-        totalSize = 0
+        // 不清空 nodes：设计稿的扫描态是"旧内容模糊压暗 + 居中加载"，
+        // 新流的首批 node 一到就替换。
         progress = nil
         isCached = false
+        scanningTitle = crumbs.last?.title ?? (path as NSString).lastPathComponent
         phase = .scanning
         scanTask = Task { [weak self] in
             guard let self else { return }
@@ -114,8 +138,10 @@ final class AnalyzeStore {
                     case let .progress(progress):
                         self.progress = progress
                     case let .node(node):
+                        if byPath.isEmpty { self.totalSize = 0 } // 新层内容开始替换旧层
                         byPath[node.path] = node
                         self.nodes = byPath.values.sorted { $0.size > $1.size }
+                        self.totalSize = byPath.values.reduce(0) { $0 + max(0, $1.size) }
                     case let .done(_, totalSize, _, cached):
                         self.nodes = byPath.values.sorted { $0.size > $1.size }
                         self.totalSize = totalSize

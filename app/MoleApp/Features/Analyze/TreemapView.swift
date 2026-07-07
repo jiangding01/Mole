@@ -89,11 +89,11 @@ struct TreemapView: View {
     var nodes: [AnalyzeSession.Node] // 已按大小降序
     var look: Look
     var accent: ModuleAccent
+    /// 列表 ↔ treemap 双向 hover 联动（共享 store.hoveredPath）。
+    @Binding var hoverId: String?
     var onDrill: (AnalyzeSession.Node) -> Void
     var onAggregate: ([AnalyzeSession.Node]) -> Void
     var onReveal: (AnalyzeSession.Node) -> Void
-
-    @State private var hoverId: String?
 
     var body: some View {
         GeometryReader { geo in
@@ -152,28 +152,31 @@ struct TreemapView: View {
         let hovered = hoverId == block.id
         let showLabel = rect.width > 72 && rect.height > 40
 
-        ZStack(alignment: .topLeading) {
+        ZStack {
             RoundedRectangle(cornerRadius: 5)
                 .fill(fillColor(block))
             if hovered {
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.white.opacity(0.09))
+                    .fill(Color.white.opacity(0.10))
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color.white.opacity(0.55), lineWidth: 1.5)
             }
             if showLabel {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
+                // 设计稿：标签居中——图标+名称一行，大小一行
+                VStack(spacing: 3) {
+                    HStack(spacing: 5) {
                         Image(systemName: symbol(block))
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 10, weight: .semibold))
                         Text(title(block))
-                            .font(Fonts.ui(11, .semibold))
+                            .font(Fonts.ui(12, .semibold))
                             .lineLimit(1)
                     }
                     Text(subtitle(block))
-                        .font(Fonts.mono(9.5))
-                        .opacity(0.75)
+                        .font(Fonts.mono(10.5))
+                        .opacity(0.8)
                 }
                 .foregroundStyle(labelColor(block))
-                .padding(7)
+                .padding(6)
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 5))

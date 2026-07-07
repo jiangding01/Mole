@@ -2,8 +2,10 @@ import MoleKit
 import SwiftUI
 
 /// 分析页（设计 §5.4 / 设计稿 analyze 页）：
-/// 面包屑（任意层级可跳）+ 左栏完整子项列表 + Squarified Treemap（小项聚合）。
-/// 下钻命中会话缓存秒回；刷新按钮强制重扫；纯只读（删除走 robot，M2）。
+/// 面包屑 + 右侧状态区（当前总量 · 磁盘用量 · 重新扫描）；左栏两行式列表
+/// （大小/名称排序、cleanable 绿扳手、hover 与 treemap 双向联动）；
+/// 主区 Squarified Treemap（居中标签 + 小项聚合）。
+/// 扫描态 = 旧内容模糊压暗 + 居中环形加载覆盖层（设计稿 SCANNING）。
 struct AnalyzeView: View {
     @State private var store = AnalyzeStore()
     private let look = Look.ink
@@ -26,36 +28,47 @@ struct AnalyzeView: View {
             breadcrumb
             Spacer()
             if store.phase == .scanning {
-                HStack(spacing: 7) {
-                    RingSpinner(accent: accent, size: 14, lineWidth: 2)
-                    if let progress = store.progress {
-                        Text(L("analyze.progress", fmt(progress.bytes)))
-                            .font(Fonts.mono(11))
-                            .foregroundStyle(look.textMute)
-                            .contentTransition(.numericText())
-                    }
-                }
+                // 设计稿：细进度线 + 实时总量
+                Capsule()
+                    .fill(accent.gradient)
+                    .frame(width: 120, height: 3)
+                Text(L("analyze.header.current", fmt(store.progress?.bytes ?? store.totalSize)))
+                    .font(Fonts.mono(11.5))
+                    .foregroundStyle(look.textDim)
+                    .contentTransition(.numericText())
             } else {
-                Text(L("analyze.header.total", fmt(store.totalSize)))
+                Text(headerSummary)
                     .font(Fonts.mono(11.5))
                     .foregroundStyle(look.textMute)
                 if store.canRescan {
                     Button {
                         store.rescan()
                     } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(look.textDim)
-                            .frame(width: 26, height: 26)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(look.chrome))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(look.line, lineWidth: 1))
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(L("analyze.rescan"))
+                        }
+                        .font(Fonts.ui(12, .semibold))
+                        .foregroundStyle(look.textDim)
+                        .padding(.horizontal, 13).padding(.vertical, 7)
+                        .background(Capsule().fill(look.chrome))
+                        .overlay(Capsule().stroke(look.line, lineWidth: 1))
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                     .pointingCursor()
-                    .help(L("analyze.rescan.help"))
                 }
             }
         }
+    }
+
+    private var headerSummary: String {
+        var parts = [L("analyze.header.current", fmt(store.totalSize))]
+        if let disk = store.diskUsage {
+            parts.append(L("analyze.header.disk", fmtGBOnly(disk.used), fmt(disk.total)))
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// 面包屑：首段 home 图标；过深时中间折叠为 … 下拉。
@@ -88,15 +101,14 @@ struct AnalyzeView: View {
         } label: {
             HStack(spacing: 4) {
                 if isFirst {
-                    Image(systemName: "house.fill").font(.system(size: 9))
+                    Image(systemName: "house").font(.system(size: 10))
                 }
                 Text(crumb.title)
-                    .font(Fonts.ui(12.5, isLast ? .semibold : .regular))
+                    .font(Fonts.ui(13, isLast ? .semibold : .regular))
                     .lineLimit(1)
             }
             .foregroundStyle(isLast ? look.text : look.textDim)
             .padding(.horizontal, 7).padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 7).fill(isLast ? look.chrome : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -120,7 +132,7 @@ struct AnalyzeView: View {
         .pointingCursor()
     }
 
-    // MARK: - 主体
+    // MARK: - 主体（扫描态 = 模糊压暗 + 覆盖层）
 
     @ViewBuilder
     private var content: some View {
@@ -130,117 +142,138 @@ struct AnalyzeView: View {
         case let .failed(reason):
             failedView(reason)
         case .scanning, .loaded:
-            HStack(alignment: .top, spacing: 14) {
-                listPanel
-                    .frame(width: 300)
-                mainArea
-            }
+            explorer
+                .blur(radius: store.phase == .scanning ? 6 : 0)
+                .opacity(store.phase == .scanning ? 0.45 : 1)
+                .allowsHitTesting(store.phase != .scanning)
+                .overlay {
+                    if store.phase == .scanning { scanningOverlay }
+                }
+                .animation(.easeOut(duration: 0.25), value: store.phase == .scanning)
         }
     }
 
-    @ViewBuilder
-    private var mainArea: some View {
-        ZStack {
-            if store.nodes.isEmpty, store.phase == .scanning {
-                scanningPlaceholder
-            } else {
-                TreemapView(
-                    nodes: store.nodes,
-                    look: look,
-                    accent: accent,
-                    onDrill: { store.drill(into: $0) },
-                    onAggregate: { store.openAggregate($0) },
-                    onReveal: { store.reveal($0) }
-                )
+    private var explorer: some View {
+        HStack(alignment: .top, spacing: 18) {
+            listPanel
+                .frame(width: 300)
+            TreemapView(
+                nodes: store.nodes,
+                look: look,
+                accent: accent,
+                hoverId: Binding(get: { store.hoveredPath }, set: { store.hoveredPath = $0 }),
+                onDrill: { store.drill(into: $0) },
+                onAggregate: { store.openAggregate($0) },
+                onReveal: { store.reveal($0) }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// 扫描覆盖层（设计稿 SCANNING）：环形加载 + 文件夹图标 + 目标目录名。
+    private var scanningOverlay: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Circle()
+                    .stroke(look.line, lineWidth: 2)
+                    .frame(width: 88, height: 88)
+                RingSpinner(accent: accent, size: 88, lineWidth: 2)
+                Image(systemName: "folder")
+                    .font(.system(size: 24, weight: .regular))
+                    .foregroundStyle(accent.b)
             }
+            Fonts.eyebrow("Scanning", size: 11)
+                .foregroundStyle(look.textMute)
+                .padding(.top, 24)
+            HStack(spacing: 8) {
+                Text(L("analyze.scanning.prefix"))
+                    .font(Fonts.serif(22, .semibold))
+                    .foregroundStyle(look.text)
+                Text(store.scanningTitle)
+                    .font(Fonts.mono(19, .medium))
+                    .foregroundStyle(accent.b)
+                    .lineLimit(1)
+            }
+            .padding(.top, 10)
+            Text(L("analyze.scanning.sub", Int64(store.nodes.count)))
+                .font(Fonts.ui(12.5))
+                .foregroundStyle(look.textDim)
+                .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 13).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 13))
     }
 
-    private var scanningPlaceholder: some View {
-        VStack(spacing: 12) {
-            RingSpinner(accent: accent, size: 44, lineWidth: 2.5)
-            Text(L("analyze.scanning.title"))
-                .font(Fonts.ui(13, .semibold))
-                .foregroundStyle(look.textDim)
-            if let progress = store.progress {
-                Text((progress.current as NSString).abbreviatingWithTildeInPath)
-                    .font(Fonts.mono(10.5))
-                    .foregroundStyle(look.textMute)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 420)
-            }
-        }
-    }
-
-    // MARK: - 左栏：完整真实子项（不聚合）
+    // MARK: - 左栏（设计稿两行式：名称 / 大小·占比，hover 联动 treemap）
 
     private var listPanel: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(accent.b)
-                Text(L("analyze.list.summary", Int64(store.nodes.count), fmt(store.totalSize)))
-                    .font(Fonts.mono(11))
-                    .foregroundStyle(look.textDim)
+            HStack(spacing: 8) {
+                Text(L("analyze.list.header", Int64(store.nodes.count)))
+                    .font(Fonts.ui(12))
+                    .foregroundStyle(look.textMute)
                 Spacer()
+                sortToggle(L("analyze.sort.size"), .size)
+                sortToggle(L("analyze.sort.name"), .name)
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            Divider().overlay(look.line)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(store.nodes) { node in
+                LazyVStack(spacing: 2) {
+                    ForEach(store.listNodes) { node in
                         listRow(node)
                     }
                 }
             }
             .frame(maxHeight: .infinity)
         }
-        .background(RoundedRectangle(cornerRadius: 13).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 13))
+    }
+
+    private func sortToggle(_ label: String, _ sort: AnalyzeStore.ListSort) -> some View {
+        Button {
+            store.listSort = sort
+        } label: {
+            Text(label)
+                .font(Fonts.ui(12, store.listSort == sort ? .semibold : .regular))
+                .foregroundStyle(store.listSort == sort ? accent.b : look.textMute)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingCursor()
     }
 
     private func listRow(_ node: AnalyzeSession.Node) -> some View {
+        let hovered = store.hoveredPath == node.path
         let fraction = store.totalSize > 0 ? Double(max(0, node.size)) / Double(store.totalSize) : 0
-        return HStack(spacing: 8) {
-            Image(systemName: node.cleanable ? "sparkles" : (node.isDir ? "folder.fill" : "doc"))
-                .font(.system(size: 10))
-                .foregroundStyle(node.cleanable ? accent.b : look.textMute)
-                .frame(width: 14)
-            VStack(alignment: .leading, spacing: 3) {
+        return HStack(spacing: 10) {
+            Image(systemName: node.cleanable ? "wrench.adjustable" : (node.isDir ? "folder" : "doc"))
+                .font(.system(size: 12))
+                .foregroundStyle(node.cleanable ? Semantic.success : look.textMute)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(node.name)
-                    .font(Fonts.ui(12))
+                    .font(Fonts.ui(13, .medium))
                     .foregroundStyle(look.text)
                     .lineLimit(1)
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(look.line)
-                        Capsule().fill(node.cleanable ? accent.b : accent.a.opacity(0.7))
-                            .frame(width: max(2, geo.size.width * CGFloat(fraction)))
-                    }
-                }
-                .frame(height: 3)
-            }
-            Spacer(minLength: 6)
-            Text(fmt(node.size))
-                .font(Fonts.mono(10.5))
-                .foregroundStyle(look.textMute)
-            if node.isDir {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .semibold))
+                Text("\(fmt(node.size)) · \(Int((fraction * 100).rounded()))%")
+                    .font(Fonts.mono(10.5))
                     .foregroundStyle(look.textMute)
             }
+            Spacer(minLength: 6)
+            if node.isDir, hovered {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(look.textDim)
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 10).fill(hovered ? look.chrome : .clear))
         .contentShape(Rectangle())
         .onTapGesture {
             if node.isDir { store.drill(into: node) } else { store.reveal(node) }
+        }
+        .onHover { inside in
+            // 与 treemap 共享焦点：列表 hover → 对应色块高亮（反向亦然）
+            store.hoveredPath = inside ? node.path : (store.hoveredPath == node.path ? nil : store.hoveredPath)
         }
         .contextMenu {
             Button(L("analyze.menu.reveal")) { store.reveal(node) }
@@ -278,5 +311,10 @@ struct AnalyzeView: View {
 
     private func fmt(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    /// 磁盘行"481 / 494 GB"里前一个数字不带单位。
+    private func fmtGBOnly(_ bytes: Int64) -> String {
+        String(format: "%.0f", Double(bytes) / 1_000_000_000)
     }
 }
