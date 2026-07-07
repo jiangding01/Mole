@@ -1,0 +1,303 @@
+import Foundation
+import MoleKit
+import Observation
+
+/// 清理页 Store（设计 §5.1 / 设计稿 clean 页状态机）：
+/// idle → scanning（robot clean plan 流式进度）→ confirm（分组勾选，安全三承诺）
+/// → executing（robot clean apply 逐项结果流）→ done ；无可清理走 empty 愉悦态。
+/// 扫描/执行均可取消：SIGTERM，apply 侧核心完成当前单项后以 done(cancelled:n) 收尾。
+@Observable
+@MainActor
+final class CleanStore {
+    enum Phase: Equatable {
+        case idle
+        case scanning
+        case confirm
+        case executing
+        case done(freed: Int64, failed: Int, skipped: Int, cancelled: Int)
+        case empty
+        case failed(String)
+    }
+
+    struct Group: Identifiable {
+        let section: String
+        var items: [RobotItem]
+        var id: String { section }
+        var bytes: Int64 { items.compactMap(\.bytes).reduce(0, +) }
+    }
+
+    struct LogEntry: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let bytes: Int64
+        let ok: Bool
+        /// trashed / deleted / dry_run / skipped_* / failed（非 ok 行的说明徽标）
+        let status: String
+    }
+
+    var phase: Phase = .idle
+
+    // MARK: 扫描进度（progress 事件驱动）
+
+    private(set) var scanBytesFound: Int64 = 0
+    private(set) var scanCurrent = ""
+    private(set) var scanSection = ""
+    private(set) var scanStartedAt = Date()
+
+    // MARK: 计划（confirm 态数据）
+
+    private(set) var planId: String?
+    private(set) var groups: [Group] = []
+    private(set) var insights: [RobotInsight] = []
+    var checked: Set<String> = []
+    private(set) var confirmRevealStart = Date()
+
+    // MARK: 执行（result 事件驱动）
+
+    private(set) var log: [LogEntry] = []
+    private(set) var freed: Int64 = 0
+    private(set) var plannedBytes: Int64 = 0
+
+    private var session: RobotSession?
+    private var itemsById: [String: RobotItem] = [:]
+    private var cancelRequested = false
+
+    // MARK: - 扫描
+
+    func startScan() {
+        guard phase != .scanning, phase != .executing else { return }
+        resetPlan()
+        phase = .scanning
+        scanStartedAt = Date()
+        cancelRequested = false
+        let session = RobotSession()
+        self.session = session
+        Task { [weak self] in
+            var items: [RobotItem] = []
+            var collectedInsights: [RobotInsight] = []
+            var donePlanId: String?
+            var robotError: RobotError?
+            do {
+                let command = RobotSession.Command(domain: "clean", verb: "plan")
+                for try await event in session.run(command) {
+                    guard let self else { return }
+                    switch event {
+                    case let .progress(progress):
+                        if let bytes = progress.bytesFound { self.scanBytesFound = bytes }
+                        if let current = progress.current { self.scanCurrent = current }
+                        if let section = progress.section { self.scanSection = section }
+                    case let .item(item):
+                        items.append(item)
+                    case let .insight(insight):
+                        collectedInsights.append(insight)
+                    case let .done(done):
+                        donePlanId = done.planId
+                    case let .error(error):
+                        robotError = error
+                    default: break
+                    }
+                }
+            } catch {
+                self?.phase = .failed(error.localizedDescription)
+                return
+            }
+            guard let self else { return }
+            if self.cancelRequested {
+                self.phase = .idle
+                return
+            }
+            if let robotError {
+                self.phase = .failed("\(robotError.code): \(robotError.message ?? "")")
+                return
+            }
+            guard let donePlanId else {
+                self.phase = .failed("协议流异常结束")
+                return
+            }
+            self.ingestPlan(planId: donePlanId, items: items, insights: collectedInsights)
+        }
+    }
+
+    func cancelScan() {
+        cancelRequested = true
+        session?.cancel()
+    }
+
+    private func ingestPlan(planId: String, items: [RobotItem], insights: [RobotInsight]) {
+        self.planId = planId
+        self.insights = insights
+        itemsById = [:]
+        var order: [String] = []
+        var buckets: [String: [RobotItem]] = [:]
+        for item in items {
+            itemsById[item.id] = item
+            let section = item.section ?? "other"
+            if buckets[section] == nil { order.append(section) }
+            buckets[section, default: []].append(item)
+        }
+        groups = order.map { Group(section: $0, items: buckets[$0] ?? []) }
+        checked = Set(items.filter { $0.defaultSelected ?? true }.map(\.id))
+        confirmRevealStart = Date()
+        phase = items.isEmpty ? .empty : .confirm
+    }
+
+    private func resetPlan() {
+        planId = nil
+        groups = []
+        insights = []
+        checked = []
+        itemsById = [:]
+        log = []
+        freed = 0
+        plannedBytes = 0
+        scanBytesFound = 0
+        scanCurrent = ""
+        scanSection = ""
+    }
+
+    // MARK: - 勾选
+
+    func toggle(_ item: RobotItem) {
+        if checked.contains(item.id) { checked.remove(item.id) } else { checked.insert(item.id) }
+    }
+
+    func groupChecked(_ group: Group) -> Bool {
+        group.items.allSatisfy { checked.contains($0.id) }
+    }
+
+    func toggleGroup(_ group: Group) {
+        if groupChecked(group) {
+            for item in group.items { checked.remove(item.id) }
+        } else {
+            for item in group.items { checked.insert(item.id) }
+        }
+    }
+
+    var totalBytes: Int64 { groups.reduce(0) { $0 + $1.bytes } }
+    var checkedCount: Int { checked.count }
+    var checkedBytes: Int64 {
+        groups.flatMap(\.items).filter { checked.contains($0.id) }.compactMap(\.bytes).reduce(0, +)
+    }
+
+    // MARK: - 执行
+
+    func execute() {
+        guard let planId, phase == .confirm, !checked.isEmpty else { return }
+        // 保持组内顺序执行（结果清单与确认清单同序）
+        let ids = groups.flatMap(\.items).map(\.id).filter { checked.contains($0) }
+        plannedBytes = checkedBytes
+        log = []
+        freed = 0
+        phase = .executing
+        cancelRequested = false
+        let session = RobotSession()
+        self.session = session
+        Task { [weak self] in
+            var summary: RobotSummary?
+            var robotError: RobotError?
+            do {
+                let command = RobotSession.Command(
+                    domain: "clean", verb: "apply",
+                    arguments: ["--plan", planId],
+                    stdinPayload: Data((ids.joined(separator: "\n") + "\n").utf8)
+                )
+                for try await event in session.run(command) {
+                    guard let self else { return }
+                    switch event {
+                    case let .result(result):
+                        let item = self.itemsById[result.id]
+                        let path = item?.path ?? item?.label ?? result.id
+                        let bytes = result.freedBytes ?? item?.bytes ?? 0
+                        let ok = ["trashed", "deleted", "dry_run"].contains(result.status)
+                        if ok { self.freed += bytes }
+                        self.log.append(.init(
+                            id: result.id,
+                            name: (path as NSString).abbreviatingWithTildeInPath,
+                            bytes: bytes, ok: ok, status: result.status
+                        ))
+                    case let .done(done):
+                        summary = done.summary
+                    case let .error(error):
+                        robotError = error
+                    default: break
+                    }
+                }
+            } catch {
+                self?.phase = .failed(error.localizedDescription)
+                return
+            }
+            guard let self else { return }
+            if let robotError {
+                self.phase = .failed("\(robotError.code): \(robotError.message ?? "")")
+                return
+            }
+            guard let summary else {
+                // 取消时核心保证发 done 再退出；连 done 都没有说明异常终止
+                self.phase = .failed("协议流异常结束")
+                return
+            }
+            self.phase = .done(
+                freed: summary.freedBytes ?? self.freed,
+                failed: summary.failed ?? 0,
+                skipped: summary.skipped ?? 0,
+                cancelled: summary.cancelled ?? 0
+            )
+            self.planId = nil // 计划已消费
+        }
+    }
+
+    /// 执行中取消：SIGTERM，核心完成当前单项后以 done(cancelled:n) 收尾（§4.4）。
+    func cancelExecute() {
+        cancelRequested = true
+        session?.cancel()
+    }
+
+    var executeProgress: Double {
+        guard plannedBytes > 0 else { return 0 }
+        return min(1, Double(freed) / Double(plannedBytes))
+    }
+
+    // MARK: - 完成后
+
+    func backToIdle() {
+        resetPlan()
+        phase = .idle
+    }
+
+    // MARK: - 文案辅助
+
+    /// section slug → 中文组名（未知 slug 人性化兜底）。
+    static func sectionLabel(_ slug: String) -> String {
+        let table: [String: String] = [
+            "user_essentials": "用户缓存",
+            "app_caches": "应用缓存",
+            "browsers": "浏览器缓存",
+            "developer_tools": "开发者工具",
+            "development": "开发者工具",
+            "logs": "日志",
+            "system_logs": "系统日志",
+            "trash": "废纸篓",
+            "downloads": "下载残留",
+            "installers": "安装包",
+            "app_leftovers": "卸载残留",
+            "leftovers": "卸载残留",
+            "large_files": "大文件",
+            "system_maintenance": "系统维护",
+            "external_volumes": "外置卷",
+            "other": "其他",
+        ]
+        if let label = table[slug] { return label }
+        return slug.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    static func statusLabel(_ status: String) -> String? {
+        switch status {
+        case "skipped_whitelisted": "白名单保护"
+        case "skipped_protected": "受保护"
+        case "skipped_missing": "已不存在"
+        case "failed": "失败"
+        case "dry_run": "演练"
+        default: nil
+        }
+    }
+}

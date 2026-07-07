@@ -168,6 +168,8 @@ enum Semantic {
     static let danger = Color(hex: 0xE0745C)
     static let dangerFill = Color(hex: 0xC8583E)
     static let insight = Color(hex: 0x9DB0C6)
+    /// info 洞察类（设计 §9.4）
+    static let info = Color(hex: 0x4C8FD8)
 
     /// 健康分插值（设计：green→amber→red，拐点 70/30）
     static func health(_ score: Double) -> Color {
