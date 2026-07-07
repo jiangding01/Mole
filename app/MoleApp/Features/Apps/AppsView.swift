@@ -7,6 +7,7 @@ import SwiftUI
 /// 更新 / 启动项 tab 为诚实占位（数据源分别在 Phase 5+ / Phase 3）。
 struct AppsView: View {
     @State private var store = AppsStore()
+    @State private var showsHistory = false
     private let look = Look.ink
     private let accent = ModuleAccent.apps
 
@@ -142,17 +143,24 @@ struct AppsView: View {
         case let .failed(reason):
             failedState(reason)
         case .loaded:
-            VStack(spacing: 0) {
-                appList
-                switch store.removalPhase {
-                case .idle:
-                    if !store.selection.isEmpty { batchBar }
-                case let .running(app, index, total):
-                    removalProgressBar(app: app, index: index, total: total)
-                case let .done(removed, freed, failedItems):
-                    removalDoneBar(removed: removed, freed: freed, failedItems: failedItems)
-                }
+            switch store.removalPhase {
+            case .idle:
+                idleListView
+            case .running:
+                removingView
+            case let .done(removed, freed, failedItems, relatedFiles):
+                removalDoneView(removed: removed, freed: freed,
+                                failedItems: failedItems, relatedFiles: relatedFiles)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var idleListView: some View {
+        VStack(spacing: 0) {
+            appList
+            if !store.selection.isEmpty { batchBar }
+        }
             .alert(L("apps.remove.runningTitle"), isPresented: Binding(
                 get: { !store.runningBlockers.isEmpty },
                 set: { if !$0 { store.runningBlockers = [] } }
@@ -174,167 +182,160 @@ struct AppsView: View {
             } message: {
                 Text(L("apps.remove.confirmMsg", store.selectedSizeText.isEmpty ? "--" : store.selectedSizeText))
             }
-        }
     }
 
-    /// 执行中：进度条替换批量条（破坏性操作期间不可再发起）。
-    private func removalProgressBar(app: String, index: Int, total: Int) -> some View {
-        HStack(spacing: 10) {
-            RingSpinner(accent: accent, size: 16, lineWidth: 2)
-            Text(L("apps.remove.progress", app, Int64(index + 1), Int64(total)))
-                .font(Fonts.ui(13, .semibold))
-                .foregroundStyle(look.text)
-            Spacer()
-            Text(L("apps.remove.trashNote"))
-                .font(Fonts.ui(11))
-                .foregroundStyle(look.textMute)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 14)
-        .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
-        .padding(.top, 12)
-    }
+    // MARK: - 执行中（设计稿 REMOVING：光谱环放空 + 环心实时字节 + 逐项打勾清单）
 
-    /// 完成态：结果摘要（颜色 + 图标 + 文字三通道）。
-    private func removalDoneBar(removed: Int, freed: Int64, failedItems: Int) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: failedItems > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(failedItems > 0 ? Semantic.warn : Semantic.success)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L("apps.remove.doneTitle", Int64(removed),
-                       ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)))
-                    .font(Fonts.ui(13, .semibold))
-                    .foregroundStyle(look.text)
-                if failedItems > 0 {
-                    Text(L("apps.remove.doneFailed", Int64(failedItems)))
-                        .font(Fonts.ui(11))
-                        .foregroundStyle(Semantic.warn)
-                } else {
-                    Text(L("apps.remove.trashNote"))
-                        .font(Fonts.ui(11))
-                        .foregroundStyle(look.textMute)
-                }
-            }
-            Spacer()
-            Button(L("apps.remove.finish")) { store.finishRemoval() }
-                .buttonStyle(.plain)
-                .pointingCursor()
-                .font(Fonts.ui(12.5, .semibold))
-                .padding(.horizontal, 18).padding(.vertical, 8)
-                .background(Capsule().fill(accent.gradient))
-                .foregroundStyle(accent.onAccent)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
-        .padding(.top, 12)
-    }
-
-    private var loadingState: some View {
+    private var removingView: some View {
         VStack(spacing: 0) {
             ZStack {
-                RingSpinner(accent: accent, size: 200, lineWidth: 3)
-                Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(accent.b)
-            }
-            Fonts.eyebrow("Scanning Applications", size: 11)
-                .foregroundStyle(look.textMute)
-                .padding(.top, 38)
-            Text(L("apps.loading.title"))
-                .font(Fonts.serif(30, .semibold))
-                .foregroundStyle(look.text)
-                .padding(.top, 12)
-            Text(L("apps.loading.sub"))
-                .font(Fonts.ui(13))
-                .foregroundStyle(look.textDim)
-                .padding(.top, 10)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func failedState(_ reason: String) -> some View {
-        VStack(spacing: 14) {
-            Image(systemName: "bolt.horizontal.circle")
-                .font(.system(size: 30))
-                .foregroundStyle(Semantic.warn)
-            Text(L("apps.failed.title"))
-                .font(Fonts.ui(14, .semibold))
-                .foregroundStyle(look.text)
-            Text(reason)
-                .font(Fonts.mono(11))
-                .foregroundStyle(look.textMute)
-                .lineLimit(3)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 460)
-            Button(L("common.retry")) { store.reload() }
-                .buttonStyle(.plain)
-                .pointingCursor()
-                .font(Fonts.ui(12, .semibold))
-                .padding(.horizontal, 18).padding(.vertical, 7)
-                .background(Capsule().fill(accent.gradient))
-                .foregroundStyle(accent.onAccent)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var appList: some View {
-        ScrollView {
-            LazyVStack(spacing: 7) {
-                if store.visibleApps.isEmpty {
-                    Text(L("apps.empty"))
-                        .font(Fonts.ui(13))
+                SpectrumRingView(
+                    state: .executing(segments: removalSegments, progress: store.removalProgress),
+                    accent: accent
+                )
+                VStack(spacing: 7) {
+                    Fonts.eyebrow("Removing", size: 11)
                         .foregroundStyle(look.textMute)
-                        .padding(.vertical, 48)
-                } else {
-                    ForEach(store.visibleApps) { app in
-                        AppRow(app: app, store: store, look: look, accent: accent)
+                    freedReadout
+                    Text(removingCaption)
+                        .font(Fonts.ui(12))
+                        .foregroundStyle(look.textDim)
+                        .lineLimit(1)
+                        .frame(maxWidth: 250)
+                }
+            }
+            removalChecklist
+                .frame(maxWidth: 560)
+                .frame(maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 环占比：每个应用一段（按计划字节均分兜底），双色相间。
+    private var removalSegments: [RingSegment] {
+        let count = max(1, store.removalAppNames.count)
+        return (0 ..< count).map { index in
+            RingSegment(fraction: 1.0 / Double(count),
+                        color: index % 2 == 0 ? accent.a : accent.b)
+        }
+    }
+
+    /// 环心实时读数：大号衬线数字 + 单位（"1.06" + "GB"）。
+    private var freedReadout: some View {
+        let text = ByteCountFormatter.string(fromByteCount: store.removalFreed, countStyle: .file)
+        let parts = text.split(separator: " ", maxSplits: 1)
+        return HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(parts.first.map(String.init) ?? "0")
+                .font(Fonts.serif(44, .semibold))
+                .foregroundStyle(look.text)
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.3), value: store.removalFreed)
+            Text(parts.count > 1 ? String(parts[1]) : "")
+                .font(Fonts.mono(14))
+                .foregroundStyle(look.textDim)
+        }
+    }
+
+    private var removingCaption: String {
+        let names = store.removalAppNames
+        guard let first = names.first else { return "" }
+        return names.count == 1
+            ? L("apps.removing.captionOne", first)
+            : L("apps.removing.captionMany", first, Int64(names.count))
+    }
+
+    private var removalChecklist: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(store.removalLog) { entry in
+                        HStack(spacing: 10) {
+                            Image(systemName: entry.ok ? "checkmark" : "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(entry.ok ? accent.b : Semantic.danger)
+                                .frame(width: 14)
+                            Text(entry.name)
+                                .font(Fonts.mono(12))
+                                .foregroundStyle(look.textDim)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Text(entry.bytes > 0 ? ByteCountFormatter.string(fromByteCount: entry.bytes, countStyle: .file) : "--")
+                                .font(Fonts.mono(11.5))
+                                .foregroundStyle(look.textMute)
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 5)
+                        .id(entry.id)
                     }
                 }
+                .padding(.vertical, 8)
             }
-            .padding(.vertical, 2)
+            .onChange(of: store.removalLog.count) {
+                if let last = store.removalLog.last {
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// 批量条（设计稿 batch bar）：移除入口，先运行中拦截再危险确认。
-    private var batchBar: some View {
-        HStack(spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 9) {
-                Text(store.selectedApps.first?.name ?? "")
-                    .font(Fonts.ui(13.5, .semibold))
-                    .foregroundStyle(look.text)
-                    .lineLimit(1)
-                Text(L("apps.batch.count", Int64(store.selection.count)) + (store.selectedSizeText.isEmpty ? "" : " · \(store.selectedSizeText)"))
-                    .font(Fonts.mono(11.5))
-                    .foregroundStyle(look.textMute)
-            }
-            Spacer()
-            Button(L("apps.batch.clear")) { store.selection.removeAll() }
-                .buttonStyle(.plain)
-                .pointingCursor()
-                .font(Fonts.ui(12.5, .semibold))
+    // MARK: - 完成（设计稿 UNINSTALLED 整页：大号释放读数 + 照片换算 + 双按钮）
+
+    private func removalDoneView(removed: Int, freed: Int64, failedItems: Int, relatedFiles: Int) -> some View {
+        VStack(spacing: 0) {
+            Image(systemName: "trash")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(accent.b)
+                .frame(width: 64, height: 64)
+                .background(RoundedRectangle(cornerRadius: 16).fill(accent.a.opacity(0.12)))
+            Fonts.eyebrow("Uninstalled", size: 11)
+                .foregroundStyle(look.textMute)
+                .padding(.top, 22)
+            Text(L("apps.done.title", Int64(removed)))
+                .font(Fonts.serif(26, .semibold))
+                .foregroundStyle(look.text)
+                .padding(.top, 10)
+            Text(L("apps.done.freed", ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)))
+                .font(Fonts.serif(54, .semibold))
+                .foregroundStyle(look.text)
+                .padding(.top, 2)
+            Text(L("apps.done.equiv", Int64(max(0, freed / 4_000_000)), Int64(relatedFiles)))
+                .font(Fonts.ui(13))
                 .foregroundStyle(look.textDim)
-            Button {
-                store.requestRemoval()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12))
-                    Text(L("apps.batch.remove", Int64(store.selection.count)))
+                .padding(.top, 12)
+            if failedItems > 0 {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 10))
+                    Text(L("apps.remove.doneFailed", Int64(failedItems)))
                 }
-                .font(Fonts.ui(13, .semibold))
-                .padding(.horizontal, 20).padding(.vertical, 10)
-                .background(Capsule().fill(Color(hex: 0xF3ECE0)))
-                .foregroundStyle(Color(hex: 0x1A1206))
+                .font(Fonts.ui(12))
+                .foregroundStyle(Semantic.warn)
+                .padding(.top, 8)
             }
-            .buttonStyle(.plain)
-            .pointingCursor()
+            Text(L("apps.done.trash"))
+                .font(Fonts.ui(12.5))
+                .foregroundStyle(look.textMute)
+                .padding(.top, 6)
+            HStack(spacing: 12) {
+                Button(L("apps.done.history")) { showsHistory = true }
+                    .buttonStyle(.plain)
+                    .pointingCursor()
+                    .font(Fonts.ui(13, .semibold))
+                    .foregroundStyle(look.textDim)
+                    .padding(.horizontal, 22).padding(.vertical, 10)
+                    .overlay(Capsule().stroke(look.lineStrong, lineWidth: 1))
+                Button(L("apps.done.back")) { store.finishRemoval() }
+                    .buttonStyle(.plain)
+                    .pointingCursor()
+                    .font(Fonts.ui(13, .semibold))
+                    .padding(.horizontal, 24).padding(.vertical, 10)
+                    .background(Capsule().fill(accent.gradient))
+                    .foregroundStyle(accent.onAccent)
+            }
+            .padding(.top, 26)
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
-        .padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showsHistory) { HistoryView() }
     }
 
     private func comingSoon(icon: String, title: String, note: String) -> some View {

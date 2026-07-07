@@ -284,10 +284,23 @@ final class AppsStore {
     enum RemovalPhase: Equatable {
         case idle
         case running(app: String, index: Int, total: Int)
-        case done(removed: Int, freedBytes: Int64, failedItems: Int)
+        case done(removed: Int, freedBytes: Int64, failedItems: Int, relatedFiles: Int)
+    }
+
+    /// 执行期逐项结果（设计稿：光谱环下方的打勾清单）。
+    struct RemovalLogEntry: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let bytes: Int64
+        let ok: Bool
     }
 
     var removalPhase: RemovalPhase = .idle
+    /// 实时清单与读数（设计稿 REMOVING 态：环心字节数 + 逐项 ✓）。
+    private(set) var removalLog: [RemovalLogEntry] = []
+    private(set) var removalFreed: Int64 = 0
+    private(set) var removalPlannedBytes: Int64 = 0
+    private(set) var removalAppNames: [String] = []
     /// 确认弹层开关（View 的 confirmationDialog 绑定）。
     var confirmRemoval = false
     /// 仍在运行、需先退出的已选应用（非空 → View 弹 alert）。
@@ -318,25 +331,46 @@ final class AppsStore {
     func executeRemoval() {
         let targets = selectedApps
         guard !targets.isEmpty else { return }
+        removalLog = []
+        removalFreed = 0
+        removalPlannedBytes = 0
+        removalAppNames = targets.map(\.name)
         removalPhase = .running(app: targets[0].name, index: 0, total: targets.count)
         Task { [weak self] in
-            var freed: Int64 = 0
-            var failedItems = 0
-            var removed = 0
-            for (index, app) in targets.enumerated() {
-                guard let self else { return }
-                self.removalPhase = .running(app: app.name, index: index, total: targets.count)
+            guard let self else { return }
+            // 先确保每个目标的计划就绪并累计"将移除总字节"（环进度分母）
+            var plans: [(InstalledApp, AppPlan, Set<String>)] = []
+            for app in targets {
                 do {
-                    let summary = try await self.removeOne(app)
-                    freed += summary.freedBytes ?? 0
+                    let plan = try await self.ensurePlan(for: app)
+                    let checked = self.checkedLeftovers[app.id]
+                        ?? Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
+                    var bytes = plan.items.first { $0.section == "app" }?.bytes ?? 0
+                    bytes += plan.leftovers.filter { checked.contains($0.id) }.compactMap(\.bytes).reduce(0, +)
+                    self.removalPlannedBytes += bytes
+                    plans.append((app, plan, checked))
+                } catch {
+                    self.removalLog.append(.init(id: app.id, name: app.name, bytes: 0, ok: false))
+                }
+            }
+
+            var failedItems = targets.count - plans.count
+            var removed = 0
+            for (index, entry) in plans.enumerated() {
+                let (app, plan, checked) = entry
+                self.removalPhase = .running(app: app.name, index: index, total: plans.count)
+                do {
+                    let summary = try await self.applyWithRetry(app: app, plan: plan, checked: checked)
                     failedItems += summary.failed ?? 0
                     removed += 1
                 } catch {
                     failedItems += 1
+                    self.removalLog.append(.init(id: app.id, name: app.name, bytes: 0, ok: false))
                 }
             }
-            guard let self else { return }
-            self.removalPhase = .done(removed: removed, freedBytes: freed, failedItems: failedItems)
+            let related = self.removalLog.filter { $0.ok && !$0.id.hasSuffix("|app") }.count
+            self.removalPhase = .done(removed: removed, freedBytes: self.removalFreed,
+                                      failedItems: failedItems, relatedFiles: related)
             // 清理会话状态并刷新清单（已卸载的应用从列表消失）
             for app in targets {
                 self.selection.remove(app.id)
@@ -350,33 +384,44 @@ final class AppsStore {
 
     func finishRemoval() {
         removalPhase = .idle
+        removalLog = []
+        removalFreed = 0
+        removalPlannedBytes = 0
+        removalAppNames = []
     }
 
-    /// 单应用移除：本体 + 勾选残留走 apps apply；计划过期自动重建并重试一次。
-    private func removeOne(_ app: InstalledApp) async throws -> RobotSummary {
-        var plan: AppPlan
-        if let cached = self.plan(for: app) {
-            plan = cached
-        } else {
-            plan = try await Self.runPlan(for: app)
-            leftovers[app.id] = .loaded(plan)
-        }
-        let checked = checkedLeftovers[app.id]
-            ?? Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
+    /// 环进度（0…1）：已释放 / 计划总量。
+    var removalProgress: Double {
+        guard removalPlannedBytes > 0 else { return 0 }
+        return min(1, Double(removalFreed) / Double(removalPlannedBytes))
+    }
+
+    private func ensurePlan(for app: InstalledApp) async throws -> AppPlan {
+        if let cached = plan(for: app) { return cached }
+        let plan = try await Self.runPlan(for: app)
+        leftovers[app.id] = .loaded(plan)
+        return plan
+    }
+
+    /// 单应用 apply；计划过期（30 分钟 TTL）自动重建并重试一次。
+    private func applyWithRetry(app: InstalledApp, plan initial: AppPlan, checked: Set<String>) async throws -> RobotSummary {
         do {
-            return try await Self.runApply(plan: plan, checked: checked)
+            return try await runApply(app: app, plan: initial, checked: checked)
         } catch let PlanError.robot(message) where message.contains("E_PLAN_EXPIRED") {
-            // 计划 30 分钟 TTL：过期重建一次（路径集合按最新发现为准）
-            plan = try await Self.runPlan(for: app)
-            leftovers[app.id] = .loaded(plan)
-            return try await Self.runApply(plan: plan, checked: checked)
+            let fresh = try await Self.runPlan(for: app)
+            leftovers[app.id] = .loaded(fresh)
+            return try await runApply(app: app, plan: fresh, checked: checked)
         }
     }
 
-    private static func runApply(plan: AppPlan, checked: Set<String>) async throws -> RobotSummary {
+    private func runApply(app: InstalledApp, plan: AppPlan, checked: Set<String>) async throws -> RobotSummary {
         var ids: [String] = []
         if let bundle = plan.bundleItemId { ids.append(bundle) }
         ids += plan.leftovers.filter { checked.contains($0.id) }.map(\.id)
+
+        // id → 条目映射（结果事件回填名称与体积）
+        var itemsById: [String: RobotItem] = [:]
+        for item in plan.items { itemsById[item.id] = item }
 
         var summary: RobotSummary?
         var robotError: RobotError?
@@ -388,6 +433,19 @@ final class AppsStore {
         )
         for try await event in session.run(command) {
             switch event {
+            case let .result(result):
+                let item = itemsById[result.id]
+                let isBundle = item?.section == "app"
+                let name = isBundle
+                    ? "\(app.name).app"
+                    : ((item?.path ?? item?.label ?? result.id) as NSString).lastPathComponent
+                let bytes = result.freedBytes ?? item?.bytes ?? 0
+                let ok = ["trashed", "deleted", "dry_run"].contains(result.status)
+                if ok { removalFreed += bytes }
+                removalLog.append(.init(
+                    id: isBundle ? "\(app.id)|app" : "\(app.id)|\(result.id)",
+                    name: name, bytes: bytes, ok: ok
+                ))
             case let .done(done): summary = done.summary
             case let .error(error): robotError = error
             default: break
