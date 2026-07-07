@@ -7,11 +7,13 @@
 > （`bin/robot.sh` + `lib/core/robot.sh`，`tests/robot_core.bats` 15 用例）；
 > 剩余 domain（apps/history/whitelist）按 ROADMAP 推进，契约 golden 文件随之接入。
 >
-> **⚠️ UI 开发冻结（2026-07-06 起）**：Claude Design 的设计稿进行中，定稿前
-> **不要动** `MoleApp/Features/*`（占位状态）、`DesignSystem/`（视觉 token/组件）、
-> 任何动效实现。可以继续的工作：CLI robot 层、MoleKit 非视觉逻辑
-> （协议模型/进程编排/ScanSession/权限探测）、契约 golden、`status-go --proc` 等
-> Go 侧只读增量。设计稿到位后解除本条。
+> **UI 开发已解冻（2026-07-07）**：Claude Design 设计稿已交付并入库——
+> `design/mole-dc/Mole.dc.html`（高保真交互原型，**拿不准的细节以它的实际
+> 运行效果为准**，浏览器直接打开可交互）+ `HANDOFF.md`（交接说明，实现前必读，
+> 尤其 §3 信任承诺、§5 全部数据是 mock 必须接真实 API、§6 TR 词表用作 i18n 起点）。
+> 设计 token 已提取进 `DesignSystem/Theme.swift`（Look×Accent 双轴），
+> 光谱环引擎已按设计参数移植为 `DesignSystem/SpectrumRingView.swift`。
+> `support.js` 是原型运行时，仅供参考，**不移植**。
 
 ## 技术栈
 
