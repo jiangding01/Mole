@@ -195,7 +195,8 @@ final class OptimizeStore {
 
     // MARK: - 分组表（闭合枚举，与 lib/optimize/tasks.sh 的 case 表对齐）
 
-    static func category(of action: String) -> Category {
+    // 纯查表，与主线程无关；nonisolated 使 TaskRow（非隔离上下文）可同步调用
+    nonisolated static func category(of action: String) -> Category {
         switch action {
         case "cache_refresh", "saved_state_cleanup", "sqlite_vacuum",
              "memory_pressure_relief", "dock_refresh", "notification_cleanup",
