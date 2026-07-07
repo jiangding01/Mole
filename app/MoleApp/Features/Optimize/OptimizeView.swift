@@ -6,7 +6,7 @@ import SwiftUI
 /// （光谱环 tending 逐段点亮 + 任务状态流）→ 完成报告。
 /// 深度任务的管理员分支当前自动跳过（后台助手 Phase 3 前的诚实姿态）。
 struct OptimizeView: View {
-    @State private var store = OptimizeStore()
+    @Environment(OptimizeStore.self) private var store
     private let look = Look.ink
     private let accent = ModuleAccent.optimize
 

@@ -6,7 +6,7 @@ import SwiftUI
 /// → confirm（环收束甜甜圈 + 分组勾选清单）→ executing（环放空 + 打勾清单）
 /// → done / empty。TODO(后续)：项目产物 / 安装包子 tab、智能扫描带结果进入。
 struct CleanView: View {
-    @State private var store = CleanStore()
+    @Environment(CleanStore.self) private var store
     @State private var showsHistory = false
     private let look = Look.ink
     private let accent = ModuleAccent.clean

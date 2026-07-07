@@ -70,13 +70,16 @@ public final class AnalyzeSession: @unchecked Sendable {
         let stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        // 不挂无人排空的 Pipe：stderr 写满 64KB 缓冲会反压死锁子进程
+        process.standardError = FileHandle.nullDevice
         try process.run()
         self.process = process
         stdinHandle = stdin.fileHandleForWriting
 
         let handle = stdout.fileHandleForReading
-        readTask = Task { [weak self] in
+        // detached：解码路由在后台跑。Task {} 会继承调用方的 MainActor，
+        // 大扫描的逐字节流会把主线程打满（UI 计数冻结的元凶之一）。
+        readTask = Task.detached { [weak self] in
             var buffer = Data()
             do {
                 for try await byte in handle.bytes {

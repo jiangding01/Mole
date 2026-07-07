@@ -38,7 +38,9 @@ public final class StatusStream {
                 self.process = process
 
                 let decoder = JSONDecoder()
-                let readTask = Task {
+                // detached：解码在后台跑（Task {} 会继承调用方 MainActor；
+                // 50 进程的快照行不小，且 EOF 后的 waitUntilExit 不能占主线程）。
+                let readTask = Task.detached {
                     var buffer = Data()
                     var yieldedAny = false
                     for try await byte in stdout.fileHandleForReading.bytes {

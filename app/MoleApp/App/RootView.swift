@@ -12,6 +12,16 @@ struct RootView: View {
     /// 扫描结果跨页共享的会话资产（设计 §5.0）。
     @State private var scanSession = ScanSession()
 
+    /// 各页 Store 提升到会话层（设计 §5.0 会话共享）：切 tab 只是视图重建，
+    /// 状态与在途扫描/清单保留，再次进入即时呈现、不重扫。
+    /// （曾经的 bug：Store 挂在页面 @State 上，每次切走即销毁，再进重扫且
+    /// 旧 Store 的读流任务悬挂堆积——分析/优化页再入永久 loading。）
+    @State private var cleanStore = CleanStore()
+    @State private var appsStore = AppsStore()
+    @State private var optimizeStore = OptimizeStore()
+    @State private var analyzeStore = AnalyzeStore()
+    @State private var statusStore = StatusStore()
+
     private let look = Look.ink
     private var accent: ModuleAccent { Theme.moduleAccent(for: selectedTab) }
 
@@ -29,6 +39,11 @@ struct RootView: View {
                 .padding(.top, 10)
         }
         .environment(scanSession)
+        .environment(cleanStore)
+        .environment(appsStore)
+        .environment(optimizeStore)
+        .environment(analyzeStore)
+        .environment(statusStore)
         .sheet(isPresented: $showsHistory) { HistoryView() }
         .sheet(isPresented: $showsSettings) { SettingsView() }
     }

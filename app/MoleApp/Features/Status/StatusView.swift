@@ -4,7 +4,7 @@ import SwiftUI
 /// 状态页（设计稿 status 页 / 方案 §5.5）：8 指标卡固定区 + 进程表撑满剩余高度。
 /// 严格只读（除受控终止进程）。数据：status-go --watch --top-procs 50。
 struct StatusView: View {
-    @State private var store = StatusStore()
+    @Environment(StatusStore.self) private var store
     private let look = Look.ink
     private let accent = ModuleAccent.status
 

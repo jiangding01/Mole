@@ -43,6 +43,13 @@ final class AnalyzeStore {
 
     private let session = AnalyzeSession()
     private var scanTask: Task<Void, Never>?
+    /// 流式合并缓冲：同一路径多次更新（目录初值→终值）按 path 收敛，
+    /// 由 100ms 合并刷新落到 nodes/totalSize——逐事件全量重排会把主线程打满，
+    /// 表现为扫描覆盖层计数与页头统计"冻结"。
+    private var byPath: [String: AnalyzeSession.Node] = [:]
+    private var flushTask: Task<Void, Never>?
+    /// 导航代际：drill/jump/aggregate 都会推进，滞留的旧流事件与旧刷新任务失效。
+    private var scanGeneration = 0
 
     var listNodes: [AnalyzeSession.Node] {
         switch listSort {
@@ -79,7 +86,7 @@ final class AnalyzeStore {
     func openAggregate(_ subset: [AnalyzeSession.Node]) {
         crumbs.append(Crumb(title: L("analyze.aggregate.title", Int64(subset.count)),
                             target: .aggregate(subset)))
-        scanTask?.cancel()
+        cancelScan()
         nodes = subset
         totalSize = subset.reduce(0) { $0 + max(0, $1.size) }
         progress = nil
@@ -99,7 +106,7 @@ final class AnalyzeStore {
     }
 
     private func openRestoredAggregate(_ subset: [AnalyzeSession.Node]) {
-        scanTask?.cancel()
+        cancelScan()
         nodes = subset
         totalSize = subset.reduce(0) { $0 + max(0, $1.size) }
         progress = nil
@@ -120,9 +127,11 @@ final class AnalyzeStore {
     // MARK: - 扫描
 
     private func scan(path: String, rescan: Bool) {
-        scanTask?.cancel()
+        cancelScan()
+        let generation = scanGeneration
         // 不清空 nodes：设计稿的扫描态是"旧内容模糊压暗 + 居中加载"，
         // 新流的首批 node 一到就替换。
+        byPath = [:]
         progress = nil
         isCached = false
         scanningTitle = crumbs.last?.title ?? (path as NSString).lastPathComponent
@@ -130,30 +139,50 @@ final class AnalyzeStore {
         scanTask = Task { [weak self] in
             guard let self else { return }
             do {
-                // 流式协议：同一路径会收到多次更新（目录初值→终值），按 path 合并
-                var byPath: [String: AnalyzeSession.Node] = [:]
                 for try await event in self.session.scan(path: path, rescan: rescan) {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, self.scanGeneration == generation else { return }
                     switch event {
                     case let .progress(progress):
                         self.progress = progress
                     case let .node(node):
-                        if byPath.isEmpty { self.totalSize = 0 } // 新层内容开始替换旧层
-                        byPath[node.path] = node
-                        self.nodes = byPath.values.sorted { $0.size > $1.size }
-                        self.totalSize = byPath.values.reduce(0) { $0 + max(0, $1.size) }
+                        self.byPath[node.path] = node
+                        self.scheduleFlush(generation)
                     case let .done(_, totalSize, _, cached):
-                        self.nodes = byPath.values.sorted { $0.size > $1.size }
+                        self.flushTask?.cancel()
+                        self.flushTask = nil
+                        self.nodes = self.byPath.values.sorted { $0.size > $1.size }
                         self.totalSize = totalSize
                         self.isCached = cached
                         self.phase = .loaded
                     }
                 }
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.scanGeneration == generation else { return }
                 self.phase = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// 100ms 合并刷新：把 byPath 的增量落到 nodes/totalSize。
+    /// 排序 + 全量赋值每次都触发列表/treemap 重算，逐事件执行会饿死 UI。
+    private func scheduleFlush(_ generation: Int) {
+        guard flushTask == nil else { return }
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard let self, !Task.isCancelled, self.scanGeneration == generation else { return }
+            self.flushTask = nil
+            self.nodes = self.byPath.values.sorted { $0.size > $1.size }
+            self.totalSize = self.byPath.values.reduce(0) { $0 + max(0, $1.size) }
+        }
+    }
+
+    /// 终止在途扫描并推进代际：旧流的滞留事件与未触发的合并刷新全部失效。
+    private func cancelScan() {
+        scanTask?.cancel()
+        scanTask = nil
+        flushTask?.cancel()
+        flushTask = nil
+        scanGeneration += 1
     }
 
     func retry() {
@@ -168,7 +197,7 @@ final class AnalyzeStore {
     }
 
     func stop() {
-        scanTask?.cancel()
+        cancelScan()
         session.stop()
     }
 }

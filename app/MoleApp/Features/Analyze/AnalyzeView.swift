@@ -7,7 +7,7 @@ import SwiftUI
 /// 主区 Squarified Treemap（居中标签 + 小项聚合）。
 /// 扫描态 = 旧内容模糊压暗 + 居中环形加载覆盖层（设计稿 SCANNING）。
 struct AnalyzeView: View {
-    @State private var store = AnalyzeStore()
+    @Environment(AnalyzeStore.self) private var store
     private let look = Look.ink
     private let accent = ModuleAccent.analyze
 

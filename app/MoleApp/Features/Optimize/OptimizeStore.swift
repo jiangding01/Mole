@@ -57,17 +57,23 @@ final class OptimizeStore {
     private(set) var runStartedAt = Date()
 
     private var session: RobotSession?
+    private var loadTask: Task<Void, Never>?
 
     // MARK: - 清单
 
+    /// 首次进入加载；清单已在（或在途）则复用——Store 挂在会话层（RootView），
+    /// 切走再回不重新读清单。
     func loadIfNeeded() {
-        guard tasks.isEmpty, phase == .loading || isFailed else { return }
+        guard loadTask == nil, tasks.isEmpty, phase == .loading || isFailed else { return }
         load()
     }
 
     func load() {
         phase = .loading
-        Task { [weak self] in
+        loadTask?.cancel()
+        loadTask = Task { [weak self] in
+            // 被 cancel 的旧任务不得动状态、也不得清掉新任务的句柄
+            defer { if !Task.isCancelled { self?.loadTask = nil } }
             var items: [RobotItem] = []
             var finished = false
             var robotError: RobotError?
@@ -82,10 +88,10 @@ final class OptimizeStore {
                     }
                 }
             } catch {
-                self?.phase = .failed(error.localizedDescription)
+                if !Task.isCancelled { self?.phase = .failed(error.localizedDescription) }
                 return
             }
-            guard let self else { return }
+            guard let self, !Task.isCancelled else { return }
             if let robotError {
                 self.phase = .failed("\(robotError.code): \(robotError.message ?? "")")
                 return

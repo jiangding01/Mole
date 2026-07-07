@@ -6,7 +6,7 @@ import SwiftUI
 /// （运行中拦截 → 危险确认 → robot apps apply 逐应用执行 → 完成汇总）。
 /// 更新 / 启动项 tab 为诚实占位（数据源分别在 Phase 5+ / Phase 3）。
 struct AppsView: View {
-    @State private var store = AppsStore()
+    @Environment(AppsStore.self) private var store
     @State private var showsHistory = false
     private let look = Look.ink
     private let accent = ModuleAccent.apps

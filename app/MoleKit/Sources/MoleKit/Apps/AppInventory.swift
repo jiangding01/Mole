@@ -95,7 +95,8 @@ public struct AppInventoryClient: Sendable {
         process.arguments = arguments
         let stdout = Pipe()
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        // 无人排空的 stderr Pipe 会在 64KB 反压时死锁子进程：直接丢弃
+        process.standardError = FileHandle.nullDevice
         try process.run()
         // 先读到 EOF 再等退出：反过来会在输出超过管道缓冲时互相等死。
         let handle = stdout.fileHandleForReading

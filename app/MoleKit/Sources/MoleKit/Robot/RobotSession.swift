@@ -40,8 +40,9 @@ public final class RobotSession {
 
                 let stdout = Pipe()
                 process.standardOutput = stdout
-                // stderr 不解析，Phase 1 接诊断日志收集（§4.1）。
-                process.standardError = Pipe()
+                // stderr 不解析；接诊断日志收集（§4.1）前先丢弃——
+                // 挂一个无人排空的 Pipe 会在 64KB 反压时死锁子进程。
+                process.standardError = FileHandle.nullDevice
 
                 if let payload = command.stdinPayload {
                     let stdin = Pipe()
@@ -56,20 +57,22 @@ public final class RobotSession {
                 // terminationHandler 里取消读取任务：短命进程会在缓冲排干前
                 // 就触发终止回调，取消抛出后 finish 不会执行，事件流永久挂起
                 // （软件页残留扫描首次踩中）。任何路径都必须 finish。
-                Task {
+                // detached：Task {} 继承调用方 MainActor，大流量 NDJSON 的
+                // 逐字节解码会占满主线程；解码放后台，yield 由消费方跳线程。
+                Task.detached {
                     do {
                         var buffer = Data()
                         for try await byte in stdout.fileHandleForReading.bytes {
                             if byte == UInt8(ascii: "\n") {
                                 if !buffer.isEmpty {
-                                    yieldLine(buffer, to: continuation)
+                                    Self.yieldLine(buffer, to: continuation)
                                     buffer.removeAll(keepingCapacity: true)
                                 }
                             } else {
                                 buffer.append(byte)
                             }
                         }
-                        if !buffer.isEmpty { yieldLine(buffer, to: continuation) }
+                        if !buffer.isEmpty { Self.yieldLine(buffer, to: continuation) }
                         continuation.finish()
                     } catch {
                         continuation.finish(throwing: error)
@@ -94,7 +97,7 @@ public final class RobotSession {
 
     /// 单行解码。无法解码的行跳过（前向兼容：未知事件/杂散输出不拖垮整条流），
     /// 调用方以 done 事件判断流是否完整（见 AppsStore.fetchLeftovers）。
-    private func yieldLine(_ line: Data, to continuation: AsyncThrowingStream<RobotEvent, Error>.Continuation) {
+    private static func yieldLine(_ line: Data, to continuation: AsyncThrowingStream<RobotEvent, Error>.Continuation) {
         if let event = try? RobotEventDecoder.decode(line: line) {
             continuation.yield(event)
         }
