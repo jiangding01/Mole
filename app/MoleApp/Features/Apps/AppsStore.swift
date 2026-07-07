@@ -154,6 +154,8 @@ final class AppsStore {
         leftovers[app.id] = .loading
         Task { [weak self] in
             var items: [RobotItem] = []
+            var finished = false
+            var robotError: RobotError?
             do {
                 let session = RobotSession()
                 let command = RobotSession.Command(
@@ -161,12 +163,24 @@ final class AppsStore {
                     arguments: [app.path, app.bundleId, app.name]
                 )
                 for try await event in session.run(command) {
-                    if case let .item(item) = event { items.append(item) }
+                    switch event {
+                    case let .item(item): items.append(item)
+                    case .done: finished = true
+                    case let .error(error): robotError = error
+                    default: break
+                    }
                 }
                 guard let self else { return }
-                self.leftovers[app.id] = .loaded(items)
-                // 默认勾选 = 核心侧 default_selected（系统级需复核项默认不勾）
-                self.checkedLeftovers[app.id] = Set(items.filter { $0.defaultSelected ?? true }.map(\.id))
+                if let robotError {
+                    self.leftovers[app.id] = .failed(robotError.message ?? robotError.code)
+                } else if !finished {
+                    // 流没有以 done 收尾：核心异常退出，不能把空结果当"无残留"
+                    self.leftovers[app.id] = .failed("协议流异常结束")
+                } else {
+                    self.leftovers[app.id] = .loaded(items)
+                    // 默认勾选 = 核心侧 default_selected（系统级需复核项默认不勾）
+                    self.checkedLeftovers[app.id] = Set(items.filter { $0.defaultSelected ?? true }.map(\.id))
+                }
             } catch {
                 self?.leftovers[app.id] = .failed(error.localizedDescription)
             }

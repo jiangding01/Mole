@@ -52,23 +52,28 @@ public final class RobotSession {
 
                 self.process = process
 
-                let lineTask = Task {
-                    var buffer = Data()
-                    for try await chunk in stdout.fileHandleForReading.bytes {
-                        buffer.append(chunk)
-                        if chunk == UInt8(ascii: "\n") {
-                            if buffer.count > 1 {
-                                let line = buffer.dropLast()
-                                continuation.yield(try RobotEventDecoder.decode(line: Data(line)))
+                // 读取到 EOF 自然结束（进程退出会关闭写端）——绝不能在
+                // terminationHandler 里取消读取任务：短命进程会在缓冲排干前
+                // 就触发终止回调，取消抛出后 finish 不会执行，事件流永久挂起
+                // （软件页残留扫描首次踩中）。任何路径都必须 finish。
+                Task {
+                    do {
+                        var buffer = Data()
+                        for try await byte in stdout.fileHandleForReading.bytes {
+                            if byte == UInt8(ascii: "\n") {
+                                if !buffer.isEmpty {
+                                    yieldLine(buffer, to: continuation)
+                                    buffer.removeAll(keepingCapacity: true)
+                                }
+                            } else {
+                                buffer.append(byte)
                             }
-                            buffer.removeAll(keepingCapacity: true)
                         }
+                        if !buffer.isEmpty { yieldLine(buffer, to: continuation) }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
                     }
-                    continuation.finish()
-                }
-
-                process.terminationHandler = { _ in
-                    lineTask.cancel()
                 }
 
                 continuation.onTermination = { [weak self] _ in
@@ -85,5 +90,13 @@ public final class RobotSession {
     /// 取消：SIGTERM（apply 阶段核心侧完成当前单项后退出，见 §4.4）。
     public func cancel() {
         process?.terminate()
+    }
+
+    /// 单行解码。无法解码的行跳过（前向兼容：未知事件/杂散输出不拖垮整条流），
+    /// 调用方以 done 事件判断流是否完整（见 AppsStore.fetchLeftovers）。
+    private func yieldLine(_ line: Data, to continuation: AsyncThrowingStream<RobotEvent, Error>.Continuation) {
+        if let event = try? RobotEventDecoder.decode(line: line) {
+            continuation.yield(event)
+        }
     }
 }
