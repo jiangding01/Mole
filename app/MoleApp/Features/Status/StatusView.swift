@@ -156,12 +156,12 @@ struct StatusView: View {
 
     private func healthCard(_ s: MetricsSnapshot?) -> some View {
         let score = Double(s?.healthScore ?? 0)
-        return MetricCard(title: "健康度", badge: s?.hardware?.model, look: look) {
+        return MetricCard(title: "健康度", icon: "sun.max.fill", tint: Semantic.warnAlt, badge: s?.hardware?.model, look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("\(Int(score))")
                     .font(Fonts.serif(44, .semibold))
                     .foregroundStyle(Semantic.health(score))
-                Text(s?.healthScoreMsg ?? "—")
+                Text(healthMsg(s?.healthScoreMsg))
                     .font(Fonts.ui(11))
                     .foregroundStyle(look.textDim)
                     .lineLimit(2)
@@ -174,7 +174,7 @@ struct StatusView: View {
 
     private func cpuCard(_ s: MetricsSnapshot?) -> some View {
         let cpu = s?.cpu
-        return MetricCard(title: "CPU", badge: tempBadge(s?.thermal?.cpuTemp), look: look) {
+        return MetricCard(title: "CPU", icon: "cpu", tint: Semantic.success, badge: tempBadge(s?.thermal?.cpuTemp), look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 bigPercent(cpu?.usage)
                 BarHistoryChart(values: store.cpuHistory, color: Semantic.success)
@@ -188,11 +188,21 @@ struct StatusView: View {
 
     private func gpuCard(_ s: MetricsSnapshot?) -> some View {
         let gpu = s?.gpu?.first
-        return MetricCard(title: "GPU", badge: tempBadge(s?.thermal?.gpuTemp), look: look) {
+        let usage = validPercent(gpu?.usage)
+        return MetricCard(title: "GPU", icon: "display", tint: Color(hex: 0xDD8464),
+                          badge: tempBadge(s?.thermal?.gpuTemp), look: look) {
             VStack(alignment: .leading, spacing: 5) {
-                bigPercent(validPercent(gpu?.usage))
-                LineHistoryChart(values: store.gpuHistory, color: accent.b)
-                    .frame(height: 32)
+                bigPercent(usage)
+                if usage != nil {
+                    LineHistoryChart(values: store.gpuHistory, color: accent.b)
+                        .frame(height: 32)
+                } else {
+                    // powermetrics 需要 root：helper（Phase 3）落地前使用率不可读。
+                    Text("使用率需要管理员组件")
+                        .font(Fonts.ui(11))
+                        .foregroundStyle(look.textMute)
+                        .frame(height: 32, alignment: .center)
+                }
                 Text("\(gpu?.coreCount ?? 0) GPU 核")
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
@@ -203,7 +213,7 @@ struct StatusView: View {
     private func memoryCard(_ s: MetricsSnapshot?) -> some View {
         let mem = s?.memory
         let pressureLabel = ["normal": "正常", "warn": "偏高", "critical": "告急"][mem?.pressure ?? ""]
-        return MetricCard(title: "内存", badge: pressureLabel.map { "压力 \($0)" }, look: look) {
+        return MetricCard(title: "内存", icon: "memorychip", tint: Color(hex: 0xE6C078), badge: pressureLabel.map { "压力 \($0)" }, look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 bigPercent(mem?.usedPercent)
                 AreaHistoryChart(values: store.memHistory, color: accent.a)
@@ -217,7 +227,7 @@ struct StatusView: View {
 
     private func batteryCard(_ s: MetricsSnapshot?) -> some View {
         let bat = s?.batteries?.first
-        return MetricCard(title: "电池", badge: healthLabel(bat?.health), look: look) {
+        return MetricCard(title: "电池", icon: "battery.75percent", tint: Semantic.successAlt, badge: healthLabel(bat?.health), look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 bigPercent(bat?.percent)
                 Text(batteryStatusLabel(bat?.status))
@@ -233,10 +243,10 @@ struct StatusView: View {
     private func diskCard(_ s: MetricsSnapshot?) -> some View {
         let disk = s?.disks?.first
         let free = (disk?.total ?? 0) &- (disk?.used ?? 0)
-        return MetricCard(title: "磁盘", badge: fmtBytes(disk?.total), look: look) {
+        return MetricCard(title: "磁盘", icon: "internaldrive", tint: Color(hex: 0x5AB4CE), badge: fmtDisk(disk?.total), look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(fmtBytes(free))
+                    Text(fmtDisk(free))
                         .font(Fonts.serif(28, .semibold))
                         .foregroundStyle(look.text)
                     Text("可用").font(Fonts.ui(11)).foregroundStyle(look.textDim)
@@ -249,7 +259,7 @@ struct StatusView: View {
                     }
                 }
                 .frame(height: 5)
-                Text(String(format: "已用 %@ · %.0f%%", fmtBytes(disk?.used), disk?.usedPercent ?? 0))
+                Text(String(format: "已用 %@ · %.0f%%", fmtDisk(disk?.used), disk?.usedPercent ?? 0))
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
                 Text(String(format: "R %.1f · W %.1f MB/s",
@@ -262,7 +272,7 @@ struct StatusView: View {
 
     private func networkCard(_ s: MetricsSnapshot?) -> some View {
         let iface = s?.network?.first?.name
-        return MetricCard(title: "网络", badge: iface, look: look) {
+        return MetricCard(title: "网络", icon: "globe", tint: Color(hex: 0x5AB4CE), badge: iface, look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(fmtRate(store.netRxHistory.last ?? 0))
                     .font(Fonts.serif(28, .semibold))
@@ -280,7 +290,7 @@ struct StatusView: View {
     private func fanCard(_ s: MetricsSnapshot?) -> some View {
         let fan = s?.thermal
         let hasFan = (fan?.fanSpeed ?? 0) > 0
-        return MetricCard(title: "风扇", badge: hasFan ? "自动" : nil, look: look) {
+        return MetricCard(title: "风扇", icon: "fan.fill", tint: Color(hex: 0xC9C0B0), badge: hasFan ? "自动" : nil, look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 if hasFan {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -312,17 +322,19 @@ struct StatusView: View {
             processHeader
             Divider().overlay(look.line)
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(store.sortedProcesses.prefix(50)) { proc in
+                VStack(spacing: 0) {
+                    ForEach(Array(store.sortedProcesses.prefix(50).enumerated()), id: \.element.pid) { index, proc in
                         ProcessRow(proc: proc,
                                    icon: store.icon(for: proc),
                                    look: look,
                                    isSystem: store.isSystemProcess(proc),
-                                   maxCPU: store.sortedProcesses.first?.cpu ?? 100) {
+                                   maxCPU: store.sortedProcesses.first?.cpu ?? 100,
+                                   zebra: index % 2 == 1) {
                             store.confirmKill = proc
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .top)
             }
         }
         .background(RoundedRectangle(cornerRadius: Metrics.cardRadius).fill(look.surface))
@@ -340,9 +352,9 @@ struct StatusView: View {
             sortHeader("内存", .memory).frame(width: 90, alignment: .trailing)
             Color.clear.frame(width: 36)
         }
-        .font(Fonts.mono(10.5, .semibold))
+        .font(Fonts.mono(10, .semibold))
         .foregroundStyle(look.textMute)
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .padding(.horizontal, 14).padding(.vertical, 8)
     }
 
     private func sortHeader(_ label: String, _ column: StatusStore.SortColumn) -> some View {
@@ -409,6 +421,26 @@ struct StatusView: View {
         return ByteCountFormatter.string(fromByteCount: Int64(v), countStyle: .binary)
     }
 
+    /// 磁盘用 decimal（厂商口径：494 GB），与系统关于本机一致。
+    private func fmtDisk(_ v: UInt64?) -> String {
+        guard let v, v > 0 else { return "0" }
+        return ByteCountFormatter.string(fromByteCount: Int64(v), countStyle: .file)
+    }
+
+    /// 健康诊断短语常见模式的中文化（CLI 输出英文；完整 i18n 见 §8.5）。
+    private func healthMsg(_ msg: String?) -> String {
+        guard var m = msg, !m.isEmpty else { return "—" }
+        let table = [
+            "Disk Almost Full": "磁盘空间不足",
+            "Restart Recommended": "建议重启",
+            "High CPU Load": "CPU 负载偏高",
+            "High Memory Pressure": "内存压力偏高",
+            "Good": "良好", "Fair": "一般", "Poor": "较差", "Excellent": "极佳",
+        ]
+        for (en, zh) in table { m = m.replacingOccurrences(of: en, with: zh) }
+        return m.replacingOccurrences(of: ": ", with: "：").replacingOccurrences(of: ", ", with: " · ")
+    }
+
     private func fmtRate(_ mbs: Double) -> String {
         mbs >= 1 ? String(format: "%.1f MB/s", mbs) : String(format: "%.0f KB/s", mbs * 1024)
     }
@@ -418,21 +450,26 @@ struct StatusView: View {
 
 private struct MetricCard<Content: View>: View {
     var title: String
+    var icon: String
+    var tint: Color
     var badge: String?
     var look: Look
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Fonts.eyebrow(title, size: 9.5).foregroundStyle(look.textDim)
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(tint)
+                Fonts.eyebrow(title, size: 9.5).foregroundStyle(tint.opacity(0.9))
                 Spacer()
                 if let badge {
                     Text(badge)
                         .font(Fonts.mono(9, .medium))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(look.line))
-                        .foregroundStyle(look.textDim)
+                        .background(Capsule().fill(tint.opacity(0.12)))
+                        .foregroundStyle(tint)
                         .lineLimit(1)
                 }
             }
@@ -452,7 +489,10 @@ private struct ProcessRow: View {
     var look: Look
     var isSystem: Bool
     var maxCPU: Double
+    var zebra: Bool
     var onKill: () -> Void
+
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -494,7 +534,10 @@ private struct ProcessRow: View {
         }
         .font(Fonts.mono(11.5))
         .foregroundStyle(look.text)
-        .padding(.horizontal, 14).padding(.vertical, 6)
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+        .background(hovering ? look.line : (zebra ? Color.white.opacity(0.015) : .clear))
+        .onHover { hovering = $0 }
     }
 
     @ViewBuilder
