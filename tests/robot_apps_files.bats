@@ -41,6 +41,15 @@ require_jq() {
     [ -e "$HOME/Library/Application Support/TestMole/state" ] || return 1
 }
 
+@test "apps files never emits the same path twice" {
+    require_jq
+    run "$REPO_DIR/bin/uninstall.sh" --robot-files "$APP_DIR" "com.testmole.app" "TestMole"
+    [ "$status" -eq 0 ] || return 1
+    # 路径全局唯一（多命名变体在大小写不敏感盘上会重复命中同一目录，
+    # 曾在真机把 widgetextension 容器发了两遍并重复计入总量）
+    echo "$output" | jq -se '[.[] | select(.event == "item") | .path] | length == (. | unique | length)' > /dev/null || return 1
+}
+
 @test "apps files rejects a missing app path with a fatal error" {
     require_jq
     run "$REPO_DIR/bin/uninstall.sh" --robot-files "$BATS_TEST_TMPDIR/nope.app" "com.x" "X"

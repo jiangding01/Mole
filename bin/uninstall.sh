@@ -1295,10 +1295,17 @@ uninstall_robot_files() {
     fi
 
     local _rf_index=0 _rf_count=0 _rf_bytes=0
+    local _rf_seen=$'\n'
     _robot_files_emit_group() { # $1 newline paths, $2 section, $3 risk, $4 default_selected
         local p kb bytes
         while IFS= read -r p; do
             [[ -n "$p" && -e "$p" ]] || continue
+            # 去重：多个命名变体模式（大小写不敏感文件系统上尤其）会重复
+            # 命中同一路径；重复项会在 GUI 重复展示并重复计入总量。
+            case "$_rf_seen" in
+                *$'\n'"$p"$'\n'*) continue ;;
+            esac
+            _rf_seen="${_rf_seen}${p}"$'\n'
             _rf_index=$((_rf_index + 1))
             kb=$(calculate_total_size "$p" 2> /dev/null || echo 0)
             bytes=$((kb * 1024))
