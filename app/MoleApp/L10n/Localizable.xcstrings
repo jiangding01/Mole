@@ -69,6 +69,91 @@
         }
       }
     },
+    "apps.confirm.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The apps and selected leftover files will be moved to Trash — recoverable from Trash anytime."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用本体与勾选的残留文件将被移入废纸篓，可随时从废纸篓恢复。"
+          }
+        }
+      }
+    },
+    "apps.confirm.perApp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App %@ · %lld leftovers"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本体 %@ · 残留 %lld 项"
+          }
+        }
+      }
+    },
+    "apps.confirm.scanning" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scanning leftovers…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残留扫描中…"
+          }
+        }
+      }
+    },
+    "apps.confirm.total" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共 %@"
+          }
+        }
+      }
+    },
+    "apps.confirm.trash" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move to Trash"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移入废纸篓"
+          }
+        }
+      }
+    },
     "apps.done.back" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -320,40 +405,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在扫描已安装应用"
-          }
-        }
-      }
-    },
-    "apps.remove.confirm" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Remove"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移除"
-          }
-        }
-      }
-    },
-    "apps.remove.confirmMsg" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The apps and selected leftovers (%@ total) will be moved to Trash — recoverable anytime; every action is logged."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "应用本体与勾选的残留（共 %@）将统一移入废纸篓，可随时恢复；每次操作都写入历史。"
           }
         }
       }

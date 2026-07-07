@@ -170,17 +170,8 @@ struct AppsView: View {
             } message: {
                 Text(L("apps.remove.runningMsg", store.runningBlockers.map(\.name).joined(separator: "、")))
             }
-            .confirmationDialog(
-                L("apps.remove.confirmTitle", Int64(store.selection.count)),
-                isPresented: Binding(get: { store.confirmRemoval }, set: { store.confirmRemoval = $0 })
-            ) {
-                Button(L("apps.remove.confirm"), role: .destructive) {
-                    store.confirmRemoval = false
-                    store.executeRemoval()
-                }
-                Button(L("common.cancel"), role: .cancel) { store.confirmRemoval = false }
-            } message: {
-                Text(L("apps.remove.confirmMsg", store.selectedSizeText.isEmpty ? "--" : store.selectedSizeText))
+            .sheet(isPresented: Binding(get: { store.confirmRemoval }, set: { store.confirmRemoval = $0 })) {
+                RemoveConfirmSheet(store: store, look: look, accent: accent)
             }
     }
 
@@ -353,6 +344,113 @@ struct AppsView: View {
                 .frame(maxWidth: 380)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - 二次确认弹层（设计稿：琥珀警示 + 衬线标题 + 逐应用构成 + 橙色主按钮）
+
+private struct RemoveConfirmSheet: View {
+    var store: AppsStore
+    var look: Look
+    var accent: ModuleAccent
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 警示徽标：颜色 + 图标双通道（文字在标题）
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(Semantic.warnAlt)
+                .frame(width: 52, height: 52)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Semantic.warnAlt.opacity(0.12)))
+                .padding(.top, 28)
+            Text(L("apps.remove.confirmTitle", Int64(store.selection.count)))
+                .font(Fonts.serif(24, .semibold))
+                .foregroundStyle(look.text)
+                .padding(.top, 16)
+            Text(L("apps.confirm.message"))
+                .font(Fonts.ui(13))
+                .foregroundStyle(look.textDim)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 380)
+                .padding(.top, 8)
+
+            // 逐应用构成：图标 · 名称 · 本体 X + 残留 N 项 · 小计
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(store.selectedApps) { app in
+                        appRow(app)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+
+            HStack(spacing: 10) {
+                Text(L("apps.confirm.total", store.selectedSizeText.isEmpty ? "--" : store.selectedSizeText))
+                    .font(Fonts.mono(13))
+                    .foregroundStyle(look.textDim)
+                Spacer()
+                Button(L("common.cancel")) { store.confirmRemoval = false }
+                    .buttonStyle(.plain)
+                    .pointingCursor()
+                    .font(Fonts.ui(13, .semibold))
+                    .foregroundStyle(look.textDim)
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .overlay(Capsule().stroke(look.lineStrong, lineWidth: 1))
+                    .contentShape(Capsule())
+                Button {
+                    store.confirmRemoval = false
+                    store.executeRemoval()
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                        Text(L("apps.confirm.trash"))
+                    }
+                    .font(Fonts.ui(13, .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 22).padding(.vertical, 10)
+                    .background(Capsule().fill(Semantic.dangerFill))
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+        }
+        .frame(width: 560)
+        .background(look.surface)
+        .presentationBackground(look.surfaceSolid)
+    }
+
+    private func appRow(_ app: InstalledApp) -> some View {
+        let leftovers = store.loadedLeftovers(for: app)
+        let checked = store.checkedLeftoverCount(for: app)
+        let total = Int64(app.sizeBytes ?? 0) + store.checkedLeftoverBytes(for: app)
+        return HStack(spacing: 12) {
+            Image(nsImage: store.icon(for: app))
+                .resizable()
+                .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name)
+                    .font(Fonts.ui(13, .semibold))
+                    .foregroundStyle(look.text)
+                    .lineLimit(1)
+                Text(leftovers == nil
+                    ? L("apps.confirm.scanning")
+                    : L("apps.confirm.perApp", app.size == "N/A" ? "--" : app.size, Int64(checked)))
+                    .font(Fonts.mono(11))
+                    .foregroundStyle(look.textMute)
+            }
+            Spacer(minLength: 8)
+            Text(total > 0 ? ByteCountFormatter.string(fromByteCount: total, countStyle: .file) : (app.size == "N/A" ? "--" : app.size))
+                .font(Fonts.mono(12.5))
+                .foregroundStyle(look.textDim)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 11).fill(look.line.opacity(0.35)))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(look.line, lineWidth: 1))
     }
 }
 
