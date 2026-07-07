@@ -106,20 +106,18 @@ final class AnalyzeStore {
         scanTask = Task { [weak self] in
             guard let self else { return }
             do {
-                var collected: [AnalyzeSession.Node] = []
+                // 流式协议：同一路径会收到多次更新（目录初值→终值），按 path 合并
+                var byPath: [String: AnalyzeSession.Node] = [:]
                 for try await event in self.session.scan(path: path, rescan: rescan) {
                     guard !Task.isCancelled else { return }
                     switch event {
                     case let .progress(progress):
                         self.progress = progress
                     case let .node(node):
-                        collected.append(node)
-                        // 扫描过程中就渐进展示（保持降序）
-                        if collected.count % 8 == 0 {
-                            self.nodes = collected.sorted { $0.size > $1.size }
-                        }
+                        byPath[node.path] = node
+                        self.nodes = byPath.values.sorted { $0.size > $1.size }
                     case let .done(_, totalSize, _, cached):
-                        self.nodes = collected.sorted { $0.size > $1.size }
+                        self.nodes = byPath.values.sorted { $0.size > $1.size }
                         self.totalSize = totalSize
                         self.isCached = cached
                         self.phase = .loaded

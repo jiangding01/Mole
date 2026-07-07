@@ -72,12 +72,13 @@ func TestServeScanEmitsNodesAndDone(t *testing.T) {
 	})
 
 	nodes := filterEvents(events, "q1", "node")
-	if len(nodes) != 3 { // docs, media, top.txt
-		t.Fatalf("expected 3 nodes, got %d: %v", len(nodes), nodes)
-	}
+	// 流式协议：同一路径会有多次更新事件（初值→终值），按 name 取最后一次
 	byName := map[string]serveEvent{}
 	for _, n := range nodes {
 		byName[n["name"].(string)] = n
+	}
+	if len(byName) != 3 { // docs, media, top.txt
+		t.Fatalf("expected 3 unique nodes, got %d: %v", len(byName), byName)
 	}
 	if byName["docs"] == nil || byName["docs"]["is_dir"] != true {
 		t.Fatalf("docs node missing or not dir: %v", byName["docs"])
@@ -114,9 +115,13 @@ func TestServeChildrenHitsCacheAndRescanBypasses(t *testing.T) {
 	if len(done2) != 1 || done2[0]["cached"] != true {
 		t.Fatalf("children should hit cache: %v", done2)
 	}
-	// 缓存命中也必须携带完整 node 列表
-	if nodes := filterEvents(events, "q2", "node"); len(nodes) != 3 {
-		t.Fatalf("cached children nodes = %d, want 3", len(nodes))
+	// 缓存命中也必须携带完整 node 列表（缓存回放为单次终值，无更新流）
+	uniq := map[string]bool{}
+	for _, n := range filterEvents(events, "q2", "node") {
+		uniq[n["name"].(string)] = true
+	}
+	if len(uniq) != 3 {
+		t.Fatalf("cached children nodes = %d, want 3", len(uniq))
 	}
 	// rescan 绕过缓存
 	done3 := filterEvents(events, "q3", "scan_done")

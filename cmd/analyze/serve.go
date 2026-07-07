@@ -10,11 +10,13 @@ package main
 // 事件:  scan_progress（200ms 节流）/ node（当前层子项逐个）/ scan_done / error
 //
 // 缓存：会话内 map[path]，scan/children 命中即回（cached:true）；rescan 绕过。
-// 取消：标记 id，后续事件全部丢弃；底层扫描 goroutine 跑完后结果仍进缓存
-// （扫描器暂无 context 中断点，白跑一次换下次秒开，诚实注释而非假中断）。
+// 流式：复用 TUI live 机制——首帧立刻发当前层全部条目（文件即终值、目录先挂
+// 缓存/估值），子目录逐个算完推送更新（GUI 按 path 合并），complete 发权威
+// 终值 + scan_done。取消：cancel op 触发 context 真中断 + 事件抑制。
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,6 +73,7 @@ type serveState struct {
 	cacheMu   sync.Mutex
 	cache     map[string]scanResult
 	cancelled sync.Map // id -> struct{}
+	cancels   sync.Map // id -> context.CancelFunc（在途扫描的真取消）
 }
 
 func (s *serveState) emit(v any) {
@@ -107,6 +110,9 @@ func runServe(in io.Reader, out io.Writer) {
 		switch req.Op {
 		case "cancel":
 			state.cancelled.Store(req.ID, struct{}{})
+			if cancel, ok := state.cancels.Load(req.ID); ok {
+				cancel.(context.CancelFunc)()
+			}
 		case "scan", "children", "rescan":
 			if req.Path == "" {
 				state.emit(serveError{Event: "error", ID: req.ID, Message: "missing path"})
@@ -150,7 +156,32 @@ func (s *serveState) handleScan(req serveRequest, bypassCache bool) {
 	var currentPath atomic.Value
 	currentPath.Store("")
 
-	// 进度节流：200ms 一条（设计性能策略），扫完即停
+	// 渐进式实时扫描（复用 TUI 的 live 机制）：首帧立刻发当前层全部条目
+	// （文件即终值、目录先挂缓存/估值），每个子目录算完推送最终大小，
+	// liveScanComplete 给出权威结果；ctx 支持真取消。
+	limiter := newScanLimiter(0)
+	entries, targets, totalSize, totalFiles, largeFiles, err := readLiveScanInitialEntries(req.Path, limiter)
+	if err != nil {
+		s.emit(serveError{Event: "error", ID: req.ID, Message: err.Error()})
+		return
+	}
+	atomic.AddInt64(&filesScanned, totalFiles)
+	atomic.AddInt64(&bytesScanned, totalSize)
+
+	for _, entry := range entries {
+		s.emitNode(req.ID, entry)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.cancels.Store(req.ID, cancel)
+	defer s.cancels.Delete(req.ID)
+
+	events := make(chan liveScanEventMsg, max(len(targets)*4, 8))
+	go runLiveScan(ctx, 0, req.Path, entries, targets, totalSize, totalFiles, largeFiles,
+		limiter, &filesScanned, &dirsScanned, &bytesScanned, &currentPath, events)
+
+	// 进度节流：200ms 一条（设计性能策略）
 	progressDone := make(chan struct{})
 	var progressWG sync.WaitGroup
 	progressWG.Add(1)
@@ -177,23 +208,51 @@ func (s *serveState) handleScan(req serveRequest, bypassCache bool) {
 			}
 		}
 	}()
+	defer func() {
+		close(progressDone)
+		progressWG.Wait()
+	}()
 
-	// AllEntries：GUI 左栏要展示当前层全部真实子项（§5.4——聚合只发生在
-	// treemap 渲染层，底层数据完整保留），不能用 TUI 的 top-N 堆裁剪。
-	result, scanErr := scanPathConcurrentAllEntries(req.Path, &filesScanned, &dirsScanned, &bytesScanned, &currentPath)
-	close(progressDone)
-	progressWG.Wait()
+	for msg := range events {
+		switch msg.kind {
+		case liveScanChildProgress, liveScanChildDone:
+			s.emitNode(req.ID, msg.entry)
+		case liveScanComplete:
+			s.cacheMu.Lock()
+			s.cache[req.Path] = msg.result
+			s.cacheMu.Unlock()
+			s.emitResult(req.ID, req.Path, msg.result, false)
+			return
+		case liveScanFailed:
+			s.emit(serveError{Event: "error", ID: req.ID, Message: "scan failed: " + errText(msg.err)})
+			return
+		case liveScanCanceled:
+			return // 取消：不再发任何事件
+		}
+	}
+}
 
-	if scanErr != nil {
-		s.emit(serveError{Event: "error", ID: req.ID, Message: scanErr.Error()})
+func errText(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	return err.Error()
+}
+
+func (s *serveState) emitNode(id string, entry dirEntry) {
+	if s.isCancelled(id) {
 		return
 	}
-
-	s.cacheMu.Lock()
-	s.cache[req.Path] = result
-	s.cacheMu.Unlock()
-
-	s.emitResult(req.ID, req.Path, result, false)
+	node := serveNode{
+		Event: "node", ID: id,
+		Name: entry.Name, Path: entry.Path,
+		Size: entry.Size, IsDir: entry.IsDir,
+		Cleanable: entry.IsDir && isCleanableDir(entry.Path),
+	}
+	if !entry.LastAccess.IsZero() {
+		node.LastAccess = entry.LastAccess.Format("2006-01-02")
+	}
+	s.emit(node)
 }
 
 func (s *serveState) emitResult(id, dir string, result scanResult, cached bool) {
@@ -201,16 +260,7 @@ func (s *serveState) emitResult(id, dir string, result scanResult, cached bool) 
 		return // 取消后不再发事件；结果已进缓存供下次命中
 	}
 	for _, entry := range result.Entries {
-		node := serveNode{
-			Event: "node", ID: id,
-			Name: entry.Name, Path: entry.Path,
-			Size: entry.Size, IsDir: entry.IsDir,
-			Cleanable: entry.IsDir && isCleanableDir(entry.Path),
-		}
-		if !entry.LastAccess.IsZero() {
-			node.LastAccess = entry.LastAccess.Format("2006-01-02")
-		}
-		s.emit(node)
+		s.emitNode(id, entry)
 	}
 	s.emit(serveDone{
 		Event: "scan_done", ID: id, Dir: dir,
