@@ -7,7 +7,11 @@ import Observation
 @Observable
 @MainActor
 final class StatusStore {
-    enum Phase { case connecting, live, disconnected }
+    enum Phase: Equatable {
+        case connecting, live, disconnected
+        /// 连续快速失败后停止自动重试，等用户手动重试（附原因）。
+        case failed(String)
+    }
 
     enum SortColumn: String { case pid, cpu, energy, memory }
 
@@ -32,10 +36,20 @@ final class StatusStore {
     private var subscription: Task<Void, Never>?
     private var lastSnapshotAt: Date?
     private var watchdog: Task<Void, Never>?
+    private var consecutiveFailures = 0
 
     func start() {
         guard subscription == nil else { return }
+        if case .failed = phase { return } // 失败态只能手动 retry
         phase = snapshot == nil ? .connecting : phase
+        subscribe()
+        startWatchdog()
+    }
+
+    func retry() {
+        consecutiveFailures = 0
+        phase = .connecting
+        stop()
         subscribe()
         startWatchdog()
     }
@@ -58,19 +72,31 @@ final class StatusStore {
         let stream = StatusStream()
         self.stream = stream
         let interval = refreshSeconds
+        let startedAt = Date()
         subscription = Task { [weak self] in
+            var failureMessage: String?
             do {
                 for try await snap in stream.snapshots(intervalSeconds: interval) {
                     guard let self, !Task.isCancelled else { return }
                     self.ingest(snap)
                 }
             } catch {
-                // 启动失败（如内嵌核心缺失）：进入断连态，watchdog 负责重试。
+                failureMessage = error.localizedDescription
             }
             await MainActor.run { [weak self] in
                 guard let self, !Task.isCancelled else { return }
                 self.subscription = nil
-                self.phase = .disconnected
+                // 快速失败（<2s 且无数据）计数；连续 3 次停止自动重试并报告原因，
+                // 避免"无限转圈"（如旧 status-go 不认识新 flag、核心路径错误）。
+                if Date().timeIntervalSince(startedAt) < 2, self.snapshot == nil {
+                    self.consecutiveFailures += 1
+                    if self.consecutiveFailures >= 3 {
+                        self.phase = .failed(failureMessage ?? "status-go 无法启动（检查 make build 与 MOLE_CORE_PATH）")
+                        self.stop()
+                        return
+                    }
+                }
+                self.phase = self.snapshot == nil ? .connecting : .disconnected
             }
         }
     }
@@ -81,11 +107,12 @@ final class StatusStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self else { return }
+                if case .failed = self.phase { return }
                 if let last = self.lastSnapshotAt,
                    Date().timeIntervalSince(last) > Double(self.refreshSeconds * 3) {
                     self.phase = .disconnected
-                    if self.subscription == nil { self.subscribe() }
                 }
+                if self.subscription == nil { self.subscribe() }
             }
         }
     }
@@ -94,6 +121,7 @@ final class StatusStore {
         snapshot = snap
         lastSnapshotAt = Date()
         phase = .live
+        consecutiveFailures = 0
         push(&cpuHistory, snap.cpu?.usage ?? 0)
         push(&gpuHistory, snap.gpu?.first?.usage ?? 0)
         push(&memHistory, snap.memory?.usedPercent ?? 0)

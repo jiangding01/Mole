@@ -32,14 +32,40 @@ struct StatusView: View {
         }
     }
 
+    @ViewBuilder
     private var connectingView: some View {
-        VStack(spacing: 14) {
-            ProgressView()
-            Text("正在读取系统指标")
-                .font(Fonts.ui(13))
-                .foregroundStyle(look.textDim)
+        if case let .failed(reason) = store.phase {
+            // 启动失败态：说清原因 + 手动重试，绝不无限转圈。
+            VStack(spacing: 14) {
+                Image(systemName: "bolt.horizontal.circle")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Semantic.warn)
+                Text("无法读取系统指标")
+                    .font(Fonts.ui(14, .semibold))
+                    .foregroundStyle(look.text)
+                Text(reason)
+                    .font(Fonts.mono(11))
+                    .foregroundStyle(look.textMute)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+                Button("重试") { store.retry() }
+                    .buttonStyle(.plain)
+                    .font(Fonts.ui(12, .semibold))
+                    .padding(.horizontal, 18).padding(.vertical, 7)
+                    .background(Capsule().fill(accent.gradient))
+                    .foregroundStyle(accent.onAccent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 14) {
+                RingSpinner(accent: accent)
+                Text("正在读取系统指标")
+                    .font(Fonts.ui(13))
+                    .foregroundStyle(look.textDim)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - 布局：卡片固定，进程表吃掉剩余全部高度

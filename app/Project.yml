@@ -57,6 +57,12 @@ schemes:
     build:
       targets:
         MoleApp: all
+    run:
+      environmentVariables:
+        # 开发模式：直接使用仓库源码树的 CLI 核心（bin/ 下的 Go 二进制）。
+        # xcodegen 每次重新生成 scheme，写在这里才不会在换机器时丢失。
+        # 发布构建不受影响（届时核心内嵌在 Resources/mole-core，见 fetch_core.sh）。
+        MOLE_CORE_PATH: $(SRCROOT)/../mole
     test:
       targets:
         - MoleAppTests
