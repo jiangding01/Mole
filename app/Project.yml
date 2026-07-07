@@ -1,6 +1,6 @@
 name: Mole
 options:
-  bundleIdPrefix: com.tw93
+  bundleIdPrefix: com.mole
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
@@ -29,7 +29,7 @@ targets:
       - package: MoleKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tw93.MoleApp
+        PRODUCT_BUNDLE_IDENTIFIER: com.mole.mac
         PRODUCT_NAME: Mole
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSHumanReadableCopyright: ""

@@ -29,11 +29,25 @@ public struct CoreBundleLocator: Sendable {
         return candidate
     }
 
+    /// Go 二进制位置：打包核心里在 mole 同级；开发模式（MOLE_CORE_PATH 指向
+    /// 源码树）在 `bin/` 子目录（Makefile BIN_DIR）。两处依次探测。
+    private func goBinary(_ name: String) throws -> URL {
+        let root = try moleEntrypoint().deletingLastPathComponent()
+        let candidates = [
+            root.appendingPathComponent(name),
+            root.appendingPathComponent("bin/\(name)"),
+        ]
+        for url in candidates where FileManager.default.isExecutableFile(atPath: url.path) {
+            return url
+        }
+        throw LocatorError.coreNotBundled
+    }
+
     public func statusBinary() throws -> URL {
-        try moleEntrypoint().deletingLastPathComponent().appendingPathComponent("status-go")
+        try goBinary("status-go")
     }
 
     public func analyzeBinary() throws -> URL {
-        try moleEntrypoint().deletingLastPathComponent().appendingPathComponent("analyze-go")
+        try goBinary("analyze-go")
     }
 }
