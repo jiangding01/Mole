@@ -329,6 +329,115 @@ struct AppsView: View {
         .sheet(isPresented: $showsHistory) { HistoryView() }
     }
 
+    // MARK: - 清单加载 / 失败 / 列表 / 批量条
+
+    private var loadingState: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                RingSpinner(accent: accent, size: 200, lineWidth: 3)
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(accent.b)
+            }
+            Fonts.eyebrow("Scanning Applications", size: 11)
+                .foregroundStyle(look.textMute)
+                .padding(.top, 38)
+            Text(L("apps.loading.title"))
+                .font(Fonts.serif(30, .semibold))
+                .foregroundStyle(look.text)
+                .padding(.top, 12)
+            Text(L("apps.loading.sub"))
+                .font(Fonts.ui(13))
+                .foregroundStyle(look.textDim)
+                .padding(.top, 10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func failedState(_ reason: String) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "bolt.horizontal.circle")
+                .font(.system(size: 30))
+                .foregroundStyle(Semantic.warn)
+            Text(L("apps.failed.title"))
+                .font(Fonts.ui(14, .semibold))
+                .foregroundStyle(look.text)
+            Text(reason)
+                .font(Fonts.mono(11))
+                .foregroundStyle(look.textMute)
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 460)
+            Button(L("common.retry")) { store.reload() }
+                .buttonStyle(.plain)
+                .pointingCursor()
+                .font(Fonts.ui(12, .semibold))
+                .padding(.horizontal, 18).padding(.vertical, 7)
+                .background(Capsule().fill(accent.gradient))
+                .foregroundStyle(accent.onAccent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var appList: some View {
+        ScrollView {
+            LazyVStack(spacing: 7) {
+                if store.visibleApps.isEmpty {
+                    Text(L("apps.empty"))
+                        .font(Fonts.ui(13))
+                        .foregroundStyle(look.textMute)
+                        .padding(.vertical, 48)
+                } else {
+                    ForEach(store.visibleApps) { app in
+                        AppRow(app: app, store: store, look: look, accent: accent)
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 批量条（设计稿 batch bar）：移除入口，先运行中拦截再危险确认。
+    private var batchBar: some View {
+        HStack(spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Text(store.selectedApps.first?.name ?? "")
+                    .font(Fonts.ui(13.5, .semibold))
+                    .foregroundStyle(look.text)
+                    .lineLimit(1)
+                Text(L("apps.batch.count", Int64(store.selection.count)) + (store.selectedSizeText.isEmpty ? "" : " · \(store.selectedSizeText)"))
+                    .font(Fonts.mono(11.5))
+                    .foregroundStyle(look.textMute)
+            }
+            Spacer()
+            Button(L("apps.batch.clear")) { store.selection.removeAll() }
+                .buttonStyle(.plain)
+                .pointingCursor()
+                .font(Fonts.ui(12.5, .semibold))
+                .foregroundStyle(look.textDim)
+            Button {
+                store.requestRemoval()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                    Text(L("apps.batch.remove", Int64(store.selection.count)))
+                }
+                .font(Fonts.ui(13, .semibold))
+                .padding(.horizontal, 20).padding(.vertical, 10)
+                .background(Capsule().fill(Color(hex: 0xF3ECE0)))
+                .foregroundStyle(Color(hex: 0x1A1206))
+            }
+            .buttonStyle(.plain)
+            .pointingCursor()
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
+        .padding(.top, 12)
+    }
+
     private func comingSoon(icon: String, title: String, note: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: icon)
