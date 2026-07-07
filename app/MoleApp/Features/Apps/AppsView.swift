@@ -137,20 +137,22 @@ struct AppsView: View {
 
     @ViewBuilder
     private var uninstallTab: some View {
-        switch store.phase {
-        case .idle, .loading:
-            loadingState
-        case let .failed(reason):
-            failedState(reason)
-        case .loaded:
-            switch store.removalPhase {
-            case .idle:
+        // 移除流程优先于清单状态：执行完会触发列表重扫（phase 回到 loading），
+        // 不能让"正在扫描已安装应用"盖住 REMOVING / UNINSTALLED 页。
+        switch store.removalPhase {
+        case .running:
+            removingView
+        case let .done(removed, freed, failedItems, relatedFiles):
+            removalDoneView(removed: removed, freed: freed,
+                            failedItems: failedItems, relatedFiles: relatedFiles)
+        case .idle:
+            switch store.phase {
+            case .idle, .loading:
+                loadingState
+            case let .failed(reason):
+                failedState(reason)
+            case .loaded:
                 idleListView
-            case .running:
-                removingView
-            case let .done(removed, freed, failedItems, relatedFiles):
-                removalDoneView(removed: removed, freed: freed,
-                                failedItems: failedItems, relatedFiles: relatedFiles)
             }
         }
     }
@@ -528,7 +530,7 @@ private struct RemoveConfirmSheet: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
         }
-        .frame(width: 560)
+        .frame(width: 480)
         .background(look.surface)
         .presentationBackground(look.surfaceSolid)
     }
