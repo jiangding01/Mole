@@ -55,28 +55,15 @@ public final class RobotSession {
 
                 // 读取到 EOF 自然结束（进程退出会关闭写端）——绝不能在
                 // terminationHandler 里取消读取任务：短命进程会在缓冲排干前
-                // 就触发终止回调，取消抛出后 finish 不会执行，事件流永久挂起
-                // （软件页残留扫描首次踩中）。任何路径都必须 finish。
-                // detached：Task {} 继承调用方 MainActor，大流量 NDJSON 的
-                // 逐字节解码会占满主线程；解码放后台，yield 由消费方跳线程。
+                // 就触发终止回调，事件流会永久挂起（软件页残留扫描首次踩中）。
+                // 任何路径都必须 finish。
+                // detached + PipeLines：解码在后台、非阻塞逐行读取（不用
+                // FileHandle.bytes，其全局 IOActor 串行化会被常驻管道占死）。
                 Task.detached {
-                    do {
-                        var buffer = Data()
-                        for try await byte in stdout.fileHandleForReading.bytes {
-                            if byte == UInt8(ascii: "\n") {
-                                if !buffer.isEmpty {
-                                    Self.yieldLine(buffer, to: continuation)
-                                    buffer.removeAll(keepingCapacity: true)
-                                }
-                            } else {
-                                buffer.append(byte)
-                            }
-                        }
-                        if !buffer.isEmpty { Self.yieldLine(buffer, to: continuation) }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
+                    for await line in PipeLines.lines(stdout.fileHandleForReading) {
+                        Self.yieldLine(line, to: continuation)
                     }
+                    continuation.finish()
                 }
 
                 continuation.onTermination = { [weak self] _ in

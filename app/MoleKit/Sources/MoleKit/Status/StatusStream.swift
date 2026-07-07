@@ -37,24 +37,25 @@ public final class StatusStream {
                 process.standardError = stderr
                 self.process = process
 
-                let decoder = JSONDecoder()
-                // detached：解码在后台跑（Task {} 会继承调用方 MainActor；
-                // 50 进程的快照行不小，且 EOF 后的 waitUntilExit 不能占主线程）。
-                let readTask = Task.detached {
-                    var buffer = Data()
+                continuation.onTermination = { [weak self] _ in self?.stop() }
+
+                // 先 run 再起读取任务：detached 任务是立即开跑的（不像继承
+                // MainActor 的 Task {} 要排队等 run() 所在的主线程代码走完），
+                // 读取先于进程启动会时序倒置（AnalyzeSession 同一形状，先 run）。
+                try process.run()
+
+                // detached + PipeLines：解码在后台、逐行非阻塞读取（见
+                // PipeLines 注释——FileHandle.bytes 的全局 IOActor 串行化
+                // 会被常驻 analyze 引擎的空闲管道占死，状态页因此饿死）。
+                // 读到 EOF 自然收尾，任何路径都必须 finish，绝不留下挂起的流。
+                Task.detached {
+                    let decoder = JSONDecoder()
                     var yieldedAny = false
-                    for try await byte in stdout.fileHandleForReading.bytes {
-                        if byte == UInt8(ascii: "\n") {
-                            if !buffer.isEmpty {
-                                if let snapshot = try? decoder.decode(MetricsSnapshot.self, from: buffer) {
-                                    continuation.yield(snapshot)
-                                    yieldedAny = true
-                                }
-                                // 解码失败的行静默跳过：watch 流偶发诊断行不致命。
-                                buffer.removeAll(keepingCapacity: true)
-                            }
-                        } else {
-                            buffer.append(byte)
+                    for await line in PipeLines.lines(stdout.fileHandleForReading) {
+                        // 解码失败的行静默跳过：watch 流偶发诊断行不致命。
+                        if let snapshot = try? decoder.decode(MetricsSnapshot.self, from: line) {
+                            continuation.yield(snapshot)
+                            yieldedAny = true
                         }
                     }
                     // 流结束：若进程失败且从未产出快照，把 stderr 报给上层
@@ -71,14 +72,6 @@ public final class StatusStream {
                         continuation.finish()
                     }
                 }
-
-                process.terminationHandler = { _ in
-                    // 不 cancel readTask：让它读尽残余输出后自然走 finish 分支。
-                    _ = readTask
-                }
-                continuation.onTermination = { [weak self] _ in self?.stop() }
-
-                try process.run()
             } catch {
                 continuation.finish(throwing: error)
             }

@@ -77,22 +77,13 @@ public final class AnalyzeSession: @unchecked Sendable {
         stdinHandle = stdin.fileHandleForWriting
 
         let handle = stdout.fileHandleForReading
-        // detached：解码路由在后台跑。Task {} 会继承调用方的 MainActor，
-        // 大扫描的逐字节流会把主线程打满（UI 计数冻结的元凶之一）。
+        // detached + PipeLines：解码路由在后台、非阻塞逐行读取。
+        // 不用 FileHandle.bytes——常驻引擎空闲时它的阻塞 read 会占死
+        // Foundation 的全局 IOActor，饿死其他所有 .bytes 流（见 PipeLines）。
         readTask = Task.detached { [weak self] in
-            var buffer = Data()
-            do {
-                for try await byte in handle.bytes {
-                    if byte == UInt8(ascii: "\n") {
-                        if !buffer.isEmpty {
-                            self?.route(line: buffer)
-                            buffer.removeAll(keepingCapacity: true)
-                        }
-                    } else {
-                        buffer.append(byte)
-                    }
-                }
-            } catch {}
+            for await line in PipeLines.lines(handle) {
+                self?.route(line: line)
+            }
             // 引擎退出：所有在途请求以 terminated 收尾（绝不挂起）
             self?.failAll(with: SessionError.terminated)
         }
