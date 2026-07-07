@@ -336,6 +336,7 @@ struct StatusView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(RoundedRectangle(cornerRadius: Metrics.cardRadius).fill(look.surface))
         .overlay(RoundedRectangle(cornerRadius: Metrics.cardRadius).stroke(look.line, lineWidth: 1))
@@ -350,11 +351,12 @@ struct StatusView: View {
             sortHeader("CPU", .cpu).frame(width: 130, alignment: .trailing)
             sortHeader("能耗", .energy).frame(width: 70, alignment: .trailing)
             sortHeader("内存", .memory).frame(width: 90, alignment: .trailing)
-            Color.clear.frame(width: 36)
+            Color.clear.frame(width: 36, height: 1)
         }
         .font(Fonts.mono(10, .semibold))
         .foregroundStyle(look.textMute)
-        .padding(.horizontal, 14).padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .frame(height: 34) // 表头固定高度；剩余空间全部归 ScrollView
     }
 
     private func sortHeader(_ label: String, _ column: StatusStore.SortColumn) -> some View {
