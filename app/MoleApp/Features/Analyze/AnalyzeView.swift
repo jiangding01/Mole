@@ -154,9 +154,9 @@ struct AnalyzeView: View {
     }
 
     private var explorer: some View {
-        HStack(alignment: .top, spacing: 18) {
+        HStack(alignment: .top, spacing: 14) {
             listPanel
-                .frame(width: 300)
+                .frame(width: 230)
             TreemapView(
                 nodes: store.nodes,
                 look: look,
