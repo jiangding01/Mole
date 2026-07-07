@@ -55,6 +55,11 @@ struct SpectrumRingView: View {
     // MARK: - 绘制
 
     private func draw(ctx: inout GraphicsContext, size: CGSize, time: TimeInterval, motion: Bool) {
+        // 设计稿 canvas 用 composite 'lighter' 做加性发光（暗色 Look），
+        // 否则低 alpha 刻度在深底上偏暗看不清。
+        if look != .paper {
+            ctx.blendMode = .plusLighter
+        }
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let radius: CGFloat = 116
         let n = max(72, min(240, tickCount))

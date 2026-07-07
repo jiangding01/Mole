@@ -58,6 +58,7 @@ func (s *watchState) collect(c *Collector) (MetricsSnapshot, error) {
 // cleanly when stdout closes (parent process gone).
 func runWatchStdout(interval time.Duration) {
 	collector := NewCollector(processWatchOptionsFromFlags())
+	collector.SetTopProcessCount(*topProcs)
 	enc := json.NewEncoder(os.Stdout)
 	var st watchState
 

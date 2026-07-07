@@ -17,7 +17,8 @@ public final class StatusStream {
                 let binary = try coreLocator.statusBinary()
                 let process = Process()
                 process.executableURL = binary
-                process.arguments = ["--watch", "--interval", "\(max(1, intervalSeconds))s"]
+                // --top-procs：进程表最多 50 条（设计 §5.5；CLI 默认 5 仅供 TUI）。
+                process.arguments = ["--watch", "--interval", "\(max(1, intervalSeconds))s", "--top-procs", "50"]
                 let stdout = Pipe()
                 process.standardOutput = stdout
                 process.standardError = Pipe()

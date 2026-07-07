@@ -33,6 +33,30 @@ enum Look: String, CaseIterable {
         }
     }
 
+    /// 卡片表面（设计 --surface：暖棕半透明渐变，比纯黑底明显一档）。
+    var surface: LinearGradient {
+        switch self {
+        case .ink:
+            return LinearGradient(
+                colors: [Color(red: 42 / 255, green: 35 / 255, blue: 28 / 255).opacity(0.62),
+                         Color(red: 26 / 255, green: 22 / 255, blue: 17 / 255).opacity(0.62)],
+                startPoint: .top, endPoint: .bottom
+            )
+        case .onyx:
+            return LinearGradient(
+                colors: [Color(red: 30 / 255, green: 35 / 255, blue: 44 / 255).opacity(0.6),
+                         Color(red: 18 / 255, green: 21 / 255, blue: 27 / 255).opacity(0.6)],
+                startPoint: .top, endPoint: .bottom
+            )
+        case .paper:
+            return LinearGradient(
+                colors: [Color.white.opacity(0.78),
+                         Color(hex: 0xFCF9F3).opacity(0.66)],
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+    }
+
     /// 导航胶囊底色（设计 --chrome）。
     var chrome: Color {
         switch self {

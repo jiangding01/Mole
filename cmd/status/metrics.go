@@ -214,6 +214,9 @@ type Collector struct {
 	lastHWAt  time.Time
 	hasStatic bool
 
+	// Snapshot shaping. Zero means the historical default (5).
+	topProcessCount int
+
 	// Slow cache (30s-1m).
 	lastBTAt time.Time
 	lastBT   []BluetoothDevice
@@ -277,6 +280,14 @@ type snapshotEnrichment struct {
 	bluetooth      []BluetoothDevice
 	topProcesses   []ProcessInfo
 	processAlerts  []ProcessAlert
+}
+
+// TopProcessCount bounds the top_processes list in each snapshot.
+// Zero keeps the historical default of 5 (TUI); the GUI passes larger values.
+func (c *Collector) SetTopProcessCount(n int) {
+	if n > 0 {
+		c.topProcessCount = n
+	}
 }
 
 func NewCollector(options ProcessWatchOptions) *Collector {
@@ -444,7 +455,11 @@ func (c *Collector) snapshotFromMetrics(now time.Time, hostInfo *host.InfoStat, 
 	)
 	var topProcs []ProcessInfo
 	if collected.hasProcesses {
-		topProcs = topProcesses(collected.allProcs, 5)
+		limit := c.topProcessCount
+		if limit <= 0 {
+			limit = 5
+		}
+		topProcs = topProcesses(collected.allProcs, limit)
 	}
 
 	var processAlerts []ProcessAlert

@@ -23,6 +23,7 @@ const (
 var (
 	// Command-line flags
 	jsonOutput       = flag.Bool("json", false, "output metrics as JSON instead of TUI")
+	topProcs         = flag.Int("top-procs", 0, "number of processes in top_processes (default 5)")
 	procCPUThreshold = flag.Float64("proc-cpu-threshold", 100, "alert when a process stays above this CPU percent")
 	procCPUWindow    = flag.Duration("proc-cpu-window", 5*time.Minute, "continuous duration a process must exceed the CPU threshold")
 	procCPUAlerts    = flag.Bool("proc-cpu-alerts", true, "enable persistent high-CPU process alerts")
@@ -322,6 +323,7 @@ func animTickWithSpeed(cpuUsage float64) tea.Cmd {
 // runJSONMode collects metrics once and outputs as JSON.
 func runJSONMode() {
 	collector := NewCollector(processWatchOptionsFromFlags())
+	collector.SetTopProcessCount(*topProcs)
 
 	data, err := collector.Collect()
 	if err != nil {

@@ -148,4 +148,30 @@ final class StatusStore {
         }
         Darwin.kill(pid_t(p.pid), force ? SIGKILL : SIGTERM)
     }
+
+    // MARK: - 进程图标（按 pid 缓存；GUI app 用真实图标，二进制用可执行文件图标）
+
+    private var iconCache: [Int: NSImage] = [:]
+
+    func icon(for p: MetricsSnapshot.ProcessInfo) -> NSImage? {
+        if let cached = iconCache[p.pid] { return cached }
+        var image: NSImage?
+        if let app = NSRunningApplication(processIdentifier: pid_t(p.pid)), let icon = app.icon {
+            image = icon
+        } else if let path = executablePath(of: p), FileManager.default.fileExists(atPath: path) {
+            image = NSWorkspace.shared.icon(forFile: path)
+        }
+        if let image {
+            image.size = NSSize(width: 16, height: 16)
+            iconCache[p.pid] = image
+            if iconCache.count > 300 { iconCache.removeAll() } // 简单防涨
+        }
+        return image
+    }
+
+    private func executablePath(of p: MetricsSnapshot.ProcessInfo) -> String? {
+        guard let command = p.command, command.hasPrefix("/") else { return nil }
+        // command 可能带参数，取首个空格前的路径 token。
+        return String(command.split(separator: " ", maxSplits: 1)[0])
+    }
 }
