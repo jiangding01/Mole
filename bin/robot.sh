@@ -24,7 +24,8 @@ Usage: robot.sh <domain> <verb> [options]
   clean plan [--sections a,b] [--external <path>]
   clean apply --plan <plan_id>     (item ids on stdin, one per line)
   apps list                        (passthrough: JSON document, not NDJSON)
-  apps files <path> <bundle_id> [name]   read-only leftover discovery (NDJSON items)
+  apps plan <path> <bundle_id> [name]    read-only discovery + plan (NDJSON items)
+  apps apply --plan <id>           ids via stdin; Trash-routed removal
   history list [--limit n] [--deletions]
   whitelist list|add|remove --mode clean|optimize [pattern]
 EOF
@@ -165,12 +166,52 @@ run_apps_list() {
     exec "$SCRIPT_DIR/bin/uninstall.sh" --list
 }
 
-run_apps_files() {
-    # Read-only leftover discovery for one app. Passthrough to uninstall.sh,
-    # which owns the discovery helpers (find_app_files + sibling guard) and
-    # emits protocol v1 NDJSON via lib/core/robot.sh.
-    # Usage: mole robot apps files <app_path> <bundle_id> [app_name]
-    exec "$SCRIPT_DIR/bin/uninstall.sh" --robot-files "$@"
+run_apps_plan() {
+    # Read-only leftover discovery + plan creation for one app. Passthrough
+    # to uninstall.sh, which owns the discovery helpers (find_app_files +
+    # sibling guard) and emits protocol v1 NDJSON via lib/core/robot.sh.
+    # Usage: mole robot apps plan <app_path> <bundle_id> [app_name]
+    exec "$SCRIPT_DIR/bin/uninstall.sh" --robot-plan "$@"
+}
+
+run_apps_apply() {
+    # Same generic plan/apply machinery as clean apply: plan-file lookup,
+    # exists -> should_protect_path -> is_whitelisted -> mole_delete (Trash),
+    # graceful SIGTERM cancel. Only the oplog attribution differs.
+    local plan_id=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --plan)
+                shift
+                plan_id="${1:-}"
+                ;;
+            *)
+                robot_emit_error "E_INTERNAL" "unknown apply option: $1" "true"
+                exit 2
+                ;;
+        esac
+        shift
+    done
+
+    if [[ -z "$plan_id" ]]; then
+        robot_emit_error "E_PLAN_NOT_FOUND" "missing --plan <plan_id>" "true"
+        exit 2
+    fi
+
+    export MOLE_DELETE_MODE="${MOLE_DELETE_MODE:-trash}"
+    export MOLE_CURRENT_COMMAND="uninstall"
+    # 与 plan 阶段同一套保护策略（CLI batch 流程同款）：apply 复检时
+    # 数据保护类应用的自身数据允许随卸载移除，系统关键项仍受保护。
+    export MOLE_UNINSTALL_MODE=1
+
+    # shellcheck source=lib/core/common.sh
+    source "$SCRIPT_DIR/lib/core/common.sh"
+    # shellcheck source=lib/manage/whitelist.sh
+    source "$SCRIPT_DIR/lib/manage/whitelist.sh"
+    load_whitelist "clean"
+
+    robot_clean_apply "$plan_id"
 }
 
 run_history_list() {
@@ -229,7 +270,8 @@ main() {
         clean/plan) run_clean_plan "$@" ;;
         clean/apply) run_clean_apply "$@" ;;
         apps/list) run_apps_list ;;
-        apps/files) run_apps_files "$@" ;;
+        apps/plan) run_apps_plan "$@" ;;
+        apps/apply) run_apps_apply "$@" ;;
         history/list) run_history_list "$@" ;;
         whitelist/list | whitelist/add | whitelist/remove) run_whitelist "$verb" "$@" ;;
         *)

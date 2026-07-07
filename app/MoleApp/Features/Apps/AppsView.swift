@@ -2,8 +2,8 @@ import MoleKit
 import SwiftUI
 
 /// 软件页（设计 §5.2 / 设计稿 apps 页）：三个子 tab——卸载 / 更新 / 启动项。
-/// M0：卸载 tab 接真实清单（robot apps list），搜索 + 排序 + 多选；
-/// 卸载执行等 robot apps plan/apply 落地后接入（按钮禁用并说明，不做假动作）。
+/// 卸载 tab：真实清单（robot apps list）+ 行展开残留分组 + 卸载执行链
+/// （运行中拦截 → 危险确认 → robot apps apply 逐应用执行 → 完成汇总）。
 /// 更新 / 启动项 tab 为诚实占位（数据源分别在 Phase 5+ / Phase 3）。
 struct AppsView: View {
     @State private var store = AppsStore()
@@ -144,9 +144,90 @@ struct AppsView: View {
         case .loaded:
             VStack(spacing: 0) {
                 appList
-                if !store.selection.isEmpty { batchBar }
+                switch store.removalPhase {
+                case .idle:
+                    if !store.selection.isEmpty { batchBar }
+                case let .running(app, index, total):
+                    removalProgressBar(app: app, index: index, total: total)
+                case let .done(removed, freed, failedItems):
+                    removalDoneBar(removed: removed, freed: freed, failedItems: failedItems)
+                }
+            }
+            .alert(L("apps.remove.runningTitle"), isPresented: Binding(
+                get: { !store.runningBlockers.isEmpty },
+                set: { if !$0 { store.runningBlockers = [] } }
+            )) {
+                Button(L("apps.remove.quitAndContinue")) { store.quitBlockersAndContinue() }
+                Button(L("common.cancel"), role: .cancel) { store.runningBlockers = [] }
+            } message: {
+                Text(L("apps.remove.runningMsg", store.runningBlockers.map(\.name).joined(separator: "、")))
+            }
+            .confirmationDialog(
+                L("apps.remove.confirmTitle", Int64(store.selection.count)),
+                isPresented: Binding(get: { store.confirmRemoval }, set: { store.confirmRemoval = $0 })
+            ) {
+                Button(L("apps.remove.confirm"), role: .destructive) {
+                    store.confirmRemoval = false
+                    store.executeRemoval()
+                }
+                Button(L("common.cancel"), role: .cancel) { store.confirmRemoval = false }
+            } message: {
+                Text(L("apps.remove.confirmMsg", store.selectedSizeText.isEmpty ? "--" : store.selectedSizeText))
             }
         }
+    }
+
+    /// 执行中：进度条替换批量条（破坏性操作期间不可再发起）。
+    private func removalProgressBar(app: String, index: Int, total: Int) -> some View {
+        HStack(spacing: 10) {
+            RingSpinner(accent: accent, size: 16, lineWidth: 2)
+            Text(L("apps.remove.progress", app, Int64(index + 1), Int64(total)))
+                .font(Fonts.ui(13, .semibold))
+                .foregroundStyle(look.text)
+            Spacer()
+            Text(L("apps.remove.trashNote"))
+                .font(Fonts.ui(11))
+                .foregroundStyle(look.textMute)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
+        .padding(.top, 12)
+    }
+
+    /// 完成态：结果摘要（颜色 + 图标 + 文字三通道）。
+    private func removalDoneBar(removed: Int, freed: Int64, failedItems: Int) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: failedItems > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(failedItems > 0 ? Semantic.warn : Semantic.success)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("apps.remove.doneTitle", Int64(removed),
+                       ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)))
+                    .font(Fonts.ui(13, .semibold))
+                    .foregroundStyle(look.text)
+                if failedItems > 0 {
+                    Text(L("apps.remove.doneFailed", Int64(failedItems)))
+                        .font(Fonts.ui(11))
+                        .foregroundStyle(Semantic.warn)
+                } else {
+                    Text(L("apps.remove.trashNote"))
+                        .font(Fonts.ui(11))
+                        .foregroundStyle(look.textMute)
+                }
+            }
+            Spacer()
+            Button(L("apps.remove.finish")) { store.finishRemoval() }
+                .buttonStyle(.plain)
+                .pointingCursor()
+                .font(Fonts.ui(12.5, .semibold))
+                .padding(.horizontal, 18).padding(.vertical, 8)
+                .background(Capsule().fill(accent.gradient))
+                .foregroundStyle(accent.onAccent)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
+        .padding(.top, 12)
     }
 
     private var loadingState: some View {
@@ -216,7 +297,7 @@ struct AppsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// 批量条（设计稿 batch bar）：卸载执行未接入前按钮禁用并说明。
+    /// 批量条（设计稿 batch bar）：移除入口，先运行中拦截再危险确认。
     private var batchBar: some View {
         HStack(spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 9) {
@@ -234,7 +315,9 @@ struct AppsView: View {
                 .pointingCursor()
                 .font(Fonts.ui(12.5, .semibold))
                 .foregroundStyle(look.textDim)
-            Button {} label: {
+            Button {
+                store.requestRemoval()
+            } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "trash")
                         .font(.system(size: 12))
@@ -242,12 +325,11 @@ struct AppsView: View {
                 }
                 .font(Fonts.ui(13, .semibold))
                 .padding(.horizontal, 20).padding(.vertical, 10)
-                .background(Capsule().fill(look.line))
-                .foregroundStyle(look.textMute)
+                .background(Capsule().fill(Color(hex: 0xF3ECE0)))
+                .foregroundStyle(Color(hex: 0x1A1206))
             }
             .buttonStyle(.plain)
-            .disabled(true)
-            .help(L("apps.batch.disabled"))
+            .pointingCursor()
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
@@ -449,9 +531,18 @@ private struct AppRow: View {
 
     private func leftoverRow(_ item: RobotItem) -> some View {
         let checked = store.checkedLeftovers[app.id]?.contains(item.id) ?? false
+        let reviewOnly = store.isReviewOnly(item)
         return HStack(spacing: 11) {
-            CheckBox(checked: checked, accent: accent, look: look, size: 18) {
-                store.toggleLeftover(app, item)
+            if reviewOnly {
+                // 系统级复核项：仅展示（CLI 同姿态"预览可见、从不删除"），盾牌占位
+                Image(systemName: "shield")
+                    .font(.system(size: 11))
+                    .foregroundStyle(look.textMute)
+                    .frame(width: 18, height: 18)
+            } else {
+                CheckBox(checked: checked, accent: accent, look: look, size: 18) {
+                    store.toggleLeftover(app, item)
+                }
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(leftoverName(item))
@@ -480,7 +571,6 @@ private struct AppRow: View {
         .padding(.horizontal, 6).padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture { store.toggleLeftover(app, item) }
-        .onHover { _ in }
         .pointingCursor()
     }
 

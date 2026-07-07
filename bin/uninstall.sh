@@ -1250,14 +1250,64 @@ uninstall_list_json_escape() {
 # the exact name `mo uninstall` accepts, and human-readable size. Reuses the
 # existing scanner so the output stays in lockstep with what the destructive
 # path sees.
-# Read-only leftover discovery for the GUI (robot apps files, NDJSON).
-# Usage: uninstall_robot_files <app_path> <bundle_id> [app_name]
-# Emits item events for user-level leftovers (risk safe, default-selected)
-# and system-level/diagnostic remnants (risk caution, default-unselected),
-# then a done event with totals. Mirrors the batch-uninstall discovery flow
-# including the shared-bundle-id sibling guard; no deletion code is
-# reachable from this path.
-uninstall_robot_files() {
+# Bundle id of an .app, robot-plan flavor: defaults/PlistBuddy on macOS,
+# XML fallback for CI fixtures. Empty output = unknown.
+uninstall_robot_bundle_id_of() {
+    local app="$1" plist="$1/Contents/Info.plist" value=""
+    [[ -f "$plist" ]] || return 1
+    if command -v defaults > /dev/null 2>&1; then
+        value=$(defaults read "${plist%.plist}" CFBundleIdentifier 2> /dev/null || true)
+    fi
+    if [[ -z "$value" && -x /usr/libexec/PlistBuddy ]]; then
+        value=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2> /dev/null || true)
+    fi
+    if [[ -z "$value" ]]; then
+        value=$(tr -d '\n\t' < "$plist" 2> /dev/null | sed -n 's/.*<key>CFBundleIdentifier<\/key>[^<]*<string>\([^<]*\)<\/string>.*/\1/p')
+    fi
+    [[ -n "$value" ]] || return 1
+    printf '%s' "$value"
+}
+
+# Surviving same-bundle-id siblings for robot plan, printed one lowercased
+# .app basename per line. batch.sh's guard reads apps_data from the scan
+# (empty in robot mode — relying on it here would be fail-open, the exact
+# PR #874/#875 shape), so this probes the filesystem directly, including
+# /Volumes copies.
+uninstall_robot_sibling_names() {
+    local bundle_id="$1" app_path="$2"
+    [[ -z "$bundle_id" || "$bundle_id" == "unknown" ]] && return 0
+
+    local self_real
+    self_real=$(cd "$app_path" 2> /dev/null && pwd -P || printf '%s' "$app_path")
+
+    local dir candidate cid cand_real base
+    for dir in /Applications /Applications/Utilities "$HOME/Applications" /Applications/Setapp /Volumes/*/Applications; do
+        [[ -d "$dir" ]] || continue
+        for candidate in "$dir"/*.app; do
+            [[ -d "$candidate" ]] || continue
+            [[ "$candidate" == "$app_path" ]] && continue
+            cand_real=$(cd "$candidate" 2> /dev/null && pwd -P || printf '%s' "$candidate")
+            [[ "$cand_real" == "$self_real" ]] && continue
+            cid=$(uninstall_robot_bundle_id_of "$candidate" 2> /dev/null || true)
+            [[ -n "$cid" && "$cid" == "$bundle_id" ]] || continue
+            base="${candidate##*/}"
+            base="${base%.app}"
+            printf '%s\n' "$(printf '%s' "$base" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        done
+    done
+    return 0
+}
+
+# Read-only leftover discovery + plan creation for the GUI (robot apps plan).
+# Usage: uninstall_robot_plan <app_path> <bundle_id> [app_name]
+# Emits the app bundle itself as the first item (section "app"), then
+# user-level leftovers (risk safe, default-selected) and system-level/
+# diagnostic remnants (risk caution, default-unselected). Every item is
+# persisted to a plan file (same TSV machinery as clean, 30-min TTL) so
+# `robot apps apply --plan <id>` can validate ids through the safety chain.
+# Mirrors the batch-uninstall discovery flow including the shared-bundle-id
+# sibling guard; no deletion code is reachable from this path.
+uninstall_robot_plan() {
     local app_path="${1:-}" bundle_id="${2:-}" app_name="${3:-}"
     # common.sh 可能已把 SCRIPT_DIR 重定义到仓库根：两个布局都探测。
     # shellcheck source=lib/core/robot.sh
@@ -1276,28 +1326,87 @@ uninstall_robot_files() {
         app_name="${app_name%.app}"
     fi
 
-    # Sibling guard mirrors lib/uninstall/batch.sh: a surviving install with
-    # the same bundle id still owns bundle-id-keyed paths, so discovery must
-    # narrow to the .app basename and skip shared caches (fail-safe).
-    local sibling_survives=0 discovery_app_name="$app_name"
-    if uninstall_bundle_id_has_surviving_sibling "$bundle_id" "$app_path"; then
+    # Uninstall-domain protection policy for this process (matches the CLI
+    # batch flow; also relaxes cleanup-only protections for app data).
+    export MOLE_UNINSTALL_MODE=1
+
+    # Gate 1: system-critical bundles can never be planned for removal.
+    if should_protect_from_uninstall "$bundle_id"; then
+        robot_emit_error "E_PATH_PROTECTED" "app is protected from uninstall: $bundle_id" "true"
+        return 1
+    fi
+    # Gate 2: apps that require their vendor's official uninstaller.
+    local vendor=""
+    vendor=$(official_uninstaller_vendor "$bundle_id" "$app_name" "$app_path" 2> /dev/null || true)
+    if [[ -n "$vendor" ]]; then
+        robot_emit_error "E_PATH_PROTECTED" "use the official $vendor uninstaller for $app_name" "true"
+        return 1
+    fi
+
+    # Sibling guard, faithful mirror of lib/uninstall/batch.sh: when a
+    # surviving install shares this bundle id, (a) demote the bundle id to
+    # "unknown" so bundle-id-keyed paths (Caches/Containers/...) never enter
+    # the plan, (b) key name discovery on the .app basename, and (c) if even
+    # that name (or its version-stripped base) collides with a survivor name,
+    # drop name discovery entirely — plan then contains only the app bundle.
+    local sibling_survives=0 discovery_app_name="$app_name" discovery_bundle_id="$bundle_id"
+    local sibling_names=""
+    sibling_names=$(uninstall_robot_sibling_names "$bundle_id" "$app_path" || true)
+    if [[ -n "$sibling_names" ]]; then
         sibling_survives=1
+        discovery_bundle_id="unknown"
         discovery_app_name="${app_path##*/}"
         discovery_app_name="${discovery_app_name%.app}"
+
+        local discovery_lower discovery_base_lower survivor_name
+        discovery_lower=$(printf '%s' "$discovery_app_name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+        discovery_base_lower=$(uninstall_strip_version_suffix "$discovery_app_name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+        while IFS= read -r survivor_name; do
+            [[ -z "$survivor_name" ]] && continue
+            # 等值抓显示名塌缩；子串方向抓"卸 Foo 而 Foo-beta 幸存"——
+            # 下游匹配器是子串式的，短名能命中幸存者的路径（batch.sh 同注释）。
+            if [[ "$discovery_lower" == "$survivor_name" || "$discovery_base_lower" == "$survivor_name" ||
+                "$survivor_name" == *"$discovery_lower"* || "$survivor_name" == *"$discovery_base_lower"* ]]; then
+                discovery_app_name=""
+                break
+            fi
+        done <<< "$sibling_names"
     fi
 
     local user_files="" system_files="" diag_user="" diag_system=""
-    user_files=$(MOLE_UNINSTALL_SIBLING_SURVIVES="$sibling_survives" find_app_files "$bundle_id" "$discovery_app_name" "$app_path" || true)
+    if [[ -n "$discovery_app_name" || "$discovery_bundle_id" != "unknown" ]]; then
+        user_files=$(MOLE_UNINSTALL_SIBLING_SURVIVES="$sibling_survives" find_app_files "$discovery_bundle_id" "$discovery_app_name" "$app_path" || true)
+    fi
     if [[ $sibling_survives -eq 0 ]]; then
         diag_user=$(get_diagnostic_report_paths_for_app "$app_path" "$discovery_app_name" "$HOME/Library/Logs/DiagnosticReports" || true)
         diag_system=$(get_diagnostic_report_paths_for_app "$app_path" "$discovery_app_name" "/Library/Logs/DiagnosticReports" || true)
         system_files=$(find_app_system_files "$bundle_id" "$discovery_app_name" || true)
     fi
 
+    local plan_id
+    plan_id=$(robot_plan_new "apps")
+
     local _rf_index=0 _rf_count=0 _rf_bytes=0
     local _rf_seen=$'\n'
-    _robot_files_emit_group() { # $1 newline paths, $2 section, $3 risk, $4 default_selected
-        local p kb bytes
+
+    # 首项 = 应用本体（GUI 摘要里的"移除本体"）。
+    local app_kb app_bytes
+    app_kb=$(calculate_total_size "$app_path" 2> /dev/null || echo 0)
+    app_bytes=$((app_kb * 1024))
+    # 先入计划再发射：robot_plan_append 会拒绝带 tab/换行的路径（防 TSV
+    # 注入），set -e 下裸调用失败会中断整个流；本体入不了计划直接失败关闭。
+    if ! robot_plan_append "$plan_id" "ap.1" "$app_path" "$app_bytes" true; then
+        robot_emit_error "E_INTERNAL" "app path rejected by plan (control chars?)" "true"
+        return 1
+    fi
+    _rf_index=1
+    _rf_count=1
+    _rf_bytes=$app_bytes
+    _rf_seen="${_rf_seen}${app_path}"$'\n'
+    robot_emit_item "ap.1" "app" "$app_name" "$app_path" "$app_bytes" "safe" "true"
+
+    _robot_files_emit_group() { # $1 newline paths, $2 section, $3 risk, $4 default_selected, $5 planable(plan|display)
+        local p kb bytes item_id
         while IFS= read -r p; do
             [[ -n "$p" && -e "$p" ]] || continue
             # 去重：多个命名变体模式（大小写不敏感文件系统上尤其）会重复
@@ -1309,20 +1418,32 @@ uninstall_robot_files() {
             _rf_index=$((_rf_index + 1))
             kb=$(calculate_total_size "$p" 2> /dev/null || echo 0)
             bytes=$((kb * 1024))
+            if [[ "${5:-plan}" == "display" ]]; then
+                # 系统级残留与 CLI 姿态一致：仅展示复核，不进计划、不可执行。
+                # id 用 info. 前缀显式声明"非 apply 目标"。
+                robot_emit_item "info.$_rf_index" "$2" "$p" "$p" "$bytes" "$3" "false"
+                continue
+            fi
+            # 入不了计划（路径含控制字符）的项整个跳过：宁可少展示，
+            # 也不发射一个 apply 永远找不到的幽灵条目。
+            if ! robot_plan_append "$plan_id" "ap.$_rf_index" "$p" "$bytes" true; then
+                _rf_index=$((_rf_index - 1))
+                continue
+            fi
             robot_emit_item "ap.$_rf_index" "$2" "$p" "$p" "$bytes" "$3" "$4"
             _rf_count=$((_rf_count + 1))
             _rf_bytes=$((_rf_bytes + bytes))
         done <<< "$1"
     }
-    _robot_files_emit_group "$user_files" "user" "safe" "true"
-    _robot_files_emit_group "$diag_user" "diagnostics" "safe" "true"
-    # System-level remnants are review-only in the CLI flow; surface them
-    # unselected so the GUI keeps the same "default not deleted" posture.
-    _robot_files_emit_group "$system_files" "system" "caution" "false"
-    _robot_files_emit_group "$diag_system" "system" "caution" "false"
+    _robot_files_emit_group "$user_files" "user" "safe" "true" "plan"
+    _robot_files_emit_group "$diag_user" "diagnostics" "safe" "true" "plan"
+    # System-level remnants are review-only in the CLI flow ("shown in the
+    # preview, never deleted"); mirror that: display-only, never applyable.
+    _robot_files_emit_group "$system_files" "system" "caution" "false" "display"
+    _robot_files_emit_group "$diag_system" "system" "caution" "false" "display"
     unset -f _robot_files_emit_group
 
-    robot_emit_done "true" "" "\"items\":$_rf_count,\"bytes_total\":$_rf_bytes"
+    robot_emit_done "true" "$plan_id" "\"items\":$_rf_count,\"bytes_total\":$_rf_bytes"
     return 0
 }
 
@@ -1437,10 +1558,11 @@ uninstall_list_apps() {
 
 main() {
     # Read-only robot mode short-circuits before logging and any destructive
-    # code: leftover discovery for the GUI (mole robot apps files).
-    if [[ "${1:-}" == "--robot-files" ]]; then
+    # code: leftover discovery + plan creation for the GUI (mole robot apps
+    # plan). Apply runs in bin/robot.sh through the shared safety chain.
+    if [[ "${1:-}" == "--robot-plan" ]]; then
         shift
-        uninstall_robot_files "$@"
+        uninstall_robot_plan "$@"
         return $?
     fi
 

@@ -271,6 +271,13 @@ plan 类命令的 `plan_id` 是后续 apply 的凭据：apply 时核心侧校验
 
 ### 4.4 生命周期与健壮性约定
 
+- **apps 域动词（实现口径）**：`apps plan <app_path> <bundle_id> [name]`（argv 传参，
+  非 stdin JSON；只读发现 + 建计划，首项为应用本体 section:"app"，系统级残留以
+  `info.` 前缀 id 纯展示、永不可 apply）；`apps apply --plan <id>`（stdin ids，
+  `MOLE_UNINSTALL_MODE=1` + Trash 路由 + 共享安全链）。plan 内置兄弟安装守卫
+  （文件系统直测，不依赖扫描态）与卸载保护门（系统关键 bundle / 官方卸载器应用
+  直接 E_PATH_PROTECTED 拒绝）。**确认弹层与运行中应用拦截由 GUI 承担**
+  （AppsStore：NSWorkspace 检查 + 二次确认后才 apply）。
 - **取消**：GUI 发 SIGTERM。plan 阶段立即退出；apply 阶段完成"当前单项"后输出 done（`ok:true, summary.cancelled:<剩余未处理项数>`）再退出，不留半删状态。核心侧沿用现有 `trap cleanup_temp_files EXIT INT TERM`。已实现（`robot_clean_apply` 的 TERM/INT trap；bash 会等在途 `mole_delete` 返回后才投递 trap，天然保证"完成当前项"）；bats 回归 `clean apply SIGTERM finishes current item then reports the rest cancelled`。
 - **超时**：GUI 侧对 plan 设 10 分钟兜底、apply 设 30 分钟兜底；超时 = SIGTERM → 3 秒 → SIGKILL，UI 报"操作超时"。核心侧扫描沿用 CLI 既有 wall-clock 预算与检查点（CLAUDE.md 工作规则），超时降级为部分结果 + `insight` 说明跳过了慢扫描。
 - **背压**：Swift 侧按行读取，事件进 `AsyncThrowingStream`（buffer 上限 10k，超限丢弃 progress 保留 item/result）。

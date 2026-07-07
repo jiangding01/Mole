@@ -52,23 +52,6 @@
         }
       }
     },
-    "apps.batch.disabled": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uninstall will open up once robot apps plan/apply lands (read-only inventory for now)"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "卸载执行将在机器人层 apps plan/apply 就绪后开放（当前为只读清单）"
-          }
-        }
-      }
-    },
     "apps.batch.remove": {
       "extractionState": "manual",
       "localizations": {
@@ -235,6 +218,193 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在扫描已安装应用"
+          }
+        }
+      }
+    },
+    "apps.remove.confirm": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除"
+          }
+        }
+      }
+    },
+    "apps.remove.confirmMsg": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The apps and selected leftovers (%@ total) will be moved to Trash — recoverable anytime; every action is logged."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用本体与勾选的残留（共 %@）将统一移入废纸篓，可随时恢复；每次操作都写入历史。"
+          }
+        }
+      }
+    },
+    "apps.remove.confirmTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %lld apps?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除 %lld 个应用？"
+          }
+        }
+      }
+    },
+    "apps.remove.doneFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld items couldn't be removed (protected / whitelisted / permission) and were kept"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 项未能移除（受保护 / 白名单 / 权限不足），已为你保留"
+          }
+        }
+      }
+    },
+    "apps.remove.doneTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed %lld apps · freed %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除 %lld 个应用 · 释放 %@"
+          }
+        }
+      }
+    },
+    "apps.remove.finish": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成"
+          }
+        }
+      }
+    },
+    "apps.remove.progress": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removing %@ (%lld/%lld)…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在移除 %@（%lld/%lld）…"
+          }
+        }
+      }
+    },
+    "apps.remove.quitAndContinue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit & Continue"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "退出并继续"
+          }
+        }
+      }
+    },
+    "apps.remove.runningMsg": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit these before removal: %@. Apps will be asked to quit normally, with a chance to save unsaved work."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除前需要先退出：%@。将请求应用正常退出，未保存的内容会提示保存。"
+          }
+        }
+      }
+    },
+    "apps.remove.runningTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some apps are running"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有应用正在运行"
+          }
+        }
+      }
+    },
+    "apps.remove.trashNote": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Everything goes to Trash — recoverable anytime"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "统一移入废纸篓，可随时恢复"
           }
         }
       }
