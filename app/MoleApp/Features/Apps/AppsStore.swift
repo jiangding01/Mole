@@ -67,9 +67,12 @@ final class AppsStore {
         reload()
     }
 
-    func reload() {
+    /// silent = 后台静默校准：不翻转 loading（页面不闪加载态），失败保留现有列表。
+    func reload(silent: Bool = false) {
         loadTask?.cancel()
-        phase = .loading
+        if !silent || phase != .loaded {
+            phase = .loading
+        }
         loadTask = Task { [weak self] in
             do {
                 let apps = try await self?.client.list() ?? []
@@ -78,6 +81,7 @@ final class AppsStore {
                 self.phase = .loaded
             } catch {
                 guard let self, !Task.isCancelled else { return }
+                if silent, self.phase == .loaded { return } // 静默失败：下次进页再试
                 self.phase = .failed(error.localizedDescription)
             }
         }
@@ -371,14 +375,22 @@ final class AppsStore {
             let related = self.removalLog.filter { $0.ok && !$0.id.hasSuffix("|app") }.count
             self.removalPhase = .done(removed: removed, freedBytes: self.removalFreed,
                                       failedItems: failedItems, relatedFiles: related)
-            // 清理会话状态并刷新清单（已卸载的应用从列表消失）
+            // 清理会话状态
             for app in targets {
                 self.selection.remove(app.id)
                 self.expanded.remove(app.id)
                 self.leftovers[app.id] = nil
                 self.checkedLeftovers[app.id] = nil
             }
-            self.reload()
+            // 本地先删行：本体确认移除的应用立即从内存清单剔除（返回列表即时
+            // 呈现），随后后台静默重扫校准体积与来源——不闪加载页。
+            let succeededIds = Set(
+                self.removalLog
+                    .filter { $0.ok && $0.id.hasSuffix("|app") }
+                    .map { String($0.id.dropLast("|app".count)) }
+            )
+            self.apps.removeAll { succeededIds.contains($0.id) }
+            self.reload(silent: true)
         }
     }
 
