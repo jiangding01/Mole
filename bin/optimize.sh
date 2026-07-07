@@ -186,7 +186,100 @@ handle_interrupt() {
     exit 130
 }
 
+# --- robot 模式（GUI，协议 v1 NDJSON）--------------------------------------
+# 读取 lib/core/robot.sh 的发射器；common.sh 可能已把 SCRIPT_DIR 重定义到仓库根。
+optimize_robot_source_emitters() {
+    # shellcheck source=lib/core/robot.sh
+    if [[ -f "$SCRIPT_DIR/lib/core/robot.sh" ]]; then
+        source "$SCRIPT_DIR/lib/core/robot.sh"
+    else
+        source "$SCRIPT_DIR/../lib/core/robot.sh"
+    fi
+}
+
+# 只读任务清单：id = action（闭合枚举，见 execute_optimization 的 case 表），
+# label/desc 为核心英文原文（GUI 按 id 本地化，未知 id 回退原文，§4.3）。
+optimize_robot_list() {
+    optimize_robot_source_emitters
+    local health_json
+    if ! health_json=$(generate_health_json 2> /dev/null); then
+        robot_emit_error "E_INTERNAL" "health collection failed" "true"
+        return 1
+    fi
+    local action name desc safe count=0
+    while IFS='|' read -r action name desc safe; do
+        [[ -n "$action" ]] || continue
+        robot_emit_item "$action" "tasks" "$name" "" 0 "safe" "true" "$desc"
+        count=$((count + 1))
+    done < <(parse_optimization_items "$health_json")
+    robot_emit_done "true" "" "\"items\":$count"
+}
+
+# 执行：stdin 每行一个 action。仅接受当前清单里的 action（闭合枚举再校验），
+# 白名单命中发 skipped。GUI 无 TTY：sudo 不可用（MOLE_OPTIMIZE_SUDO_AVAILABLE
+# =false），任务内部的管理员分支自动安全跳过——后台助手（Phase 3）前的诚实姿态。
+optimize_robot_run() {
+    optimize_robot_source_emitters
+    export MOLE_CURRENT_COMMAND="optimize"
+
+    load_whitelist "optimize"
+    export MOLE_OPTIMIZE_SUDO_AVAILABLE="false"
+    export FIRST_ACTION=true
+
+    local health_json
+    if ! health_json=$(generate_health_json 2> /dev/null); then
+        robot_emit_error "E_INTERNAL" "health collection failed" "true"
+        return 1
+    fi
+    local valid=$'\n' action _n _d _s
+    while IFS='|' read -r action _n _d _s; do
+        [[ -n "$action" ]] && valid="${valid}${action}"$'\n'
+    done < <(parse_optimization_items "$health_json")
+
+    local done_count=0 failed=0 skipped=0 t0 elapsed
+    while IFS= read -r action; do
+        [[ -n "$action" ]] || continue
+        case "$valid" in
+            *$'\n'"$action"$'\n'*) ;;
+            *)
+                robot_emit_task_status "$action" "failed" "unknown or unavailable task"
+                failed=$((failed + 1))
+                continue
+                ;;
+        esac
+        if command -v is_whitelisted > /dev/null && is_whitelisted "$action"; then
+            robot_emit_task_status "$action" "skipped" "whitelisted"
+            skipped=$((skipped + 1))
+            continue
+        fi
+        robot_emit_task_status "$action" "running" ""
+        t0=$SECONDS
+        # 任务自身的终端输出（颜色/勾号）不属于协议流：全部丢弃
+        if execute_optimization "$action" "" > /dev/null 2>&1; then
+            elapsed=$(((SECONDS - t0) * 1000))
+            robot_emit_task_status "$action" "done" "" "$elapsed"
+            done_count=$((done_count + 1))
+        else
+            elapsed=$(((SECONDS - t0) * 1000))
+            robot_emit_task_status "$action" "failed" "" "$elapsed"
+            failed=$((failed + 1))
+        fi
+    done
+
+    robot_emit_done "true" "" "\"items\":$((done_count + failed + skipped)),\"failed\":$failed,\"skipped\":$skipped"
+}
+
 main() {
+    # Robot 模式短路在交互/日志逻辑之前（同 uninstall.sh --robot-* 形状）。
+    if [[ "${1:-}" == "--robot-list" ]]; then
+        optimize_robot_list
+        return $?
+    fi
+    if [[ "${1:-}" == "--robot-run" ]]; then
+        optimize_robot_run
+        return $?
+    fi
+
     # Set current command for operation logging
     export MOLE_CURRENT_COMMAND="optimize"
 

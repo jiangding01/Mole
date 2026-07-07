@@ -55,10 +55,25 @@ robot_emit_progress() {
 }
 
 robot_emit_item() {
-    # $1 id, $2 section, $3 label, $4 path, $5 bytes, $6 risk, $7 default_selected
-    robot_emit "item" "$(printf '"id":"%s","section":"%s","label":"%s","path":"%s","bytes":%s,"kind":"cache","reversible":true,"default_selected":%s,"risk":"%s"' \
+    # $1 id, $2 section, $3 label, $4 path, $5 bytes, $6 risk, $7 default_selected,
+    # $8 detail (optional; task 说明等，GUI 未知 id 时的回退文案)
+    local body
+    body=$(printf '"id":"%s","section":"%s","label":"%s","path":"%s","bytes":%s,"kind":"cache","reversible":true,"default_selected":%s,"risk":"%s"' \
         "$(robot_json_escape "$1")" "$(robot_json_escape "$2")" "$(robot_json_escape "$3")" \
-        "$(robot_json_escape "$4")" "${5:-0}" "${7:-true}" "${6:-safe}")"
+        "$(robot_json_escape "$4")" "${5:-0}" "${7:-true}" "${6:-safe}")
+    [[ -n "${8:-}" ]] && body="$body,\"detail\":\"$(robot_json_escape "$8")\""
+    robot_emit "item" "$body"
+}
+
+robot_emit_task_status() {
+    # $1 task_id, $2 status(pending/running/done/skipped/failed/needs_admin),
+    # $3 detail (may be empty), $4 duration_ms (may be empty)
+    local body
+    body=$(printf '"task_id":"%s","status":"%s"' \
+        "$(robot_json_escape "$1")" "$(robot_json_escape "$2")")
+    [[ -n "${3:-}" ]] && body="$body,\"detail\":\"$(robot_json_escape "$3")\""
+    [[ -n "${4:-}" ]] && body="$body,\"duration_ms\":$4"
+    robot_emit "task_status" "$body"
 }
 
 robot_emit_insight() {

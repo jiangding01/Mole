@@ -26,6 +26,8 @@ Usage: robot.sh <domain> <verb> [options]
   apps list                        (passthrough: JSON document, not NDJSON)
   apps plan <path> <bundle_id> [name]    read-only discovery + plan (NDJSON items)
   apps apply --plan <id>           ids via stdin; Trash-routed removal
+  optimize list                    read-only task inventory (NDJSON items)
+  optimize run                     task ids via stdin; task_status stream
   history list [--limit n] [--deletions]
   whitelist list|add|remove --mode clean|optimize [pattern]
 EOF
@@ -272,6 +274,8 @@ main() {
         apps/list) run_apps_list ;;
         apps/plan) run_apps_plan "$@" ;;
         apps/apply) run_apps_apply "$@" ;;
+        optimize/list) exec "$SCRIPT_DIR/bin/optimize.sh" --robot-list ;;
+        optimize/run) exec "$SCRIPT_DIR/bin/optimize.sh" --robot-run ;;
         history/list) run_history_list "$@" ;;
         whitelist/list | whitelist/add | whitelist/remove) run_whitelist "$verb" "$@" ;;
         *)
