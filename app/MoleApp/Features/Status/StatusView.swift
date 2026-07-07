@@ -550,12 +550,13 @@ private struct ProcessRow: View {
                 .frame(width: 16, height: 16)
                 .clipShape(RoundedRectangle(cornerRadius: 3.5))
         } else {
-            // 无图标兜底：系统进程用齿轮、其余用终端样占位（对齐设计稿）
+            // 无图标兜底：系统进程用齿轮（灰）、其余用终端样占位（绿，terminal 语义色）
             Image(systemName: isSystem ? "gearshape.fill" : "terminal.fill")
                 .font(.system(size: 10))
                 .frame(width: 16, height: 16)
-                .foregroundStyle(look.textMute)
-                .background(RoundedRectangle(cornerRadius: 3.5).fill(look.line))
+                .foregroundStyle(isSystem ? look.textMute : Semantic.success)
+                .background(RoundedRectangle(cornerRadius: 3.5)
+                    .fill(isSystem ? AnyShapeStyle(look.line) : AnyShapeStyle(Semantic.success.opacity(0.14))))
         }
     }
 

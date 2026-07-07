@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var collectProcessesFunc = collectProcesses
@@ -66,6 +67,7 @@ func parseProcessOutput(raw string) []ProcessInfo {
 		if command == "" {
 			continue
 		}
+		command = decodePSVis(command)
 		procs = append(procs, ProcessInfo{
 			PID:         pid,
 			PPID:        ppid,
@@ -201,4 +203,48 @@ func (h *processHeap) Pop() any {
 	x := old[n-1]
 	*h = old[:n-1]
 	return x
+}
+
+// decodePSVis reverses the vis(3) escaping macOS ps applies to non-ASCII
+// bytes in command names ("M-d M-< M^A" is the UTF-8 for 企). Without this,
+// CJK process names like 企业微信 render as M- gibberish. The decode is only
+// kept when it yields valid UTF-8 that actually contains multibyte
+// characters; otherwise the original string is returned untouched, so real
+// names containing a literal "M-" (e.g. "M-Audio") are never corrupted.
+func decodePSVis(s string) string {
+	if !strings.Contains(s, "M-") && !strings.Contains(s, "M^") {
+		return s
+	}
+	out := make([]byte, 0, len(s))
+	i := 0
+	decodedAny := false
+	for i < len(s) {
+		c := s[i]
+		if c == 'M' && i+2 < len(s) && s[i+1] == '-' {
+			out = append(out, s[i+2]|0x80)
+			decodedAny = true
+			i += 3
+			continue
+		}
+		if c == 'M' && i+2 < len(s) && s[i+1] == '^' {
+			if s[i+2] == '?' {
+				out = append(out, 0xFF)
+			} else {
+				out = append(out, (s[i+2]&0x1F)|0x80)
+			}
+			decodedAny = true
+			i += 3
+			continue
+		}
+		out = append(out, c)
+		i++
+	}
+	if !decodedAny {
+		return s
+	}
+	decoded := string(out)
+	if !utf8.ValidString(decoded) {
+		return s
+	}
+	return decoded
 }
