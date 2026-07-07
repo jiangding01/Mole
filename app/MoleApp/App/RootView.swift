@@ -70,6 +70,7 @@ struct RootView: View {
                 Fonts.eyebrow("For Mac", size: 9)
                     .foregroundStyle(look.textMute)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointingCursor()
@@ -99,8 +100,8 @@ struct RootView: View {
                 } label: {
                     Text(tab.title)
                         .font(Fonts.ui(13, tab == selectedTab ? .semibold : .medium))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 7)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 8)
                         .background {
                             // 设计稿：选中 = 当前模块 accent 渐变胶囊 + on-accent 文字
                             if tab == selectedTab {
@@ -109,6 +110,8 @@ struct RootView: View {
                             }
                         }
                         .foregroundStyle(tab == selectedTab ? tabAccent.onAccent : look.textDim)
+                        // 透明 padding 默认不参与命中测试：显式声明整个胶囊区域可点
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .pointingCursor()

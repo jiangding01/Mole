@@ -143,6 +143,7 @@ struct StatusView: View {
                             if store.refreshSeconds == s { Capsule().fill(accent.gradient) }
                         }
                         .foregroundStyle(store.refreshSeconds == s ? AnyShapeStyle(accent.onAccent) : AnyShapeStyle(look.textDim))
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .pointingCursor()
@@ -477,6 +478,8 @@ struct StatusView: View {
                 Text(label)
             }
             .foregroundStyle(store.sortColumn == column ? look.text : look.textMute)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointingCursor()
@@ -1057,6 +1060,7 @@ private struct ProcessDetailSheet: View {
                 .foregroundStyle(look.textDim)
                 .padding(.horizontal, 15).padding(.vertical, 8)
                 .overlay(RoundedRectangle(cornerRadius: 9).stroke(look.lineStrong, lineWidth: 1))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointingCursor()
