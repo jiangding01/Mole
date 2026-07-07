@@ -13,7 +13,7 @@ final class StatusStore {
         case failed(String)
     }
 
-    enum SortColumn: String { case pid, cpu, energy, memory }
+    enum SortColumn: String { case name, pid, cpu, energy, memory }
 
     var phase: Phase = .connecting
     var snapshot: MetricsSnapshot?
@@ -141,6 +141,7 @@ final class StatusStore {
         let sorted = procs.sorted { a, b in
             let cmp: Bool
             switch sortColumn {
+            case .name: cmp = (a.name ?? "").localizedCaseInsensitiveCompare(b.name ?? "") == .orderedAscending
             case .pid: cmp = a.pid < b.pid
             case .cpu: cmp = (a.cpu ?? 0) < (b.cpu ?? 0)
             case .energy: cmp = (a.cpu ?? 0) < (b.cpu ?? 0) // 能耗列 M0 以 CPU 代理，--proc 落地后换真值
@@ -154,7 +155,7 @@ final class StatusStore {
     func toggleSort(_ column: SortColumn) {
         if sortColumn == column { sortDescending.toggle() } else {
             sortColumn = column
-            sortDescending = true
+            sortDescending = column != .name // 名称升序、数值列降序为首击默认
         }
     }
 
@@ -185,6 +186,10 @@ final class StatusStore {
         if let cached = iconCache[p.pid] { return cached }
         var image: NSImage?
         if let app = NSRunningApplication(processIdentifier: pid_t(p.pid)), let icon = app.icon {
+            image = icon
+        } else if let ppid = p.ppid, ppid > 1,
+                  let parent = NSRunningApplication(processIdentifier: pid_t(ppid)), let icon = parent.icon {
+            // helper 子进程（渲染器等）挂到父应用图标
             image = icon
         } else if let path = executablePath(of: p), FileManager.default.fileExists(atPath: path) {
             image = NSWorkspace.shared.icon(forFile: path)

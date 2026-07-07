@@ -1,7 +1,9 @@
 import MoleKit
 import SwiftUI
 
-/// 单窗口根视图：顶部居中胶囊分段导航 + 页面容器（设计 §8.1）。
+/// 单窗口根视图（设计稿顶栏三段式）：
+/// 左上 wordmark（Mole FOR MAC）· 中央胶囊 6 tab（选中 = 当前模块 accent 渐变胶囊）
+/// · 右上 历史/设置 两个独立圆钮。整站随激活页 re-tint（accent 氛围光）。
 struct RootView: View {
     @State private var selectedTab: MainTab = .smartScan
     @State private var showsHistory = false
@@ -10,16 +12,21 @@ struct RootView: View {
     /// 扫描结果跨页共享的会话资产（设计 §5.0）。
     @State private var scanSession = ScanSession()
 
+    private let look = Look.ink
+    private var accent: ModuleAccent { Theme.moduleAccent(for: selectedTab) }
+
     var body: some View {
         ZStack(alignment: .top) {
-            Theme.background(for: selectedTab)
+            look.background(accent: accent)
                 .ignoresSafeArea()
+                .animation(.easeInOut(duration: 0.4), value: selectedTab) // 氛围光 400ms 交叉淡入
 
             currentPage
                 .padding(.top, 64)
 
-            navigationCapsule
-                .padding(.top, 12)
+            topBar
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
         }
         .environment(scanSession)
         .sheet(isPresented: $showsHistory) { HistoryView() }
@@ -38,43 +45,76 @@ struct RootView: View {
         }
     }
 
-    private var navigationCapsule: some View {
-        HStack(spacing: 4) {
-            // 品牌徽标：点击回智能扫描页
-            Button {
-                selectedTab = .smartScan
-            } label: {
-                Image(systemName: "circle.fill") // TODO: 替换为鼹鼠徽标资产
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
+    // MARK: - 顶栏（三段式）
 
+    private var topBar: some View {
+        ZStack {
+            navigationCapsule // 胶囊绝对居中，不受两侧宽度影响
+            HStack {
+                wordmark
+                Spacer()
+                iconButton("clock.arrow.circlepath") { showsHistory = true }
+                iconButton("gearshape") { showsSettings = true }
+            }
+        }
+    }
+
+    private var wordmark: some View {
+        Button {
+            selectedTab = .smartScan
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Mole")
+                    .font(Fonts.mono(17, .bold))
+                    .foregroundStyle(look.text)
+                Fonts.eyebrow("For Mac", size: 9)
+                    .foregroundStyle(look.textMute)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func iconButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(look.textDim)
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 10).fill(look.chrome))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(look.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var navigationCapsule: some View {
+        HStack(spacing: 2) {
             ForEach(MainTab.allCases) { tab in
+                let tabAccent = Theme.moduleAccent(for: tab)
                 Button {
-                    selectedTab = tab
+                    withAnimation(.spring(duration: 0.32, bounce: 0.25)) {
+                        selectedTab = tab
+                    }
                 } label: {
                     Text(tab.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(
-                            // 选中项实心高亮胶囊；位移过渡动画在 DesignSystem 打磨阶段接入
-                            Capsule().fill(tab == selectedTab ? Theme.capsuleSelected : .clear)
-                        )
-                        .foregroundStyle(tab == selectedTab ? Theme.capsuleSelectedText : Theme.capsuleText)
+                        .font(Fonts.ui(13, tab == selectedTab ? .semibold : .medium))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background {
+                            // 设计稿：选中 = 当前模块 accent 渐变胶囊 + on-accent 文字
+                            if tab == selectedTab {
+                                Capsule().fill(tabAccent.gradient)
+                                    .matchedGeometryEffect(id: "navPill", in: navNamespace)
+                            }
+                        }
+                        .foregroundStyle(tab == selectedTab ? tabAccent.onAccent : look.textDim)
                 }
                 .buttonStyle(.plain)
             }
-
-            Divider().frame(height: 16)
-
-            Button { showsHistory = true } label: { Image(systemName: "clock") }
-                .buttonStyle(.plain)
-            Button { showsSettings = true } label: { Image(systemName: "gearshape") }
-                .buttonStyle(.plain)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Capsule().fill(Theme.capsuleBackground))
+        .padding(4)
+        .background(Capsule().fill(look.chrome))
+        .overlay(Capsule().stroke(look.line, lineWidth: 1))
     }
+
+    @Namespace private var navNamespace
 }

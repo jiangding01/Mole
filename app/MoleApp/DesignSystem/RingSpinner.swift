@@ -6,6 +6,7 @@ import SwiftUI
 struct RingSpinner: View {
     var accent: ModuleAccent
     var size: CGFloat = 28
+    var lineWidth: CGFloat = 2.5
 
     @State private var spinning = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -16,7 +17,7 @@ struct RingSpinner: View {
             .stroke(
                 AngularGradient(colors: [accent.b, accent.a.opacity(0.15)],
                                 center: .center),
-                style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
             .frame(width: size, height: size)
             .rotationEffect(.degrees(spinning ? 360 : 0))

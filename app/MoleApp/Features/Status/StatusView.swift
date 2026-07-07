@@ -58,11 +58,24 @@ struct StatusView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(spacing: 14) {
-                RingSpinner(accent: accent)
+            VStack(spacing: 0) {
+                ZStack {
+                    RingSpinner(accent: accent, size: 200, lineWidth: 3)
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 26, weight: .medium))
+                        .foregroundStyle(accent.b)
+                }
+                Fonts.eyebrow("Reading Sensors", size: 11)
+                    .foregroundStyle(look.textMute)
+                    .padding(.top, 38)
                 Text("正在读取系统指标")
+                    .font(Fonts.serif(30, .semibold))
+                    .foregroundStyle(look.text)
+                    .padding(.top, 12)
+                Text("采集 CPU · 内存 · 磁盘 · 网络 · 传感器数据")
                     .font(Fonts.ui(13))
                     .foregroundStyle(look.textDim)
+                    .padding(.top, 10)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -345,7 +358,7 @@ struct StatusView: View {
 
     private var processHeader: some View {
         HStack(spacing: 0) {
-            Text("名称（\(store.sortedProcesses.count)）")
+            sortHeader("名称（\(store.sortedProcesses.count)）", .name)
                 .frame(maxWidth: .infinity, alignment: .leading)
             sortHeader("PID", .pid).frame(width: 80, alignment: .trailing)
             sortHeader("CPU", .cpu).frame(width: 130, alignment: .trailing)
