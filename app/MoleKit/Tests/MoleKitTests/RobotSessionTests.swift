@@ -67,9 +67,11 @@ final class RobotSessionTests: XCTestCase {
             .appendingPathComponent("molekit-robot-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let script = dir.appendingPathComponent("mole")
-        try #"#!/bin/sh
-printf '{"v":1,"event":"done","ok":true}'
-"#.write(to: script, atomically: true, encoding: .utf8)
+        let body = #"""
+        #!/bin/sh
+        printf '{"v":1,"event":"done","ok":true}'
+        """#
+        try body.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         let events = try await collect(script)
         XCTAssertEqual(events.count, 1)
