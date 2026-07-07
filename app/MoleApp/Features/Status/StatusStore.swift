@@ -32,6 +32,9 @@ final class StatusStore {
     /// 结束进程确认弹窗目标。
     var confirmKill: MetricsSnapshot.ProcessInfo?
 
+    /// 进程详情弹窗目标（设计 §9.6：点击行弹出，系统 / 用户 App / 已退出 三态）。
+    var detailProc: MetricsSnapshot.ProcessInfo?
+
     private var stream: StatusStream?
     private var subscription: Task<Void, Never>?
     private var lastSnapshotAt: Date?
@@ -165,6 +168,53 @@ final class StatusStore {
         if p.pid < 100 { return true }
         let cmd = p.command ?? ""
         return cmd.hasPrefix("/System/") || cmd.hasPrefix("/usr/libexec/") || cmd.hasPrefix("/usr/sbin/")
+    }
+
+    /// 弹窗打开后进程可能已退出（设计三态之"已退出"）：kill(pid, 0) 探活。
+    nonisolated func isGone(_ p: MetricsSnapshot.ProcessInfo) -> Bool {
+        Darwin.kill(pid_t(p.pid), 0) != 0 && errno == ESRCH
+    }
+
+    /// 用户 App 判定：有对应 NSRunningApplication 且带 bundle（弹窗给完整操作区）。
+    func runningApp(for p: MetricsSnapshot.ProcessInfo) -> NSRunningApplication? {
+        NSRunningApplication(processIdentifier: pid_t(p.pid))
+    }
+
+    /// 快照里的父进程（进程树行：parent > child）。
+    func parent(of p: MetricsSnapshot.ProcessInfo) -> MetricsSnapshot.ProcessInfo? {
+        guard let ppid = p.ppid, ppid > 0 else { return nil }
+        return snapshot?.topProcesses?.first { $0.pid == ppid }
+    }
+
+    /// 快照可见范围内的子进程数（诚实口径：仅 top 50 内）。
+    func childCount(of p: MetricsSnapshot.ProcessInfo) -> Int {
+        snapshot?.topProcesses?.filter { $0.ppid == p.pid }.count ?? 0
+    }
+
+    func executable(of p: MetricsSnapshot.ProcessInfo) -> String? {
+        executablePath(of: p)
+    }
+
+    /// 「显示」：在 Finder 中定位可执行文件 / App bundle。
+    func reveal(_ p: MetricsSnapshot.ProcessInfo) {
+        if let url = runningApp(for: p)?.bundleURL {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else if let path = executablePath(of: p) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        }
+    }
+
+    /// 「复制摘要」：一行可粘贴的进程概要。
+    func copySummary(_ p: MetricsSnapshot.ProcessInfo) {
+        var parts = ["\(p.name ?? "?") (PID \(p.pid))"]
+        if let cpu = p.cpu { parts.append(String(format: "CPU %.1f%%", cpu)) }
+        if let mem = p.memoryBytes {
+            parts.append("MEM " + ByteCountFormatter.string(fromByteCount: Int64(mem), countStyle: .memory))
+        }
+        if let cmd = p.command { parts.append(cmd) }
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(parts.joined(separator: " · "), forType: .string)
     }
 
     /// 终止：NSRunningApplication.terminate 优先，回退 SIGTERM；force = SIGKILL。

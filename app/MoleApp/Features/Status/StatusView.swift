@@ -30,6 +30,9 @@ struct StatusView: View {
         } message: {
             Text("终止会请求进程正常退出；强制退出立即结束，未保存内容将丢失。")
         }
+        .sheet(item: Binding(get: { store.detailProc }, set: { store.detailProc = $0 })) { proc in
+            ProcessDetailSheet(proc: proc, store: store, look: look, accent: accent)
+        }
     }
 
     @ViewBuilder
@@ -397,25 +400,49 @@ struct StatusView: View {
             processHeader
             Divider().overlay(look.line)
             ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(Array(store.sortedProcesses.prefix(50).enumerated()), id: \.element.pid) { index, proc in
-                        ProcessRow(proc: proc,
-                                   icon: store.icon(for: proc),
-                                   look: look,
-                                   isSystem: store.isSystemProcess(proc),
-                                   maxCPU: store.sortedProcesses.first?.cpu ?? 100,
-                                   zebra: index % 2 == 1) {
-                            store.confirmKill = proc
+                if store.sortedProcesses.isEmpty {
+                    // 首个快照可能没有进程数据（ps 需要采样窗口）：骨架行代替空白
+                    processSkeleton
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(store.sortedProcesses.prefix(50).enumerated()), id: \.element.pid) { index, proc in
+                            ProcessRow(proc: proc,
+                                       icon: store.icon(for: proc),
+                                       look: look,
+                                       isSystem: store.isSystemProcess(proc),
+                                       maxCPU: store.sortedProcesses.first?.cpu ?? 100,
+                                       zebra: index % 2 == 1,
+                                       onOpen: { store.detailProc = proc },
+                                       onKill: { store.confirmKill = proc })
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
-                .frame(maxWidth: .infinity, alignment: .top)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(RoundedRectangle(cornerRadius: Metrics.cardRadius).fill(look.surface))
         .overlay(RoundedRectangle(cornerRadius: Metrics.cardRadius).stroke(look.line, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: Metrics.cardRadius))
+    }
+
+    /// 进程表骨架加载态（设计"加载骨架"边界状态）：呼吸闪烁的占位行。
+    private var processSkeleton: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                RingSpinner(accent: accent, size: 14, lineWidth: 2)
+                Text("正在采集进程…")
+                    .font(Fonts.mono(10))
+                    .foregroundStyle(look.textMute)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 30)
+            ForEach(0..<10, id: \.self) { i in
+                SkeletonRow(look: look, wide: i % 3 == 0)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     private var processHeader: some View {
@@ -583,6 +610,7 @@ private struct ProcessRow: View {
     var isSystem: Bool
     var maxCPU: Double
     var zebra: Bool
+    var onOpen: () -> Void
     var onKill: () -> Void
 
     @State private var hovering = false
@@ -613,6 +641,7 @@ private struct ProcessRow: View {
             Text("--").frame(width: 70, alignment: .trailing)
             Text(fmtMem(proc.memoryBytes)).frame(width: 90, alignment: .trailing)
             Menu {
+                Button("查看详情", action: onOpen)
                 Button("结束进程…", action: onKill).disabled(isSystem)
                 Button("在活动监视器中打开") {
                     if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.ActivityMonitor") {
@@ -631,6 +660,8 @@ private struct ProcessRow: View {
         .padding(.horizontal, 14)
         .frame(height: 30)
         .background(hovering ? look.line : (zebra ? Color.white.opacity(0.015) : .clear))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen) // 设计 §9.6：点击行弹进程详情
         .onHover { hovering = $0 }
     }
 
@@ -662,6 +693,255 @@ private struct ProcessRow: View {
     private func fmtMem(_ v: UInt64?) -> String {
         guard let v else { return "--" }
         return ByteCountFormatter.string(fromByteCount: Int64(v), countStyle: .memory)
+    }
+}
+
+/// 骨架占位行：图标圆 + 名称条 + 右侧数值条，整体呼吸闪烁。
+private struct SkeletonRow: View {
+    var look: Look
+    var wide: Bool
+
+    @State private var pulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 3.5).fill(look.line).frame(width: 16, height: 16)
+                Capsule().fill(look.line).frame(width: wide ? 150 : 96, height: 8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Capsule().fill(look.line).frame(width: 36, height: 8)
+                .frame(width: 80, alignment: .trailing)
+            Capsule().fill(look.line).frame(width: 72, height: 8)
+                .frame(width: 130, alignment: .trailing)
+            Capsule().fill(look.line).frame(width: 24, height: 8)
+                .frame(width: 70, alignment: .trailing)
+            Capsule().fill(look.line).frame(width: 48, height: 8)
+                .frame(width: 90, alignment: .trailing)
+            Color.clear.frame(width: 36, height: 1)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+        .opacity(pulse ? 0.35 : 0.9)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+    }
+}
+
+// MARK: - 进程详情弹窗（设计 §9.6 三态：系统 / 用户 App / 已退出）
+
+private struct ProcessDetailSheet: View {
+    var proc: MetricsSnapshot.ProcessInfo
+    var store: StatusStore
+    var look: Look
+    var accent: ModuleAccent
+
+    var body: some View {
+        let gone = store.isGone(proc)
+        let isSystem = store.isSystemProcess(proc)
+        let app = store.runningApp(for: proc)
+        Group {
+            if gone {
+                goneCard
+            } else {
+                detailCard(isSystem: isSystem, app: app)
+            }
+        }
+        .background(look.surface)
+        .presentationBackground(look.surfaceSolid)
+    }
+
+    // 已退出：极简卡片 + 红字提示
+    private var goneCard: some View {
+        VStack(spacing: 0) {
+            header(titleSize: 19)
+            Divider().overlay(look.line)
+            Text("进程 \(proc.pid) 已不在运行。")
+                .font(Fonts.ui(14))
+                .foregroundStyle(Semantic.danger)
+                .padding(.vertical, 34)
+        }
+        .frame(width: 560)
+    }
+
+    private func detailCard(isSystem: Bool, app: NSRunningApplication?) -> some View {
+        VStack(spacing: 0) {
+            header(titleSize: 22)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    summaryLine
+                    Divider().overlay(look.line)
+                    processTree
+                    infoRows(isSystem: isSystem, app: app)
+                }
+                .padding(.horizontal, 24)
+            }
+            footer(isSystem: isSystem)
+        }
+        .frame(width: 640)
+        .frame(maxHeight: 620)
+    }
+
+    private func header(titleSize: CGFloat) -> some View {
+        HStack(spacing: 14) {
+            iconBox
+            Text(proc.name ?? "?")
+                .font(Fonts.ui(titleSize, .semibold))
+                .foregroundStyle(look.text)
+            Spacer()
+            Button {
+                store.detailProc = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(look.textMute)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(look.line.opacity(0.6)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+    }
+
+    @ViewBuilder
+    private var iconBox: some View {
+        if let icon = store.icon(for: proc) {
+            Image(nsImage: icon)
+                .resizable()
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 11))
+        } else {
+            Text("exec")
+                .font(Fonts.mono(9, .bold))
+                .foregroundStyle(look.textMute)
+                .frame(width: 40, height: 40)
+                .background(RoundedRectangle(cornerRadius: 11).fill(look.line.opacity(0.6)))
+        }
+    }
+
+    private var summaryLine: some View {
+        Text(summaryText)
+            .font(Fonts.mono(12))
+            .foregroundStyle(look.textMute)
+            .padding(.bottom, 14)
+    }
+
+    private var summaryText: String {
+        var parts = ["PID \(proc.pid)"]
+        if let cpu = proc.cpu { parts.append(String(format: "CPU %.1f%%", cpu)) }
+        if let mem = proc.memoryBytes {
+            parts.append("MEM " + ByteCountFormatter.string(fromByteCount: Int64(mem), countStyle: .memory))
+        }
+        if proc.ppid == 1 { parts.append("由 launchd 启动") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 进程树行：parent pid > name pid（父进程不在 top 50 时只标 ppid）。
+    private var processTree: some View {
+        HStack(spacing: 7) {
+            let parent = store.parent(of: proc)
+            Text(parent?.name ?? (proc.ppid == 1 ? "launchd" : "PPID"))
+                .foregroundStyle(look.textDim)
+            Text("\(proc.ppid ?? 0)").foregroundStyle(look.textMute)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(look.textMute)
+            Text(proc.name ?? "?").foregroundStyle(look.text)
+            Text("\(proc.pid)").foregroundStyle(look.textMute)
+        }
+        .font(Fonts.mono(13))
+        .padding(.vertical, 14)
+    }
+
+    @ViewBuilder
+    private func infoRows(isSystem: Bool, app: NSRunningApplication?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let app, let bundle = app.bundleURL?.path {
+                infoRow("置信度", "高 · 正在运行的应用")
+                infoRow("识别依据", bundle)
+            }
+            infoRow("子进程", "\(store.childCount(of: proc))")
+            if let launched = app?.launchDate {
+                infoRow("启动时间", launched.formatted(.relative(presentation: .named)))
+            }
+            if let exec = store.executable(of: proc) {
+                infoRow("可执行文件", exec)
+            }
+            if isSystem, let cmd = proc.command {
+                infoRow("命令", cmd)
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            Text(label)
+                .font(Fonts.ui(12.5))
+                .foregroundStyle(look.textMute)
+                .frame(width: 96, alignment: .trailing)
+            Text(value)
+                .font(Fonts.mono(12.5))
+                .foregroundStyle(look.text)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 7)
+    }
+
+    private func footer(isSystem: Bool) -> some View {
+        HStack(spacing: 10) {
+            if isSystem {
+                // 三通道：琥珀色 + 警示图标 + 文字
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 11))
+                    Text("系统进程，无法终止。")
+                        .font(Fonts.ui(12))
+                }
+                .foregroundStyle(Semantic.warn)
+            }
+            Spacer()
+            ghostButton("复制摘要") { store.copySummary(proc) }
+            ghostButton("显示") { store.reveal(proc) }
+            if !isSystem {
+                ghostButton("终止") {
+                    store.detailProc = nil
+                    store.confirmKill = proc
+                }
+                Button {
+                    store.detailProc = nil
+                    store.confirmKill = proc
+                } label: {
+                    Text("强制退出")
+                        .font(Fonts.ui(12.5, .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 15).padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(Semantic.dangerFill))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 14)
+        .padding(.bottom, 18)
+    }
+
+    private func ghostButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Fonts.ui(12.5, .semibold))
+                .foregroundStyle(look.textDim)
+                .padding(.horizontal, 15).padding(.vertical, 8)
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(look.lineStrong, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 }
 
