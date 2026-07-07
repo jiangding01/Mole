@@ -271,7 +271,7 @@ plan 类命令的 `plan_id` 是后续 apply 的凭据：apply 时核心侧校验
 
 ### 4.4 生命周期与健壮性约定
 
-- **取消**：GUI 发 SIGTERM。plan 阶段立即退出；apply 阶段完成"当前单项"后输出 done（`ok:false, summary.cancelled:true`）再退出，不留半删状态。核心侧沿用现有 `trap cleanup_temp_files EXIT INT TERM`。**M0 现状：apply 的优雅取消（trap SIGTERM → 完成当前项 → emit done）尚未实现，是接 GUI 前的必做项**——当前 SIGTERM 直接终止，mole_delete 单项本身原子，但 GUI 收不到终态 done，需靠 history 对账（§4.4 崩溃恢复路径已覆盖此场景）。
+- **取消**：GUI 发 SIGTERM。plan 阶段立即退出；apply 阶段完成"当前单项"后输出 done（`ok:true, summary.cancelled:<剩余未处理项数>`）再退出，不留半删状态。核心侧沿用现有 `trap cleanup_temp_files EXIT INT TERM`。已实现（`robot_clean_apply` 的 TERM/INT trap；bash 会等在途 `mole_delete` 返回后才投递 trap，天然保证"完成当前项"）；bats 回归 `clean apply SIGTERM finishes current item then reports the rest cancelled`。
 - **超时**：GUI 侧对 plan 设 10 分钟兜底、apply 设 30 分钟兜底；超时 = SIGTERM → 3 秒 → SIGKILL，UI 报"操作超时"。核心侧扫描沿用 CLI 既有 wall-clock 预算与检查点（CLAUDE.md 工作规则），超时降级为部分结果 + `insight` 说明跳过了慢扫描。
 - **背压**：Swift 侧按行读取，事件进 `AsyncThrowingStream`（buffer 上限 10k，超限丢弃 progress 保留 item/result）。
 - **崩溃恢复**：子进程非零退出且无 `done` 事件 → GUI 显示统一错误卡片，附 stderr 尾部 50 行进诊断日志。apply 崩溃后，GUI 用 `robot history list` 对账实际删除了哪些。
@@ -752,6 +752,8 @@ GUI 勾选(id) → robot apply → 核心逐项: 重新 stat → should_protect_
 ### 8.5 国际化（i18n）架构
 
 首发语言：**简体中文 + English**；架构上为 zh-Hant / ja 等后续语言零改造预留。
+
+语言解析规则（产品决策，2026-07）：默认跟随系统——仅当系统首选语言为简体中文（`zh-Hans*`）时显示中文，**其余一切（含繁体中文）显示英文**。繁体不自动降级到简体：跟随 Apple 生态回退惯例（zh-Hant 不回退 zh-Hans），且两岸用词差异大（软件/軟體、内存/記憶體），给繁体用户看简体易反感；想看中文的用户可在设置手动切换。zh-Hant 作为第三语言列入 backlog，待全部页面文案迁入 String Catalog、文案稳定后一次性补齐（机器简→繁转换打底 + 台湾用词表校对）。
 
 - **资源**：Xcode String Catalog（`.xcstrings`）单一来源，key 采用 `feature.semantic` 命名（如 `clean.summary.freed`）；禁止代码内硬编码用户可见字符串（SwiftLint 自定义规则拦截 `Text("汉字|[A-Za-z]{2,}...")` 形态的字面量）。
 - **应用内语言切换**：设置项 `自动/简体中文/English`，实现为覆盖 `AppleLanguages` 后提示重启，或运行时自定义 Bundle 加载（选后者，免重启；MoleKit 提供 `L10n.bundle` 间接层）。

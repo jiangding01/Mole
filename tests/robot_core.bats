@@ -194,6 +194,25 @@ setup_apply_plan() {
     [ -e "$BATS_TEST_TMPDIR/data/exists" ] || return 1
 }
 
+@test "clean apply SIGTERM finishes current item then reports the rest cancelled" {
+    require_jq
+    setup_apply_plan
+    # 模拟删除进行中收到 SIGTERM：bash 会等 mole_delete 返回后才跑 trap，
+    # 所以当前项必须完整出账，其余项归入 cancelled，绝不半删。
+    mole_delete() {
+        kill -TERM "$BASHPID"
+        rm -f "$1"
+    }
+    output=$(printf 'cl.a.exists\ncl.a.missing\ncl.a.protected\n' | MOLE_DELETE_MODE=trash robot_clean_apply "$plan_id")
+
+    echo "$output" | jq -se '[.[] | select(.id == "cl.a.exists")][0].status == "trashed"' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "result")] | length == 1' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "done")][0].summary.cancelled == 2' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "done")][0].ok == true' > /dev/null || return 1
+    # 被取消的项一个都没动
+    [ -e "$BATS_TEST_TMPDIR/data/protected" ] || return 1
+}
+
 @test "clean apply fails closed when a safety dependency is missing" {
     require_jq
     setup_apply_plan

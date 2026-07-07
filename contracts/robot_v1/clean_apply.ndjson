@@ -4,6 +4,6 @@
 {"v":1,"event":"result","id":"cl.a.white","status":"skipped_whitelisted","freed_bytes":0}
 {"v":1,"event":"result","id":"cl.a.dry","status":"dry_run","freed_bytes":0}
 {"v":1,"event":"result","id":"cl.a.unknown","status":"failed","freed_bytes":0}
-{"v":1,"event":"done","ok":true,"plan_id":"pl_20260706234528_21138_11596","summary":{"items":6,"failed":1,"skipped":4,"freed_bytes":199500000}}
+{"v":1,"event":"done","ok":true,"plan_id":"pl_20260706234528_21138_11596","summary":{"items":6,"failed":1,"skipped":4,"cancelled":0,"freed_bytes":199500000}}
 {"v":1,"event":"error","code":"E_PLAN_EXPIRED","message":"plan expired, re-run plan","fatal":true}
 {"v":1,"event":"error","code":"E_INTERNAL","message":"safety dependency not loaded: is_whitelisted","fatal":true}

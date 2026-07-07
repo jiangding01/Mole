@@ -435,7 +435,15 @@ robot_whitelist_cmd() {
 
 robot_clean_apply() {
     local plan_id="$1"
-    local item_id row path bytes freed=0 ok=0 skipped=0 failed=0
+    local item_id row path bytes freed=0 ok=0 skipped=0 failed=0 cancelled=0
+
+    # Graceful cancel (design §4.4): SIGTERM/SIGINT set a flag; bash defers
+    # trap delivery until the in-flight command (mole_delete) returns, so the
+    # current item always finishes and gets its result event. Remaining items
+    # are counted as cancelled in the final done event -- never half-deleted,
+    # never unaccounted.
+    local _robot_cancel=0
+    trap '_robot_cancel=1' TERM INT
 
     # Fail closed: if any safety-chain dependency is missing we refuse to run.
     # A missing is_whitelisted would otherwise silently evaluate false and
@@ -464,6 +472,11 @@ robot_clean_apply() {
 
     while IFS= read -r item_id; do
         [[ -n "$item_id" ]] || continue
+
+        if [[ $_robot_cancel -eq 1 ]]; then
+            cancelled=$((cancelled + 1))
+            continue
+        fi
 
         row=$(robot_plan_lookup "$plan_id" "$item_id") || row=""
         if [[ -z "$row" ]]; then
@@ -512,6 +525,8 @@ robot_clean_apply() {
         fi
     done
 
+    trap - TERM INT
+
     robot_emit_done "true" "$plan_id" \
-        "\"items\":$((ok + skipped + failed)),\"failed\":$failed,\"skipped\":$skipped,\"freed_bytes\":$freed"
+        "\"items\":$((ok + skipped + failed)),\"failed\":$failed,\"skipped\":$skipped,\"cancelled\":$cancelled,\"freed_bytes\":$freed"
 }

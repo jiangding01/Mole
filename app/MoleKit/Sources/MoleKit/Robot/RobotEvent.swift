@@ -114,7 +114,8 @@ public struct RobotSummary: Codable, Sendable, Equatable {
     public var failed: Int?
     public var skipped: Int?
     public var freedBytes: Int64?
-    public var cancelled: Bool?
+    /// 取消时未处理的剩余项数（apply 优雅取消：完成当前项 → 汇总退出）。
+    public var cancelled: Int?
 
     enum CodingKeys: String, CodingKey {
         case items, failed, skipped, cancelled
