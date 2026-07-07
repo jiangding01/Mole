@@ -154,19 +154,24 @@ struct AnalyzeView: View {
     }
 
     private var explorer: some View {
-        HStack(alignment: .top, spacing: 14) {
-            listPanel
-                .frame(width: 230)
-            TreemapView(
-                nodes: store.nodes,
-                look: look,
-                accent: accent,
-                hoverId: Binding(get: { store.hoveredPath }, set: { store.hoveredPath = $0 }),
-                onDrill: { store.drill(into: $0) },
-                onAggregate: { store.openAggregate($0) },
-                onReveal: { store.reveal($0) }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 左栏随窗口宽度自适应（24%，钳在 210–300）：小窗不挤压 treemap，
+        // 大窗给长 bundle id 留呼吸空间；余下宽度全部交给 treemap。
+        GeometryReader { geo in
+            HStack(alignment: .top, spacing: 14) {
+                listPanel
+                    .frame(width: min(max(geo.size.width * 0.24, 210), 300))
+                TreemapView(
+                    nodes: store.nodes,
+                    look: look,
+                    accent: accent,
+                    hoverId: Binding(get: { store.hoveredPath }, set: { store.hoveredPath = $0 }),
+                    onDrill: { store.drill(into: $0) },
+                    onAggregate: { store.openAggregate($0) },
+                    onReveal: { store.reveal($0) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
     }
 
