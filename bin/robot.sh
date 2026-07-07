@@ -24,6 +24,7 @@ Usage: robot.sh <domain> <verb> [options]
   clean plan [--sections a,b] [--external <path>]
   clean apply --plan <plan_id>     (item ids on stdin, one per line)
   apps list                        (passthrough: JSON document, not NDJSON)
+  apps files <path> <bundle_id> [name]   read-only leftover discovery (NDJSON items)
   history list [--limit n] [--deletions]
   whitelist list|add|remove --mode clean|optimize [pattern]
 EOF
@@ -164,6 +165,14 @@ run_apps_list() {
     exec "$SCRIPT_DIR/bin/uninstall.sh" --list
 }
 
+run_apps_files() {
+    # Read-only leftover discovery for one app. Passthrough to uninstall.sh,
+    # which owns the discovery helpers (find_app_files + sibling guard) and
+    # emits protocol v1 NDJSON via lib/core/robot.sh.
+    # Usage: mole robot apps files <app_path> <bundle_id> [app_name]
+    exec "$SCRIPT_DIR/bin/uninstall.sh" --robot-files "$@"
+}
+
 run_history_list() {
     local limit=20 deletions=0
     while [[ $# -gt 0 ]]; do
@@ -220,6 +229,7 @@ main() {
         clean/plan) run_clean_plan "$@" ;;
         clean/apply) run_clean_apply "$@" ;;
         apps/list) run_apps_list ;;
+        apps/files) run_apps_files "$@" ;;
         history/list) run_history_list "$@" ;;
         whitelist/list | whitelist/add | whitelist/remove) run_whitelist "$verb" "$@" ;;
         *)

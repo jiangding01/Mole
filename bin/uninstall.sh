@@ -1250,6 +1250,75 @@ uninstall_list_json_escape() {
 # the exact name `mo uninstall` accepts, and human-readable size. Reuses the
 # existing scanner so the output stays in lockstep with what the destructive
 # path sees.
+# Read-only leftover discovery for the GUI (robot apps files, NDJSON).
+# Usage: uninstall_robot_files <app_path> <bundle_id> [app_name]
+# Emits item events for user-level leftovers (risk safe, default-selected)
+# and system-level/diagnostic remnants (risk caution, default-unselected),
+# then a done event with totals. Mirrors the batch-uninstall discovery flow
+# including the shared-bundle-id sibling guard; no deletion code is
+# reachable from this path.
+uninstall_robot_files() {
+    local app_path="${1:-}" bundle_id="${2:-}" app_name="${3:-}"
+    # common.sh 可能已把 SCRIPT_DIR 重定义到仓库根：两个布局都探测。
+    # shellcheck source=lib/core/robot.sh
+    if [[ -f "$SCRIPT_DIR/lib/core/robot.sh" ]]; then
+        source "$SCRIPT_DIR/lib/core/robot.sh"
+    else
+        source "$SCRIPT_DIR/../lib/core/robot.sh"
+    fi
+
+    if [[ -z "$app_path" || ! -d "$app_path" ]]; then
+        robot_emit_error "E_INTERNAL" "app path not found: $app_path" "true"
+        return 1
+    fi
+    if [[ -z "$app_name" ]]; then
+        app_name="${app_path##*/}"
+        app_name="${app_name%.app}"
+    fi
+
+    # Sibling guard mirrors lib/uninstall/batch.sh: a surviving install with
+    # the same bundle id still owns bundle-id-keyed paths, so discovery must
+    # narrow to the .app basename and skip shared caches (fail-safe).
+    local sibling_survives=0 discovery_app_name="$app_name"
+    if uninstall_bundle_id_has_surviving_sibling "$bundle_id" "$app_path"; then
+        sibling_survives=1
+        discovery_app_name="${app_path##*/}"
+        discovery_app_name="${discovery_app_name%.app}"
+    fi
+
+    local user_files="" system_files="" diag_user="" diag_system=""
+    user_files=$(MOLE_UNINSTALL_SIBLING_SURVIVES="$sibling_survives" find_app_files "$bundle_id" "$discovery_app_name" "$app_path" || true)
+    if [[ $sibling_survives -eq 0 ]]; then
+        diag_user=$(get_diagnostic_report_paths_for_app "$app_path" "$discovery_app_name" "$HOME/Library/Logs/DiagnosticReports" || true)
+        diag_system=$(get_diagnostic_report_paths_for_app "$app_path" "$discovery_app_name" "/Library/Logs/DiagnosticReports" || true)
+        system_files=$(find_app_system_files "$bundle_id" "$discovery_app_name" || true)
+    fi
+
+    local _rf_index=0 _rf_count=0 _rf_bytes=0
+    _robot_files_emit_group() { # $1 newline paths, $2 section, $3 risk, $4 default_selected
+        local p kb bytes
+        while IFS= read -r p; do
+            [[ -n "$p" && -e "$p" ]] || continue
+            _rf_index=$((_rf_index + 1))
+            kb=$(calculate_total_size "$p" 2> /dev/null || echo 0)
+            bytes=$((kb * 1024))
+            robot_emit_item "ap.$_rf_index" "$2" "$p" "$p" "$bytes" "$3" "$4"
+            _rf_count=$((_rf_count + 1))
+            _rf_bytes=$((_rf_bytes + bytes))
+        done <<< "$1"
+    }
+    _robot_files_emit_group "$user_files" "user" "safe" "true"
+    _robot_files_emit_group "$diag_user" "diagnostics" "safe" "true"
+    # System-level remnants are review-only in the CLI flow; surface them
+    # unselected so the GUI keeps the same "default not deleted" posture.
+    _robot_files_emit_group "$system_files" "system" "caution" "false"
+    _robot_files_emit_group "$diag_system" "system" "caution" "false"
+    unset -f _robot_files_emit_group
+
+    robot_emit_done "true" "" "\"items\":$_rf_count,\"bytes_total\":$_rf_bytes"
+    return 0
+}
+
 uninstall_list_apps() {
     local apps_file=""
     if ! apps_file=$(scan_applications); then
@@ -1360,6 +1429,14 @@ uninstall_list_apps() {
 }
 
 main() {
+    # Read-only robot mode short-circuits before logging and any destructive
+    # code: leftover discovery for the GUI (mole robot apps files).
+    if [[ "${1:-}" == "--robot-files" ]]; then
+        shift
+        uninstall_robot_files "$@"
+        return $?
+    fi
+
     # Set current command for operation logging
     export MOLE_CURRENT_COMMAND="uninstall"
     log_operation_session_start "uninstall"

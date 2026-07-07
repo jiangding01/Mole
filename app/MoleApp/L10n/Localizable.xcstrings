@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "apps.badge.review": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需复核"
+          }
+        }
+      }
+    },
     "apps.batch.clear": {
       "extractionState": "manual",
       "localizations": {
@@ -137,6 +154,57 @@
         }
       }
     },
+    "apps.leftovers.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No leftovers found"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未发现残留文件"
+          }
+        }
+      }
+    },
+    "apps.leftovers.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leftover scan failed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "残留扫描失败"
+          }
+        }
+      }
+    },
+    "apps.leftovers.loading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanning leftovers…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在扫描残留…"
+          }
+        }
+      }
+    },
     "apps.loading.sub": {
       "extractionState": "manual",
       "localizations": {
@@ -188,6 +256,23 @@
         }
       }
     },
+    "apps.row.leftoverSummary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove app + %lld/%lld leftovers · total %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除本体 + 残留 %lld/%lld 项 · 共 %@"
+          }
+        }
+      }
+    },
     "apps.row.reveal": {
       "extractionState": "manual",
       "localizations": {
@@ -201,6 +286,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "在 Finder 中显示"
+          }
+        }
+      }
+    },
+    "apps.row.reviewNote": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "· %@ to verify (off by default)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "· %@ 需复核（默认不删）"
           }
         }
       }

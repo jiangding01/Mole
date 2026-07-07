@@ -207,13 +207,7 @@ struct AppsView: View {
                         .padding(.vertical, 48)
                 } else {
                     ForEach(store.visibleApps) { app in
-                        AppRow(app: app,
-                               icon: store.icon(for: app),
-                               selected: store.selection.contains(app.id),
-                               look: look,
-                               accent: accent,
-                               onToggle: { store.toggleSelection(app) },
-                               onReveal: { store.reveal(app) })
+                        AppRow(app: app, store: store, look: look, accent: accent)
                     }
                 }
             }
@@ -279,23 +273,53 @@ struct AppsView: View {
     }
 }
 
-// MARK: - 行
+// MARK: - 行（设计稿 AppCard：点击行体展开残留分组，勾选进入批量；左侧 3px 选中色条）
 
 private struct AppRow: View {
     var app: InstalledApp
-    var icon: NSImage
-    var selected: Bool
+    var store: AppsStore
     var look: Look
     var accent: ModuleAccent
-    var onToggle: () -> Void
-    var onReveal: () -> Void
 
     @State private var hovering = false
 
+    private var selected: Bool { store.selection.contains(app.id) }
+    private var isExpanded: Bool { store.expanded.contains(app.id) }
+
     var body: some View {
+        VStack(spacing: 0) {
+            headerRow
+            if selected { summaryLine }
+            if isExpanded { expansion }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 13)
+                .fill(selected ? AnyShapeStyle(accent.a.opacity(0.06)) : AnyShapeStyle(look.surface))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 13)
+                .stroke(selected ? accent.a.opacity(0.45) : (hovering ? look.lineStrong : look.line), lineWidth: 1)
+        )
+        .overlay(alignment: .leading) {
+            if selected {
+                // 设计稿：选中卡片左侧 3px 强调色条
+                UnevenRoundedRectangle(topLeadingRadius: 13, bottomLeadingRadius: 13)
+                    .fill(accent.gradient)
+                    .frame(width: 3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .onHover { hovering = $0 }
+    }
+
+    // MARK: 头行
+
+    private var headerRow: some View {
         HStack(spacing: 13) {
-            checkbox
-            Image(nsImage: icon)
+            CheckBox(checked: selected, accent: accent, look: look, size: 21) {
+                store.toggleSelection(app)
+            }
+            Image(nsImage: store.icon(for: app))
                 .resizable()
                 .frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 2) {
@@ -320,8 +344,12 @@ private struct AppRow: View {
                 .font(Fonts.mono(13))
                 .foregroundStyle(look.textDim)
                 .frame(minWidth: 72, alignment: .trailing)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(look.textMute)
+                .rotationEffect(.degrees(isExpanded ? 180 : 0))
             Menu {
-                Button(L("apps.row.reveal"), action: onReveal)
+                Button(L("apps.row.reveal")) { store.reveal(app) }
                 Button(L("apps.row.copyBundleId")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(app.bundleId, forType: .string)
@@ -333,34 +361,171 @@ private struct AppRow: View {
             .frame(width: 28)
         }
         .padding(.horizontal, 15).padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 13)
-                .fill(selected ? AnyShapeStyle(accent.a.opacity(0.07)) : AnyShapeStyle(look.surface))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 13)
-                .stroke(selected ? accent.a.opacity(0.45) : (hovering ? look.lineStrong : look.line), lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 13))
-        .onTapGesture(perform: onToggle)
-        .onHover { hovering = $0 }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // 设计稿交互：行体点击 = 展开/收起（勾选走左侧 checkbox）
+            withAnimation(.easeOut(duration: 0.2)) { store.toggleExpanded(app) }
+        }
         .pointingCursor()
     }
 
-    private var checkbox: some View {
-        RoundedRectangle(cornerRadius: 6)
-            .fill(selected ? AnyShapeStyle(accent.gradient) : AnyShapeStyle(.clear))
-            .frame(width: 21, height: 21)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(selected ? accent.a : look.lineStrong, lineWidth: 1.5)
-            )
-            .overlay {
-                if selected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(accent.onAccent)
+    // MARK: 选中摘要（设计稿：移除本体 + 残留 x/y 项 · 共 SIZE）
+
+    @ViewBuilder
+    private var summaryLine: some View {
+        if let items = store.loadedLeftovers(for: app) {
+            let checked = store.checkedLeftoverCount(for: app)
+            let totalBytes = Int64(app.sizeBytes ?? 0) + store.checkedLeftoverBytes(for: app)
+            let reviewBytes = store.uncheckedReviewBytes(for: app)
+            HStack(spacing: 6) {
+                Text(L("apps.row.leftoverSummary", Int64(checked), Int64(items.count), fmtBytes(totalBytes)))
+                    .foregroundStyle(accent.b)
+                    .fontWeight(.semibold)
+                if reviewBytes > 0 {
+                    Text(L("apps.row.reviewNote", fmtBytes(reviewBytes)))
+                        .foregroundStyle(Semantic.warn)
+                }
+                Spacer()
+            }
+            .font(Fonts.ui(12))
+            .padding(.leading, 49).padding(.trailing, 15).padding(.bottom, 10)
+        }
+    }
+
+    // MARK: 展开区（分组残留清单）
+
+    @ViewBuilder
+    private var expansion: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().overlay(look.line)
+            switch store.leftovers[app.id] {
+            case .loading?, nil:
+                HStack(spacing: 8) {
+                    RingSpinner(accent: accent, size: 14, lineWidth: 2)
+                    Text(L("apps.leftovers.loading"))
+                        .font(Fonts.mono(11))
+                        .foregroundStyle(look.textMute)
+                }
+                .padding(14)
+            case let .failed(reason)?:
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Semantic.warn)
+                    Text("\(L("apps.leftovers.failed"))：\(reason)")
+                        .font(Fonts.mono(11))
+                        .foregroundStyle(look.textMute)
+                        .lineLimit(2)
+                    Button(L("common.retry")) { store.retryLeftovers(for: app) }
+                        .buttonStyle(.plain)
+                        .pointingCursor()
+                        .font(Fonts.ui(11, .semibold))
+                        .foregroundStyle(accent.b)
+                }
+                .padding(14)
+            case .loaded?:
+                let groups = store.groupedLeftovers(for: app)
+                if groups.isEmpty {
+                    Text(L("apps.leftovers.empty"))
+                        .font(Fonts.ui(12))
+                        .foregroundStyle(look.textMute)
+                        .padding(14)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(groups, id: \.group) { group in
+                            Fonts.eyebrow(group.group, size: 10)
+                                .foregroundStyle(look.textMute)
+                                .padding(.horizontal, 4).padding(.top, 8).padding(.bottom, 3)
+                            ForEach(group.items, id: \.id) { item in
+                                leftoverRow(item)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 6)
                 }
             }
+        }
+    }
+
+    private func leftoverRow(_ item: RobotItem) -> some View {
+        let checked = store.checkedLeftovers[app.id]?.contains(item.id) ?? false
+        return HStack(spacing: 11) {
+            CheckBox(checked: checked, accent: accent, look: look, size: 18) {
+                store.toggleLeftover(app, item)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(leftoverName(item))
+                    .font(Fonts.ui(12))
+                    .foregroundStyle(look.text)
+                    .lineLimit(1)
+                Text(abbreviated(item.path ?? ""))
+                    .font(Fonts.mono(10.5))
+                    .foregroundStyle(look.textMute)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            if item.risk == "caution" {
+                Text(L("apps.badge.review"))
+                    .font(Fonts.ui(10, .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Semantic.warn.opacity(0.12)))
+                    .foregroundStyle(Semantic.warn)
+            }
+            Text(fmtBytes(item.bytes ?? 0))
+                .font(Fonts.mono(11.5))
+                .foregroundStyle(look.textMute)
+                .frame(minWidth: 56, alignment: .trailing)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .onTapGesture { store.toggleLeftover(app, item) }
+        .onHover { _ in }
+        .pointingCursor()
+    }
+
+    private func leftoverName(_ item: RobotItem) -> String {
+        let path = item.path ?? item.label
+        return (path as NSString).lastPathComponent
+    }
+
+    private func abbreviated(_ path: String) -> String {
+        (path as NSString).abbreviatingWithTildeInPath
+    }
+
+    private func fmtBytes(_ v: Int64) -> String {
+        guard v > 0 else { return "--" }
+        return ByteCountFormatter.string(fromByteCount: v, countStyle: .file)
+    }
+}
+
+/// 设计稿样式复选框（圆角方块，选中 = accent 渐变 + 对钩）。
+private struct CheckBox: View {
+    var checked: Bool
+    var accent: ModuleAccent
+    var look: Look
+    var size: CGFloat
+    var onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            RoundedRectangle(cornerRadius: size * 0.29)
+                .fill(checked ? AnyShapeStyle(accent.gradient) : AnyShapeStyle(.clear))
+                .frame(width: size, height: size)
+                .overlay(
+                    RoundedRectangle(cornerRadius: size * 0.29)
+                        .stroke(checked ? accent.a : look.lineStrong, lineWidth: 1.5)
+                )
+                .overlay {
+                    if checked {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: size * 0.52, weight: .bold))
+                            .foregroundStyle(accent.onAccent)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingCursor()
     }
 }
