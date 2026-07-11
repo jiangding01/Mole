@@ -7,3 +7,6 @@ Resources/mole-core.sha256
 DerivedData/
 # XcodeGen 从 Project.yml 的 info.properties 生成
 MoleApp/Info.plist
+# Xcode 个人状态（scheme 记录等）
+.swiftpm/
+xcuserdata/
