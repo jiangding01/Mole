@@ -223,6 +223,22 @@ setup_apply_plan() {
     echo "$output" | jq -se '.[-1].event == "done" and .[-1].summary.items == 2' > /dev/null || return 1
 }
 
+@test "robot_history_deletions survives non-numeric size_kb entries" {
+    require_jq
+    # file_ops.sh writes size_kb="unknown" when du sizing is sudo-blocked;
+    # the stream must keep flowing past it and still emit the done event.
+    printf '2026-07-08T00:21:25+0800\ttrash\tunknown\tok\t/some/unreadable/path\n' > "$BATS_TEST_TMPDIR/deletions.log"
+    printf '2026-07-08T00:21:26+0800\ttrash\t2048\tok\t/some/later/path\n' >> "$BATS_TEST_TMPDIR/deletions.log"
+    run robot_history_deletions "$BATS_TEST_TMPDIR/deletions.log" 100
+    [ "$status" -eq 0 ] || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")] | length == 2' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][0].bytes == 0' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][0].size_unknown == true' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][1].bytes == 2097152' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][1] | has("size_unknown") | not' > /dev/null || return 1
+    echo "$output" | jq -se '.[-1].event == "done" and .[-1].summary.items == 2' > /dev/null || return 1
+}
+
 @test "robot_history_sessions parses session end markers" {
     require_jq
     cat > "$BATS_TEST_TMPDIR/operations.log" << 'EOF'
