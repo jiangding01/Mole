@@ -156,3 +156,23 @@ PLIST
     # 拒绝发生在建计划之前：不留计划文件
     [ -z "$(ls "$HOME/.cache/mole/robot" 2>/dev/null)" ] || return 1
 }
+
+@test "uninstall_robot_same_file treats same-inode path spellings as one app (firmlink guard)" {
+    # /Volumes/<boot volume> is an APFS firmlink alias of / that pwd -P cannot
+    # collapse; on a stock install every app is visible twice. The guard must
+    # compare device:inode, not path strings (regression: every app reported
+    # zero leftovers because it "found" itself as a surviving sibling).
+    # Firmlinks cannot be created in a test env; a symlink alias exercises the
+    # same stat identity path, and the real firmlink case is verified on-device.
+    eval "$(sed -n '/^uninstall_robot_same_file()/,/^}/p' "$REPO_DIR/bin/uninstall.sh")"
+
+    mkdir -p "$BATS_TEST_TMPDIR/real/Target.app"
+    ln -s "$BATS_TEST_TMPDIR/real" "$BATS_TEST_TMPDIR/alias"
+    uninstall_robot_same_file "$BATS_TEST_TMPDIR/real/Target.app" "$BATS_TEST_TMPDIR/alias/Target.app" || return 1
+
+    mkdir -p "$BATS_TEST_TMPDIR/real/Other.app"
+    ! uninstall_robot_same_file "$BATS_TEST_TMPDIR/real/Target.app" "$BATS_TEST_TMPDIR/real/Other.app" || return 1
+
+    # 任一路径不存在 -> 判否（安全降级：绝不因 stat 失败而跳过真副本检查）
+    ! uninstall_robot_same_file "$BATS_TEST_TMPDIR/real/Target.app" "$BATS_TEST_TMPDIR/nope" || return 1
+}

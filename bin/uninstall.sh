@@ -1273,6 +1273,21 @@ uninstall_robot_bundle_id_of() {
 # (empty in robot mode — relying on it here would be fail-open, the exact
 # PR #874/#875 shape), so this probes the filesystem directly, including
 # /Volumes copies.
+# True when both paths resolve to the same on-disk directory (same device
+# and inode). pwd -P cannot collapse APFS firmlink aliases — on every stock
+# macOS install "/Volumes/<boot volume name>/Applications/X.app" is the SAME
+# app as "/Applications/X.app" yet keeps its /Volumes spelling through pwd -P,
+# so a string comparison alone flags every installed app as its own surviving
+# sibling and silently disables all leftover discovery (GUI showed zero
+# leftovers for every app). Genuine external-volume copies live on a different
+# device and never pass this check.
+uninstall_robot_same_file() {
+    local a b
+    a=$(stat -f '%d:%i' "$1" 2> /dev/null) || return 1
+    b=$(stat -f '%d:%i' "$2" 2> /dev/null) || return 1
+    [[ -n "$a" && "$a" == "$b" ]]
+}
+
 uninstall_robot_sibling_names() {
     local bundle_id="$1" app_path="$2"
     [[ -z "$bundle_id" || "$bundle_id" == "unknown" ]] && return 0
@@ -1288,6 +1303,7 @@ uninstall_robot_sibling_names() {
             [[ "$candidate" == "$app_path" ]] && continue
             cand_real=$(cd "$candidate" 2> /dev/null && pwd -P || printf '%s' "$candidate")
             [[ "$cand_real" == "$self_real" ]] && continue
+            uninstall_robot_same_file "$candidate" "$app_path" && continue
             cid=$(uninstall_robot_bundle_id_of "$candidate" 2> /dev/null || true)
             [[ -n "$cid" && "$cid" == "$bundle_id" ]] || continue
             base="${candidate##*/}"
