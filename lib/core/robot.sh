@@ -305,7 +305,7 @@ robot_scan_export_delta() {
 robot_history_deletions() {
     local log_file="$1" limit="${2:-100}"
     local count=0 n=0
-    local ts mode size_kb status path bytes
+    local ts mode size_kb status path bytes size_flag
 
     [[ -f "$log_file" ]] || {
         robot_emit_done "true" "" "\"items\":0"
@@ -315,9 +315,17 @@ robot_history_deletions() {
     while IFS=$'\t' read -r ts mode size_kb status path; do
         [[ -n "$path" ]] || continue
         n=$((n + 1))
-        bytes=$((${size_kb:-0} * 1024))
-        robot_emit "item" "$(printf '"id":"hist.del.%s","section":"deletions","label":"%s","path":"%s","bytes":%s,"kind":"log_entry","detail":"%s %s %s"' \
-            "$n" "$(robot_json_escape "$path")" "$(robot_json_escape "$path")" "$bytes" \
+        # file_ops.sh writes size_kb="unknown" when du sizing is blocked;
+        # arithmetic on it would abort the stream under set -u.
+        if [[ "$size_kb" =~ ^[0-9]+$ ]]; then
+            bytes=$((size_kb * 1024))
+            size_flag=""
+        else
+            bytes=0
+            size_flag=',"size_unknown":true'
+        fi
+        robot_emit "item" "$(printf '"id":"hist.del.%s","section":"deletions","label":"%s","path":"%s","bytes":%s%s,"kind":"log_entry","detail":"%s %s %s"' \
+            "$n" "$(robot_json_escape "$path")" "$(robot_json_escape "$path")" "$bytes" "$size_flag" \
             "$(robot_json_escape "$ts")" "$(robot_json_escape "$mode")" "$(robot_json_escape "$status")")"
         count=$((count + 1))
     done < <(tail -n "$limit" "$log_file")
