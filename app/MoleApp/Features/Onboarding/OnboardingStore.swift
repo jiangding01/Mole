@@ -23,6 +23,8 @@ final class OnboardingStore {
 
     private(set) var isPresented = false
     private(set) var step = 1 // 1...3
+    /// 最近一次步骤切换的方向（true=前进），供 View 决定滑动转场的进出边。
+    private(set) var advancing = true
     private(set) var fdaPhase: FdaPhase = .idle
 
     /// 首启判定用的 UserDefaults key（写入即代表引导已完成，不再自动弹出）。
@@ -47,6 +49,7 @@ final class OnboardingStore {
 
     private func present() {
         step = 1
+        advancing = true
         // 进入时若已授权，FDA 步骤直接呈现 ok 态（不再显示 CTA）。
         fdaPhase = probe.hasFullDiskAccess() ? .granted : .idle
         isPresented = true
@@ -56,11 +59,13 @@ final class OnboardingStore {
 
     /// STEP 1 →2。
     func start() {
+        advancing = true
         step = 2
     }
 
     /// 返回上一步（下限第 1 步）。
     func back() {
+        advancing = false
         step = max(1, step - 1)
     }
 
@@ -92,7 +97,10 @@ final class OnboardingStore {
                 // 让「已授权」态展示片刻，再自动推进。
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { return }
-                if step == 2 { step = 3 }
+                if step == 2 {
+                    advancing = true
+                    step = 3
+                }
                 return
             }
         }
@@ -103,6 +111,7 @@ final class OnboardingStore {
     func skipFda() {
         fdaPollTask?.cancel()
         fdaPollTask = nil
+        advancing = true
         step = 3
     }
 

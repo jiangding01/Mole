@@ -66,24 +66,32 @@ struct OnboardingView: View {
         .shadow(color: .black.opacity(0.7), radius: 60, y: 25)
     }
 
-    /// 三步横向滑轨；reduceMotion 时改为当前步交叉淡入。
-    @ViewBuilder
+    /// 步骤区：只渲染当前步（高度随内容自适应），步间按 `store.advancing`
+    /// 决定滑入/滑出边，还原设计稿的横向滑轨观感；reduceMotion 时交叉淡入。
+    ///
+    /// （曾经的 bug：三步平铺进 HStack 再整体 offset，但外层 frame 默认居中对齐，
+    /// 可见窗口正对中间步——第 1 步显示成 FDA 步、第 3 步移出滑轨直接空白。）
     private var track: some View {
-        if reduceMotion {
+        ZStack {
             stepView(store.step)
                 .frame(width: cardWidth)
                 .id(store.step)
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.25), value: store.step)
-        } else {
-            HStack(spacing: 0) {
-                stepView(1).frame(width: cardWidth)
-                stepView(2).frame(width: cardWidth)
-                stepView(3).frame(width: cardWidth)
-            }
-            .offset(x: -CGFloat(store.step - 1) * cardWidth)
-            .animation(.timingCurve(0.4, 0, 0.2, 1, duration: 0.45), value: store.step)
+                .transition(stepTransition)
         }
+        .animation(
+            reduceMotion
+                ? .easeInOut(duration: 0.25)
+                : .timingCurve(0.4, 0, 0.2, 1, duration: 0.45),
+            value: store.step
+        )
+    }
+
+    private var stepTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: store.advancing ? .trailing : .leading).combined(with: .opacity),
+            removal: .move(edge: store.advancing ? .leading : .trailing).combined(with: .opacity)
+        )
     }
 
     @ViewBuilder
