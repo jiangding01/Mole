@@ -24,6 +24,13 @@ public final class ScanSession {
         public var insights: [RobotInsight]
         public var createdAt: Date
 
+        public init(planId: String, items: [RobotItem], insights: [RobotInsight], createdAt: Date) {
+            self.planId = planId
+            self.items = items
+            self.insights = insights
+            self.createdAt = createdAt
+        }
+
         /// 与核心侧 plan 文件的 30 分钟有效期对齐（§4.3 done.plan_id）。
         public func isExpired(now: Date = Date(), ttl: TimeInterval = 30 * 60) -> Bool {
             now.timeIntervalSince(createdAt) > ttl

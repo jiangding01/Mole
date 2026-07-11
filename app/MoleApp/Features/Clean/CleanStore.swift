@@ -22,8 +22,13 @@ final class CleanStore {
     struct Group: Identifiable {
         let section: String
         var items: [RobotItem]
-        var id: String { section }
-        var bytes: Int64 { items.compactMap(\.bytes).reduce(0, +) }
+        var id: String {
+            section
+        }
+
+        var bytes: Int64 {
+            items.compactMap(\.bytes).reduce(0, +)
+        }
     }
 
     struct LogEntry: Identifiable, Equatable {
@@ -62,6 +67,19 @@ final class CleanStore {
     private var itemsById: [String: RobotItem] = [:]
     private var cancelRequested = false
 
+    /// 会话资产（由 CleanView 注入）：智能扫描的 clean 域 plan 可零重扫复用，
+    /// 本页自扫结果也写回，供其它入口复用（设计 §5.0 数据一份、两处视图）。
+    var scanSession: ScanSession?
+
+    // MARK: - 会话复用（§5.0 正向闭环）
+
+    /// 进入清理页时：若会话里已有未过期的 clean plan（多来自智能扫描），
+    /// 直接摊到 confirm 态复用，不重扫。仅在 idle 态生效，避免打断进行中的流程。
+    func adoptSessionPlanIfAvailable() {
+        guard phase == .idle, let plan = scanSession?.activePlan(for: .clean) else { return }
+        ingestPlan(planId: plan.planId, items: plan.items, insights: plan.insights)
+    }
+
     // MARK: - 扫描
 
     func startScan() {
@@ -83,9 +101,9 @@ final class CleanStore {
                     guard let self else { return }
                     switch event {
                     case let .progress(progress):
-                        if let bytes = progress.bytesFound { self.scanBytesFound = bytes }
-                        if let current = progress.current { self.scanCurrent = current }
-                        if let section = progress.section { self.scanSection = section }
+                        if let bytes = progress.bytesFound { scanBytesFound = bytes }
+                        if let current = progress.current { scanCurrent = current }
+                        if let section = progress.section { scanSection = section }
                     case let .item(item):
                         items.append(item)
                     case let .insight(insight):
@@ -102,19 +120,27 @@ final class CleanStore {
                 return
             }
             guard let self else { return }
-            if self.cancelRequested {
-                self.phase = .idle
+            if cancelRequested {
+                phase = .idle
                 return
             }
             if let robotError {
-                self.phase = .failed("\(robotError.code): \(robotError.message ?? "")")
+                phase = .failed("\(robotError.code): \(robotError.message ?? "")")
                 return
             }
             guard let donePlanId else {
-                self.phase = .failed("协议流异常结束")
+                phase = .failed("协议流异常结束")
                 return
             }
-            self.ingestPlan(planId: donePlanId, items: items, insights: collectedInsights)
+            ingestPlan(planId: donePlanId, items: items, insights: collectedInsights)
+            // 自扫结果写回会话：其它入口（智能页/再入本页）零重扫复用（§5.0）。
+            scanSession?.store(
+                ScanSession.DomainPlan(
+                    planId: donePlanId, items: items,
+                    insights: collectedInsights, createdAt: Date()
+                ),
+                for: .clean
+            )
         }
     }
 
@@ -167,14 +193,24 @@ final class CleanStore {
 
     func toggleGroup(_ group: Group) {
         if groupChecked(group) {
-            for item in group.items { checked.remove(item.id) }
+            for item in group.items {
+                checked.remove(item.id)
+            }
         } else {
-            for item in group.items { checked.insert(item.id) }
+            for item in group.items {
+                checked.insert(item.id)
+            }
         }
     }
 
-    var totalBytes: Int64 { groups.reduce(0) { $0 + $1.bytes } }
-    var checkedCount: Int { checked.count }
+    var totalBytes: Int64 {
+        groups.reduce(0) { $0 + $1.bytes }
+    }
+
+    var checkedCount: Int {
+        checked.count
+    }
+
     var checkedBytes: Int64 {
         groups.flatMap(\.items).filter { checked.contains($0.id) }.compactMap(\.bytes).reduce(0, +)
     }
@@ -205,12 +241,12 @@ final class CleanStore {
                     guard let self else { return }
                     switch event {
                     case let .result(result):
-                        let item = self.itemsById[result.id]
+                        let item = itemsById[result.id]
                         let path = item?.path ?? item?.label ?? result.id
                         let bytes = result.freedBytes ?? item?.bytes ?? 0
                         let ok = ["trashed", "deleted", "dry_run"].contains(result.status)
-                        if ok { self.freed += bytes }
-                        self.log.append(.init(
+                        if ok { freed += bytes }
+                        log.append(.init(
                             id: result.id,
                             name: (path as NSString).abbreviatingWithTildeInPath,
                             bytes: bytes, ok: ok, status: result.status
@@ -228,16 +264,16 @@ final class CleanStore {
             }
             guard let self else { return }
             if let robotError {
-                self.phase = .failed("\(robotError.code): \(robotError.message ?? "")")
+                phase = .failed("\(robotError.code): \(robotError.message ?? "")")
                 return
             }
             guard let summary else {
                 // 取消时核心保证发 done 再退出；连 done 都没有说明异常终止
-                self.phase = .failed("协议流异常结束")
+                phase = .failed("协议流异常结束")
                 return
             }
-            self.phase = .done(
-                freed: summary.freedBytes ?? self.freed,
+            phase = .done(
+                freed: summary.freedBytes ?? freed,
                 failed: summary.failed ?? 0,
                 skipped: summary.skipped ?? 0,
                 cancelled: summary.cancelled ?? 0

@@ -4,9 +4,11 @@ import SwiftUI
 /// 清理页（设计 §5.1 / 设计稿 clean 页）：
 /// idle（光谱环呼吸 + 三承诺 + CTA）→ scanning（扫描头 + 实时读数 + 当前路径）
 /// → confirm（环收束甜甜圈 + 分组勾选清单）→ executing（环放空 + 打勾清单）
-/// → done / empty。TODO(后续)：项目产物 / 安装包子 tab、智能扫描带结果进入。
+/// → done / empty。进入时复用智能扫描已产出的 clean plan（§5.0）。
+/// TODO(后续)：项目产物 / 安装包子 tab。
 struct CleanView: View {
     @Environment(CleanStore.self) private var store
+    @Environment(ScanSession.self) private var scanSession
     @State private var showsHistory = false
     private let look = Look.ink
     private let accent = ModuleAccent.clean
@@ -18,6 +20,11 @@ struct CleanView: View {
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
+        .task {
+            // 会话正向闭环（§5.0）：注入会话资产，复用智能扫描已产出的 clean plan。
+            store.scanSession = scanSession
+            store.adoptSessionPlanIfAvailable()
+        }
     }
 
     private var pageHeader: some View {
@@ -189,8 +196,10 @@ struct CleanView: View {
         let total = max(1, store.totalBytes)
         let palette: [Color] = [accent.a, accent.b, accent.a.opacity(0.6), accent.b.opacity(0.6)]
         return store.groups.enumerated().map { index, group in
-            RingSegment(fraction: Double(group.bytes) / Double(total),
-                        color: palette[index % palette.count])
+            RingSegment(
+                fraction: Double(group.bytes) / Double(total),
+                color: palette[index % palette.count]
+            )
         }
     }
 

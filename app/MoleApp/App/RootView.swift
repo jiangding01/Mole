@@ -5,12 +5,19 @@ import SwiftUI
 /// 左上 wordmark（Mole FOR MAC）· 中央胶囊 6 tab（选中 = 当前模块 accent 渐变胶囊）
 /// · 右上 历史/设置 两个独立圆钮。整站随激活页 re-tint（accent 氛围光）。
 struct RootView: View {
-    @State private var selectedTab: MainTab = .smartScan
+    /// 会话级导航路由（设计 §5.0）：胶囊、wordmark、智能页结论卡共用同一切页入口。
+    @State private var router = Router()
     @State private var showsHistory = false
     @State private var showsSettings = false
 
     /// 扫描结果跨页共享的会话资产（设计 §5.0）。
     @State private var scanSession = ScanSession()
+
+    /// 智能扫描首页 Store（会话层，跨 tab 保活；设计 §6.1）。
+    @State private var smartScanStore = SmartScanStore()
+
+    /// FDA 未授权全局横幅 Store（设计 §7.1）：topNav 之下、main 之上。
+    @State private var fdaBannerStore = FDABannerStore()
 
     /// 各页 Store 提升到会话层（设计 §5.0 会话共享）：切 tab 只是视图重建，
     /// 状态与在途扫描/清单保留，再次进入即时呈现、不重扫。
@@ -30,17 +37,25 @@ struct RootView: View {
 
     private let look = Look.ink
     private var accent: ModuleAccent {
-        Theme.moduleAccent(for: selectedTab)
+        Theme.moduleAccent(for: router.tab)
     }
 
     var body: some View {
         ZStack(alignment: .top) {
             look.background(accent: accent)
                 .ignoresSafeArea()
-                .animation(.easeInOut(duration: 0.4), value: selectedTab) // 氛围光 400ms 交叉淡入
+                .animation(.easeInOut(duration: 0.4), value: router.tab) // 氛围光 400ms 交叉淡入
 
-            currentPage
-                .padding(.top, 64)
+            // topNav 之下、main 之上（设计 L97-108）：横幅在流内，出现时向下推开主内容。
+            VStack(spacing: 12) {
+                if fdaBannerStore.isVisible {
+                    FDABannerView(store: fdaBannerStore)
+                        .padding(.horizontal, 24)
+                        .transition(.opacity)
+                }
+                currentPage
+            }
+            .padding(.top, 64)
 
             topBar
                 .padding(.horizontal, 20)
@@ -53,7 +68,9 @@ struct RootView: View {
                     .transition(.opacity)
             }
         }
+        .environment(router)
         .environment(scanSession)
+        .environment(smartScanStore)
         .environment(cleanStore)
         .environment(appsStore)
         .environment(updatesStore)
@@ -65,12 +82,15 @@ struct RootView: View {
         .environment(onboardingStore)
         .sheet(isPresented: $showsHistory) { HistoryView() }
         .sheet(isPresented: $showsSettings) { SettingsView() }
-        .onAppear { onboardingStore.presentIfFirstLaunch() }
+        .onAppear {
+            onboardingStore.presentIfFirstLaunch()
+            fdaBannerStore.probe()
+        }
     }
 
     @ViewBuilder
     private var currentPage: some View {
-        switch selectedTab {
+        switch router.tab {
         case .smartScan: SmartScanView()
         case .clean: CleanView()
         case .apps: AppsView()
@@ -96,7 +116,7 @@ struct RootView: View {
 
     private var wordmark: some View {
         Button {
-            selectedTab = .smartScan
+            router.go(.smartScan)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("Mole")
@@ -128,23 +148,22 @@ struct RootView: View {
         HStack(spacing: 2) {
             ForEach(MainTab.allCases) { tab in
                 let tabAccent = Theme.moduleAccent(for: tab)
+                let isSelected = tab == router.tab
                 Button {
-                    withAnimation(.spring(duration: 0.32, bounce: 0.25)) {
-                        selectedTab = tab
-                    }
+                    router.go(tab) // Router.go 已内建同款 spring，避免双重动画
                 } label: {
                     Text(tab.title)
-                        .font(Fonts.ui(13, tab == selectedTab ? .semibold : .medium))
+                        .font(Fonts.ui(13, isSelected ? .semibold : .medium))
                         .padding(.horizontal, 18)
                         .padding(.vertical, 8)
                         .background {
                             // 设计稿：选中 = 当前模块 accent 渐变胶囊 + on-accent 文字
-                            if tab == selectedTab {
+                            if isSelected {
                                 Capsule().fill(tabAccent.gradient)
                                     .matchedGeometryEffect(id: "navPill", in: navNamespace)
                             }
                         }
-                        .foregroundStyle(tab == selectedTab ? tabAccent.onAccent : look.textDim)
+                        .foregroundStyle(isSelected ? tabAccent.onAccent : look.textDim)
                         // 透明 padding 默认不参与命中测试：显式声明整个胶囊区域可点
                         .contentShape(Capsule())
                 }
