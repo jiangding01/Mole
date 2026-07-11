@@ -28,6 +28,14 @@ struct OnboardingView: View {
             Color(red: 9 / 255, green: 7 / 255, blue: 5 / 255)
                 .opacity(0.86)
                 .ignoresSafeArea()
+            // 品牌金氛围光（主界面 look.background 的语言）：让卡片浮在光里而非纯黑上。
+            RadialGradient(
+                colors: [smart.a.opacity(0.12), .clear],
+                center: UnitPoint(x: 0.5, y: 0.3),
+                startRadius: 40, endRadius: 480
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
 
             card
                 .opacity(appeared ? 1 : 0)
@@ -58,11 +66,30 @@ struct OnboardingView: View {
         .frame(width: cardWidth)
         .background(look.surface)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        // 顶部内高光：金调从上缘渐隐（设计稿卡面受光语言）。
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(look.lineStrong, lineWidth: 1)
+                .fill(
+                    LinearGradient(
+                        colors: [smart.a.opacity(0.05), .clear],
+                        startPoint: .top, endPoint: UnitPoint(x: 0.5, y: 0.35)
+                    )
+                )
+                .allowsHitTesting(false)
         )
-        // 近似设计 0 40px 120px -30px rgba(0,0,0,.7)
+        // 描边：顶部偏金、向下沉入常规 line 色的渐变 hairline。
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [smart.a.opacity(0.38), look.lineStrong, look.line],
+                        startPoint: .top, endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+        )
+        // 近似设计 0 40px 120px -30px rgba(0,0,0,.7)，外加一层贴身金晕。
+        .shadow(color: smart.a.opacity(0.10), radius: 22, y: 4)
         .shadow(color: .black.opacity(0.7), radius: 60, y: 25)
     }
 
@@ -122,25 +149,49 @@ struct OnboardingView: View {
 
 private struct WelcomeStep: View {
     @Environment(OnboardingStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var floating = false
+
     private let look = Look.ink
     private let smart = ModuleAccent.smart
 
     var body: some View {
         VStack(spacing: 0) {
-            // 品牌徽标：76×76 金渐变圆角方块 + 鼹鼠 logo（MoleGlyph，见文件末转自设计稿 SVG）
-            MoleGlyph()
-                .fill(smart.onAccent, style: FillStyle(eoFill: true))
-                .frame(width: 40, height: 40)
-                .frame(width: 76, height: 76)
-                .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous).fill(smart.gradient)
-                )
-                .shadow(color: smart.a.opacity(0.6), radius: 25, y: 9)
+            StepEyebrow(step: 1)
+
+            // 品牌徽标：76×76 金渐变圆角方块 + 鼹鼠 logo，外围双装饰环
+            // （实线 + 虚线缓旋，设计稿占位模块语言），整体轻浮动。
+            ZStack {
+                OrnamentRings()
+                    .frame(width: 128, height: 128)
+                MoleGlyph()
+                    .fill(smart.onAccent, style: FillStyle(eoFill: true))
+                    .frame(width: 40, height: 40)
+                    .frame(width: 76, height: 76)
+                    .background(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous).fill(smart.gradient)
+                    )
+                    .shadow(color: smart.a.opacity(0.6), radius: 25, y: 9)
+            }
+            .frame(height: 128)
+            .offset(y: floating ? -3 : 3)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 5).repeatForever(autoreverses: true)) {
+                    floating = true
+                }
+            }
+            .padding(.top, 12)
 
             Text(L("onboarding.welcome.title"))
                 .font(Fonts.serif(34))
                 .foregroundStyle(look.text)
-                .padding(.top, 20)
+                .padding(.top, 18)
+                .enterStagger(0)
+
+            TitleHairline()
+                .padding(.top, 12)
+                .enterStagger(0)
 
             Text(L("onboarding.welcome.sub1") + "\n" + L("onboarding.welcome.sub2"))
                 .font(Fonts.ui(13.5))
@@ -148,44 +199,59 @@ private struct WelcomeStep: View {
                 .multilineTextAlignment(.center)
                 .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 11)
+                .padding(.top, 12)
+                .enterStagger(1)
 
-            // 三张承诺卡
+            // 三张承诺卡（stagger 入场，hover 提亮）
             VStack(spacing: 10) {
-                promise(
-                    "eye",
+                PromiseCard(
+                    symbol: "eye",
                     title: L("onboarding.promise.preview.title"),
                     desc: L("onboarding.promise.preview.desc")
                 )
-                promise(
-                    "trash",
+                .enterStagger(2)
+                PromiseCard(
+                    symbol: "trash",
                     title: L("onboarding.promise.trash.title"),
                     desc: L("onboarding.promise.trash.desc")
                 )
-                promise(
-                    "clock.arrow.circlepath",
+                .enterStagger(3)
+                PromiseCard(
+                    symbol: "clock.arrow.circlepath",
                     title: L("onboarding.promise.log.title"),
                     desc: L("onboarding.promise.log.desc")
                 )
+                .enterStagger(4)
             }
             .padding(.top, 24)
 
             OnboardingCTA(title: L("onboarding.start")) { store.start() }
                 .padding(.top, 24)
+                .enterStagger(5)
         }
         .padding(.horizontal, 44)
-        .padding(.top, 46)
+        .padding(.top, 34)
         .padding(.bottom, 34)
     }
+}
 
-    /// 承诺卡：图标框 + 标题/说明两行。
-    private func promise(_ symbol: String, title: String, desc: String) -> some View {
+/// 承诺卡：图标框 + 标题/说明两行；hover 时边框与底色轻提亮（设计稿卡片 hover 语言）。
+private struct PromiseCard: View {
+    let symbol: String
+    let title: String
+    let desc: String
+
+    @State private var hovered = false
+    private let look = Look.ink
+    private let smart = ModuleAccent.smart
+
+    var body: some View {
         HStack(spacing: 13) {
             Image(systemName: symbol)
                 .font(.system(size: 18, weight: .regular))
                 .foregroundStyle(smart.a)
                 .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 10).fill(smart.a.opacity(0.14)))
+                .background(RoundedRectangle(cornerRadius: 10).fill(smart.a.opacity(hovered ? 0.2 : 0.14)))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(Fonts.ui(13.5, .semibold))
@@ -198,8 +264,14 @@ private struct WelcomeStep: View {
         }
         .padding(.vertical, 13)
         .padding(.horizontal, 15)
-        .background(RoundedRectangle(cornerRadius: 13).fill(look.text.opacity(0.03)))
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1))
+        .background(
+            RoundedRectangle(cornerRadius: 13).fill(look.text.opacity(hovered ? 0.05 : 0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 13).stroke(hovered ? look.lineStrong : look.line, lineWidth: 1)
+        )
+        .animation(.easeOut(duration: 0.18), value: hovered)
+        .onHover { hovered = $0 }
     }
 }
 
@@ -212,13 +284,21 @@ private struct FullDiskAccessStep: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            StepEyebrow(step: 2)
+
             OnboardingIconBox(symbol: "internaldrive")
+                .padding(.top, 12)
 
             Text(L("onboarding.fda.title"))
                 .font(Fonts.serif(28))
                 .foregroundStyle(look.text)
                 .multilineTextAlignment(.center)
-                .padding(.top, 20)
+                .padding(.top, 18)
+                .enterStagger(0)
+
+            TitleHairline()
+                .padding(.top, 12)
+                .enterStagger(0)
 
             // 正文含加重片段「不会上传任何数据」（look.text）。
             (Text(L("onboarding.fda.bodyPrefix"))
@@ -229,7 +309,8 @@ private struct FullDiskAccessStep: View {
                 .multilineTextAlignment(.center)
                 .lineSpacing(6)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 11)
+                .padding(.top, 12)
+                .enterStagger(1)
 
             // 三态区（idle / waiting / ok），minHeight 84 保证切换不跳动。
             // 动画上下文挂在切换容器外层：分支插入/移除才会执行 transition。
@@ -237,28 +318,19 @@ private struct FullDiskAccessStep: View {
                 .frame(maxWidth: .infinity, minHeight: 84)
                 .animation(.easeOut(duration: 0.3), value: store.fdaPhase)
                 .padding(.top, 26)
+                .enterStagger(2)
 
             // footer：返回 + 稍后再说（§5.8 三步均可跳过；跳过则功能降级并在权限页常驻提示）
             HStack(spacing: 18) {
-                footerLink(L("onboarding.back")) { store.back() }
-                footerLink(L("onboarding.fda.skip")) { store.skipFda() }
+                OnboardingFooterLink(title: L("onboarding.back")) { store.back() }
+                OnboardingFooterLink(title: L("onboarding.fda.skip")) { store.skipFda() }
             }
             .padding(.top, 14)
+            .enterStagger(3)
         }
         .padding(.horizontal, 44)
-        .padding(.top, 46)
+        .padding(.top, 34)
         .padding(.bottom, 34)
-    }
-
-    /// footer 文字链接（返回 / 稍后再说共用样式）。
-    private func footerLink(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(Fonts.ui(12.5))
-                .foregroundStyle(look.textMute)
-        }
-        .buttonStyle(.plain)
-        .pointingCursor()
     }
 
     @ViewBuilder
@@ -294,30 +366,45 @@ private struct FullDiskAccessStep: View {
                     .font(Fonts.ui(12))
                     .foregroundStyle(look.textMute)
                     .multilineTextAlignment(.center)
+                // 自救出路：关掉系统设置窗口后可重新打开（requestFda 幂等，会重启轮询）。
+                Button {
+                    store.requestFda()
+                } label: {
+                    Text(L("onboarding.fda.reopen"))
+                        .font(Fonts.ui(12, .semibold))
+                        .foregroundStyle(ModuleAccent.smart.a)
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
             }
         case .granted:
-            HStack(spacing: 11) {
-                ZStack {
-                    Circle().fill(Semantic.successAlt)
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color(hex: 0x04241A))
+            VStack(spacing: 14) {
+                HStack(spacing: 11) {
+                    ZStack {
+                        Circle().fill(Semantic.successAlt)
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Color(hex: 0x04241A))
+                    }
+                    .frame(width: 26, height: 26)
+                    Text(L("onboarding.fda.granted"))
+                        .font(Fonts.ui(14, .semibold))
+                        .foregroundStyle(Semantic.successAlt)
                 }
-                .frame(width: 26, height: 26)
-                Text(L("onboarding.fda.granted"))
-                    .font(Fonts.ui(14, .semibold))
-                    .foregroundStyle(Semantic.successAlt)
+                .padding(.vertical, 14)
+                .padding(.horizontal, 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Semantic.successAlt.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Semantic.successAlt.opacity(0.3), lineWidth: 1)
+                )
+                // 显式前进按钮：授权导致 App 重启后由恢复路径进入本态时，
+                // 没有轮询自动推进，这是唯一的继续通路。
+                OnboardingCTA(title: L("onboarding.fda.continue")) { store.continueAfterFda() }
             }
-            .padding(.vertical, 14)
-            .padding(.horizontal, 22)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Semantic.successAlt.opacity(0.12))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Semantic.successAlt.opacity(0.3), lineWidth: 1)
-            )
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
     }
@@ -331,13 +418,21 @@ private struct HelperStep: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            StepEyebrow(step: 3)
+
             OnboardingIconBox(symbol: "checkmark.shield")
+                .padding(.top, 12)
 
             Text(L("onboarding.helper.title"))
                 .font(Fonts.serif(28))
                 .foregroundStyle(look.text)
                 .multilineTextAlignment(.center)
-                .padding(.top, 20)
+                .padding(.top, 18)
+                .enterStagger(0)
+
+            TitleHairline()
+                .padding(.top, 12)
+                .enterStagger(0)
 
             // 正文含两处加重：「深度维护」与「现在跳过也完全没问题」（look.text）。
             (Text(L("onboarding.helper.body.p1"))
@@ -350,7 +445,8 @@ private struct HelperStep: View {
                 .multilineTextAlignment(.center)
                 .lineSpacing(6)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 11)
+                .padding(.top, 12)
+                .enterStagger(1)
 
             VStack(spacing: 10) {
                 // 主按钮 v1 禁用：helper 组件（SMAppService）尚未落地。
@@ -361,22 +457,115 @@ private struct HelperStep: View {
                         .font(Fonts.ui(11))
                         .foregroundStyle(look.textMute)
                 }
+                .enterStagger(2)
                 // 次按钮（幽灵款）：跳过 → 完成引导。
                 OnboardingGhostButton(title: L("onboarding.helper.skip")) {
                     store.finish()
                 }
+                .enterStagger(3)
             }
             .padding(.top, 26)
+
+            // footer：返回 FDA 步（跳过授权后想回头补授权的通路）。
+            OnboardingFooterLink(title: L("onboarding.back")) { store.back() }
+                .padding(.top, 14)
+                .enterStagger(4)
         }
         .padding(.horizontal, 44)
-        .padding(.top, 46)
+        .padding(.top, 34)
         .padding(.bottom, 34)
     }
 }
 
 // MARK: - 共用组件
 
-/// 主 CTA（三步共用）：全宽金渐变按钮，hover 微增亮。
+/// 步骤 eyebrow：小号大写字距序号（设计稿全局 eyebrow 语言）。纯技术标签不进 L10n。
+private struct StepEyebrow: View {
+    let step: Int
+
+    var body: some View {
+        Text(verbatim: String(format: "STEP %02d / 03", step))
+            .font(.system(size: 10, weight: .semibold))
+            .kerning(10 * 0.26)
+            .foregroundStyle(Look.ink.textMute)
+    }
+}
+
+/// 标题下的金渐变短分隔线（设计稿 section 标题语言）：两端渐隐的 2pt hairline。
+private struct TitleHairline: View {
+    private let smart = ModuleAccent.smart
+
+    var body: some View {
+        LinearGradient(
+            colors: [.clear, smart.a.opacity(0.55), .clear],
+            startPoint: .leading, endPoint: .trailing
+        )
+        .frame(width: 46, height: 2)
+        .clipShape(Capsule())
+    }
+}
+
+/// 徽标装饰双环（设计稿占位模块语言）：外实线环 + 内虚线环 26s 缓旋。
+/// reduceMotion 时静止。
+private struct OrnamentRings: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spinning = false
+    private let smart = ModuleAccent.smart
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Look.ink.lineStrong, lineWidth: 1)
+            Circle()
+                .stroke(
+                    smart.a.opacity(0.35),
+                    style: StrokeStyle(lineWidth: 1, dash: [3, 5])
+                )
+                .padding(15)
+                .rotationEffect(.degrees(spinning ? 360 : 0))
+        }
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 26).repeatForever(autoreverses: false)) {
+                spinning = true
+            }
+        }
+    }
+}
+
+/// 入场 stagger：淡入 + 上移 6pt，延迟按索引阶梯（智能页结论卡节奏）。
+/// reduceMotion 时直接呈现。
+private struct EnterStagger: ViewModifier {
+    let index: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : 6)
+            .onAppear {
+                guard !reduceMotion else {
+                    shown = true
+                    return
+                }
+                withAnimation(
+                    .timingCurve(0.2, 0.7, 0.2, 1, duration: 0.5)
+                        .delay(0.08 + Double(index) * 0.07)
+                ) {
+                    shown = true
+                }
+            }
+    }
+}
+
+private extension View {
+    func enterStagger(_ index: Int) -> some View {
+        modifier(EnterStagger(index: index))
+    }
+}
+
+/// 主 CTA（三步共用）：全宽金渐变按钮 + 白 hairline 顶光（智能页 CTA 同款），hover 微增亮。
 private struct OnboardingCTA: View {
     let title: String
     var disabled = false
@@ -393,6 +582,11 @@ private struct OnboardingCTA: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .background(RoundedRectangle(cornerRadius: 12).fill(smart.gradient))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                        .blendMode(.plusLighter)
+                )
                 .brightness(hovering && !disabled ? 0.05 : 0)
                 .shadow(color: smart.a.opacity(0.5), radius: 15, y: 6)
         }
@@ -400,6 +594,24 @@ private struct OnboardingCTA: View {
         .disabled(disabled)
         .opacity(disabled ? 0.45 : 1)
         .onHover { hovering = $0 }
+        .pointingCursor()
+    }
+}
+
+/// footer 文字链接（Step 2/3 返回、稍后再说共用样式）。
+private struct OnboardingFooterLink: View {
+    let title: String
+    let action: () -> Void
+
+    private let look = Look.ink
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(Fonts.ui(12.5))
+                .foregroundStyle(look.textMute)
+        }
+        .buttonStyle(.plain)
         .pointingCursor()
     }
 }
@@ -429,7 +641,7 @@ private struct OnboardingGhostButton: View {
     }
 }
 
-/// Step 2/3 头部图标框：76×76 金调描边方块 + 38pt 线性 SF Symbol。
+/// Step 2/3 头部图标框：76×76 金调描边方块 + 38pt 线性 SF Symbol + 贴身金晕。
 private struct OnboardingIconBox: View {
     let symbol: String
     private let smart = ModuleAccent.smart
@@ -446,6 +658,7 @@ private struct OnboardingIconBox: View {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(smart.a.opacity(0.24), lineWidth: 1)
             )
+            .shadow(color: smart.a.opacity(0.22), radius: 20, y: 7)
     }
 }
 

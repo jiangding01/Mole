@@ -29,6 +29,9 @@ final class OnboardingStore {
 
     /// 首启判定用的 UserDefaults key（写入即代表引导已完成，不再自动弹出）。
     private static let onboardedKey = "mole_onboarded"
+    /// FDA 授权流程进行中标记：勾选 FDA 权限的瞬间 macOS 会杀掉 App（TCC 变更），
+    /// 重启后据此恢复到 FDA 步而非从头再走。`finish()` 时清除。
+    private static let fdaPendingKey = "mole_onboarding_fda_pending"
 
     private let probe = PermissionProbe()
     /// FDA 轮询任务句柄；落幕/完成时 cancel，防止后台探测悬挂。
@@ -37,9 +40,14 @@ final class OnboardingStore {
     // MARK: - 弹出 / 复看
 
     /// 首启弹出：仅当 `mole_onboarded` 未置位时呈现，并按真实 FDA 状态初始化三态。
+    /// 若上次运行正在走 FDA 授权（勾选权限时 macOS 会杀掉 App），恢复到 FDA 步：
+    /// 已授权则直接呈现成功态，未授权则回到 CTA，不让用户从头再走。
     func presentIfFirstLaunch() {
         guard !UserDefaults.standard.bool(forKey: Self.onboardedKey) else { return }
         present()
+        if UserDefaults.standard.bool(forKey: Self.fdaPendingKey) {
+            step = 2
+        }
     }
 
     /// 设置页「重新查看」入口（本期先提供 API，暂不接线）。
@@ -64,8 +72,13 @@ final class OnboardingStore {
     }
 
     /// 返回上一步（下限第 1 步）。
+    /// 回到 FDA 步时重新对齐真实授权状态：期间可能已完成授权（→ 成功态）；
+    /// 也可能轮询已被跳过取消而界面停在等待态（→ 重置回 CTA，否则没有出路）。
     func back() {
         advancing = false
+        if step == 3 {
+            fdaPhase = probe.hasFullDiskAccess() ? .granted : .idle
+        }
         step = max(1, step - 1)
     }
 
@@ -75,6 +88,8 @@ final class OnboardingStore {
     /// 已授权则忽略（此时三态区已呈现 ok）。
     func requestFda() {
         guard fdaPhase != .granted else { return }
+        // 先落「授权进行中」标记再跳系统设置：勾选权限瞬间 App 就可能被杀。
+        UserDefaults.standard.set(true, forKey: Self.fdaPendingKey)
         NSWorkspace.shared.open(PermissionProbe.fullDiskAccessSettingsURL)
         fdaPhase = .waiting
         startFdaPolling()
@@ -115,6 +130,15 @@ final class OnboardingStore {
         step = 3
     }
 
+    /// FDA 已授权态的「继续」入口。授权导致 App 重启后从恢复路径进入成功态时，
+    /// 没有轮询在跑、不会自动推进，需要这个显式前进按钮。
+    func continueAfterFda() {
+        fdaPollTask?.cancel()
+        fdaPollTask = nil
+        advancing = true
+        step = 3
+    }
+
     // MARK: - 完成
 
     /// 完成引导：置位 `mole_onboarded`、取消轮询、落幕。
@@ -122,6 +146,7 @@ final class OnboardingStore {
     func finish(installHelper: Bool = false) {
         _ = installHelper // TODO(helper): SMAppService 落地后据此触发安装
         UserDefaults.standard.set(true, forKey: Self.onboardedKey)
+        UserDefaults.standard.removeObject(forKey: Self.fdaPendingKey)
         fdaPollTask?.cancel()
         fdaPollTask = nil
         // 带动画落幕：给 RootView 的 .transition(.opacity) 提供动画上下文，避免瞬断。
