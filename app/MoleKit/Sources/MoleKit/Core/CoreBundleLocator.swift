@@ -43,6 +43,21 @@ public struct CoreBundleLocator: Sendable {
         throw LocatorError.coreNotBundled
     }
 
+    /// 读取内嵌核心（mole 脚本）首部的 `VERSION="x.y.z"` 行（关于页展示）。
+    /// 纯文件读取，无子进程；核心未打包或读不到时返回 nil（UI 显示 "—"）。
+    public func coreVersion() -> String? {
+        guard let url = try? moleEntrypoint(),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        for line in text.split(separator: "\n", maxSplits: 200, omittingEmptySubsequences: true) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("VERSION=") else { continue }
+            let value = trimmed.dropFirst("VERSION=".count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
+
     public func statusBinary() throws -> URL {
         try goBinary("status-go")
     }
