@@ -16,7 +16,11 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     ENABLE_HARDENED_RUNTIME: YES
-    CODE_SIGN_STYLE: Automatic
+    # 开发签名必须用真实证书：ad-hoc 签名的 TCC 授权（完全磁盘访问）绑定
+    # 单次编译的 cdhash，每次重建即失效；证书签名绑定 team+bundle id，跨构建保持。
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "7678D75FAE4F9D81C7CBAEA8F991870682302281"
+    DEVELOPMENT_TEAM: VAVR439J8G
     DEAD_CODE_STRIPPING: YES
 
 targets:
