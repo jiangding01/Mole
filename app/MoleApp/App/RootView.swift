@@ -18,6 +18,8 @@ struct RootView: View {
     /// 旧 Store 的读流任务悬挂堆积——分析/优化页再入永久 loading。）
     @State private var cleanStore = CleanStore()
     @State private var appsStore = AppsStore()
+    @State private var updatesStore = UpdatesStore()
+    @State private var launchItemsStore = LaunchItemsStore()
     @State private var optimizeStore = OptimizeStore()
     @State private var analyzeStore = AnalyzeStore()
     @State private var statusStore = StatusStore()
@@ -54,6 +56,8 @@ struct RootView: View {
         .environment(scanSession)
         .environment(cleanStore)
         .environment(appsStore)
+        .environment(updatesStore)
+        .environment(launchItemsStore)
         .environment(optimizeStore)
         .environment(analyzeStore)
         .environment(statusStore)

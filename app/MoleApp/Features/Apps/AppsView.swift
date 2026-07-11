@@ -1,5 +1,6 @@
 import MoleKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 软件页（设计 §5.2 / 设计稿 apps 页）：三个子 tab——卸载 / 更新 / 启动项。
 /// 卸载 tab：真实清单（robot apps list）+ 行展开残留分组 + 卸载执行链
@@ -7,6 +8,8 @@ import SwiftUI
 /// 更新 / 启动项 tab 为诚实占位（数据源分别在 Phase 5+ / Phase 3）。
 struct AppsView: View {
     @Environment(AppsStore.self) private var store
+    @Environment(UpdatesStore.self) private var updatesStore
+    @Environment(LaunchItemsStore.self) private var launchItemsStore
     @State private var showsHistory = false
     private let look = Look.ink
     private let accent = ModuleAccent.apps
@@ -30,9 +33,12 @@ struct AppsView: View {
                 .font(Fonts.serif(28, .semibold))
                 .foregroundStyle(look.text)
             if store.phase == .loaded {
-                Text(L("apps.header.count", Int64(store.apps.count)) + (store.totalSizeText.isEmpty ? "" : " · " + L("apps.header.total", store.totalSizeText)))
-                    .font(Fonts.mono(11.5))
-                    .foregroundStyle(look.textMute)
+                Text(L("apps.header.count", Int64(store.apps.count)) + (store.totalSizeText.isEmpty ? "" : " · " + L(
+                    "apps.header.total",
+                    store.totalSizeText
+                )))
+                .font(Fonts.mono(11.5))
+                .foregroundStyle(look.textMute)
             }
             Spacer()
         }
@@ -44,10 +50,58 @@ struct AppsView: View {
         HStack(spacing: 8) {
             subTabs
             Spacer()
-            if store.tab == .uninstall {
+            switch store.tab {
+            case .uninstall:
                 sortChips
                 searchField
+            case .update:
+                updateSourceFilter
+            case .startup:
+                startupStatusFilter
             }
+        }
+    }
+
+    /// 更新 tab 来源筛选（设计稿形态；v1 仅 Homebrew 一档，静态展示不循环）。
+    private var updateSourceFilter: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 11, weight: .medium))
+            Text(L("apps.update.sourceFilter"))
+                .font(Fonts.ui(12.5, .medium))
+        }
+        .foregroundStyle(look.textDim)
+        .padding(.horizontal, 13).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 9).fill(look.text.opacity(0.03)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(look.line, lineWidth: 1))
+    }
+
+    /// 启动项 tab 状态筛选（循环 all/on/off）。
+    private var startupStatusFilter: some View {
+        Button {
+            launchItemsStore.cycleFilter()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 11, weight: .medium))
+                Text(startupFilterLabel)
+                    .font(Fonts.ui(12.5, .medium))
+            }
+            .foregroundStyle(look.textDim)
+            .padding(.horizontal, 13).padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 9).fill(look.text.opacity(0.03)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(look.line, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .pointingCursor()
+    }
+
+    private var startupFilterLabel: String {
+        switch launchItemsStore.filter {
+        case .all: L("apps.startup.filter.all")
+        case .on: L("apps.startup.filter.on")
+        case .off: L("apps.startup.filter.off")
         }
     }
 
@@ -124,14 +178,8 @@ struct AppsView: View {
     private var content: some View {
         switch store.tab {
         case .uninstall: uninstallTab
-        case .update:
-            comingSoon(icon: "arrow.triangle.2.circlepath",
-                       title: L("apps.update.title"),
-                       note: L("apps.update.note"))
-        case .startup:
-            comingSoon(icon: "power",
-                       title: L("apps.startup.title"),
-                       note: L("apps.startup.note"))
+        case .update: updateTab
+        case .startup: startupTab
         }
     }
 
@@ -143,8 +191,12 @@ struct AppsView: View {
         case .running:
             removingView
         case let .done(removed, freed, failedItems, relatedFiles):
-            removalDoneView(removed: removed, freed: freed,
-                            failedItems: failedItems, relatedFiles: relatedFiles)
+            removalDoneView(
+                removed: removed,
+                freed: freed,
+                failedItems: failedItems,
+                relatedFiles: relatedFiles
+            )
         case .idle:
             switch store.phase {
             case .idle, .loading:
@@ -157,24 +209,23 @@ struct AppsView: View {
         }
     }
 
-    @ViewBuilder
     private var idleListView: some View {
         VStack(spacing: 0) {
             appList
             if !store.selection.isEmpty { batchBar }
         }
-            .alert(L("apps.remove.runningTitle"), isPresented: Binding(
-                get: { !store.runningBlockers.isEmpty },
-                set: { if !$0 { store.runningBlockers = [] } }
-            )) {
-                Button(L("apps.remove.quitAndContinue")) { store.quitBlockersAndContinue() }
-                Button(L("common.cancel"), role: .cancel) { store.runningBlockers = [] }
-            } message: {
-                Text(L("apps.remove.runningMsg", store.runningBlockers.map(\.name).joined(separator: "、")))
-            }
-            .sheet(isPresented: Binding(get: { store.confirmRemoval }, set: { store.confirmRemoval = $0 })) {
-                RemoveConfirmSheet(store: store, look: look, accent: accent)
-            }
+        .alert(L("apps.remove.runningTitle"), isPresented: Binding(
+            get: { !store.runningBlockers.isEmpty },
+            set: { if !$0 { store.runningBlockers = [] } }
+        )) {
+            Button(L("apps.remove.quitAndContinue")) { store.quitBlockersAndContinue() }
+            Button(L("common.cancel"), role: .cancel) { store.runningBlockers = [] }
+        } message: {
+            Text(L("apps.remove.runningMsg", store.runningBlockers.map(\.name).joined(separator: "、")))
+        }
+        .sheet(isPresented: Binding(get: { store.confirmRemoval }, set: { store.confirmRemoval = $0 })) {
+            RemoveConfirmSheet(store: store, look: look, accent: accent)
+        }
     }
 
     // MARK: - 执行中（设计稿 REMOVING：光谱环放空 + 环心实时字节 + 逐项打勾清单）
@@ -208,8 +259,10 @@ struct AppsView: View {
     private var removalSegments: [RingSegment] {
         let count = max(1, store.removalAppNames.count)
         return (0 ..< count).map { index in
-            RingSegment(fraction: 1.0 / Double(count),
-                        color: index % 2 == 0 ? accent.a : accent.b)
+            RingSegment(
+                fraction: 1.0 / Double(count),
+                color: index % 2 == 0 ? accent.a : accent.b
+            )
         }
     }
 
@@ -408,7 +461,8 @@ struct AppsView: View {
                     .font(Fonts.ui(13.5, .semibold))
                     .foregroundStyle(look.text)
                     .lineLimit(1)
-                Text(L("apps.batch.count", Int64(store.selection.count)) + (store.selectedSizeText.isEmpty ? "" : " · \(store.selectedSizeText)"))
+                Text(L("apps.batch.count", Int64(store.selection.count)) +
+                    (store.selectedSizeText.isEmpty ? "" : " · \(store.selectedSizeText)"))
                     .font(Fonts.mono(11.5))
                     .foregroundStyle(look.textMute)
             }
@@ -440,7 +494,163 @@ struct AppsView: View {
         .padding(.top, 12)
     }
 
-    private func comingSoon(icon: String, title: String, note: String) -> some View {
+    // MARK: - 更新 tab（设计 §5.2.2 / 设计稿 UPDATE TAB）
+
+    private var updateTab: some View {
+        VStack(spacing: 0) {
+            switch updatesStore.phase {
+            case .idle, .loading:
+                tabLoading(L("apps.update.loading"))
+            case let .failed(reason):
+                tabFailed(reason) { updatesStore.reload() }
+            case .loaded:
+                if updatesStore.visibleUpdates.isEmpty {
+                    tabEmpty(
+                        icon: "checkmark.circle",
+                        title: L("apps.update.empty.title"),
+                        note: L("apps.update.empty.note")
+                    )
+                } else {
+                    updateList
+                }
+            }
+        }
+        .onAppear { updatesStore.loadIfNeeded() }
+    }
+
+    private var updateList: some View {
+        VStack(spacing: 0) {
+            // 列表头：可更新计数 + 「全部更新」（设计稿 space-between）
+            HStack(alignment: .firstTextBaseline) {
+                Text(L("apps.update.header", Int64(updatesStore.visibleCount)))
+                    .font(Fonts.ui(13, .semibold))
+                    .foregroundStyle(look.text)
+                Spacer()
+                Button {
+                    updatesStore.updateAll()
+                } label: {
+                    Text(L("apps.update.updateAll"))
+                        .font(Fonts.ui(12.5, .semibold))
+                        .foregroundStyle(updatesStore.canUpdateAll ? accent.a : look.textMute)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+                .disabled(!updatesStore.canUpdateAll)
+            }
+            .padding(.horizontal, 2).padding(.bottom, 10)
+
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(updatesStore.visibleUpdates) { item in
+                        UpdateRow(
+                            item: item,
+                            store: updatesStore,
+                            appsStore: store,
+                            look: look,
+                            accent: accent
+                        )
+                    }
+                }
+                .padding(.trailing, 2)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - 启动项 tab（设计 §5.2.3 / 设计稿 STARTUP TAB）
+
+    private var startupTab: some View {
+        VStack(spacing: 0) {
+            switch launchItemsStore.phase {
+            case .idle, .loading:
+                tabLoading(L("apps.startup.loading"))
+            case let .failed(reason):
+                tabFailed(reason) { launchItemsStore.reload() }
+            case .loaded:
+                if launchItemsStore.items.isEmpty {
+                    tabEmpty(
+                        icon: "power",
+                        title: L("apps.startup.empty"),
+                        note: ""
+                    )
+                } else {
+                    startupList
+                }
+            }
+        }
+        .onAppear { launchItemsStore.loadIfNeeded() }
+    }
+
+    private var startupList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                startupGroup(
+                    header: L("apps.startup.loginHeader", Int64(launchItemsStore.loginItems.count)),
+                    items: launchItemsStore.loginItems
+                )
+                startupGroup(
+                    header: L("apps.startup.serviceHeader", Int64(launchItemsStore.serviceItems.count)),
+                    items: launchItemsStore.serviceItems
+                )
+            }
+            .padding(.trailing, 2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func startupGroup(header: String, items: [LaunchItem]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(header)
+                .font(Fonts.ui(12, .semibold))
+                .foregroundStyle(look.textMute)
+                .padding(.horizontal, 2).padding(.top, 2).padding(.bottom, 8)
+            VStack(spacing: 6) {
+                ForEach(items) { item in
+                    LaunchItemRow(item: item, store: launchItemsStore, look: look, accent: accent)
+                }
+            }
+        }
+    }
+
+    // MARK: - 更新/启动项共用的加载/失败/空态（与卸载 tab 同源诚实呈现）
+
+    private func tabLoading(_ title: String) -> some View {
+        VStack(spacing: 16) {
+            RingSpinner(accent: accent, size: 44, lineWidth: 3)
+            Text(title)
+                .font(Fonts.ui(13))
+                .foregroundStyle(look.textDim)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func tabFailed(_ reason: String, retry: @escaping () -> Void) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "bolt.horizontal.circle")
+                .font(.system(size: 30))
+                .foregroundStyle(Semantic.warn)
+            Text(L("apps.failed.title"))
+                .font(Fonts.ui(14, .semibold))
+                .foregroundStyle(look.text)
+            Text(reason)
+                .font(Fonts.mono(11))
+                .foregroundStyle(look.textMute)
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 460)
+            Button(L("common.retry")) { retry() }
+                .buttonStyle(.plain)
+                .pointingCursor()
+                .font(Fonts.ui(12, .semibold))
+                .padding(.horizontal, 18).padding(.vertical, 7)
+                .background(Capsule().fill(accent.gradient))
+                .foregroundStyle(accent.onAccent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func tabEmpty(icon: String, title: String, note: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 28, weight: .light))
@@ -448,11 +658,13 @@ struct AppsView: View {
             Text(title)
                 .font(Fonts.ui(14, .semibold))
                 .foregroundStyle(look.textDim)
-            Text(note)
-                .font(Fonts.ui(12))
-                .foregroundStyle(look.textMute)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
+            if !note.isEmpty {
+                Text(note)
+                    .font(Fonts.ui(12))
+                    .foregroundStyle(look.textMute)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -575,8 +787,13 @@ private struct AppRow: View {
 
     @State private var hovering = false
 
-    private var selected: Bool { store.selection.contains(app.id) }
-    private var isExpanded: Bool { store.expanded.contains(app.id) }
+    private var selected: Bool {
+        store.selection.contains(app.id)
+    }
+
+    private var isExpanded: Bool {
+        store.expanded.contains(app.id)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -686,7 +903,6 @@ private struct AppRow: View {
 
     // MARK: 展开区（分组残留清单）
 
-    @ViewBuilder
     private var expansion: some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider().overlay(look.line)
@@ -796,6 +1012,215 @@ private struct AppRow: View {
     private func fmtBytes(_ v: Int64) -> String {
         guard v > 0 else { return "--" }
         return ByteCountFormatter.string(fromByteCount: v, countStyle: .file)
+    }
+}
+
+// MARK: - 更新行（设计稿 UPDATE TAB：图标 + 名称/来源徽标 + 版本差 + 忽略/更新）
+
+private struct UpdateRow: View {
+    var item: AppUpdate
+    var store: UpdatesStore
+    var appsStore: AppsStore
+    var look: Look
+    var accent: ModuleAccent
+
+    /// 关联已装应用（cask token 命中 Homebrew 清单）→ 友好名与真实图标；否则回退 token + 通用图标。
+    private var matchedApp: InstalledApp? {
+        appsStore.apps.first { $0.source == "Homebrew" && $0.uninstallName == item.token }
+    }
+
+    private var displayName: String {
+        matchedApp?.name ?? item.token
+    }
+
+    private var icon: NSImage {
+        if let app = matchedApp { return appsStore.icon(for: app) }
+        return NSWorkspace.shared.icon(for: .applicationBundle)
+    }
+
+    var body: some View {
+        let running = store.isRunning(item)
+        let failure = store.failure(item)
+        return HStack(spacing: 13) {
+            Image(nsImage: icon)
+                .resizable()
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    Text(displayName)
+                        .font(Fonts.ui(13.5, .semibold))
+                        .foregroundStyle(look.text)
+                        .lineLimit(1)
+                    // 来源徽标（v1 恒为 Homebrew）
+                    Text(verbatim: item.sourceDisplay)
+                        .font(Fonts.ui(10.5))
+                        .foregroundStyle(look.textMute)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(look.text.opacity(0.05)))
+                }
+                // 版本差：旧 → 新（mono 11.5，新版本橙红）
+                HStack(spacing: 0) {
+                    Text(verbatim: item.installed + " → ")
+                        .foregroundStyle(look.textMute)
+                    Text(verbatim: item.latest)
+                        .foregroundStyle(Semantic.danger)
+                        .fontWeight(.medium)
+                }
+                .font(Fonts.mono(11.5))
+                .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let failure {
+                Text(L("apps.update.failed"))
+                    .font(Fonts.ui(12))
+                    .foregroundStyle(Semantic.warn)
+                    .help(failure)
+            } else if !running {
+                Button {
+                    store.ignore(item)
+                } label: {
+                    Text(L("apps.update.ignore"))
+                        .font(Fonts.ui(12))
+                        .foregroundStyle(look.textMute)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+            }
+            if running {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 60, height: 30)
+            } else {
+                Button {
+                    store.update(item)
+                } label: {
+                    Text(failure == nil ? L("apps.update.button") : L("common.retry"))
+                        .font(Fonts.ui(12.5, .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 8)
+                        .background(Capsule().fill(Color(hex: 0xC86B49)))
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 12).fill(look.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(look.line, lineWidth: 1))
+    }
+}
+
+// MARK: - 启动项行（设计稿 STARTUP TAB：登录项 / 后台服务两种版式 + 开关）
+
+private struct LaunchItemRow: View {
+    var item: LaunchItem
+    var store: LaunchItemsStore
+    var look: Look
+    var accent: ModuleAccent
+
+    private var icon: NSImage {
+        if !item.path.isEmpty {
+            return NSWorkspace.shared.icon(forFile: item.path)
+        }
+        return NSWorkspace.shared.icon(for: .applicationBundle)
+    }
+
+    /// 后台服务副行类型文案：daemon → LaunchDaemon，agent → LaunchAgent；系统项追加 "· 系统项"。
+    private var serviceType: String {
+        let base = item.category == .daemon ? "LaunchDaemon" : "LaunchAgent"
+        return item.sys ? base + " · " + L("apps.startup.systemTag") : base
+    }
+
+    /// 登录项副行："App · 允许实际启动 · <路径>"（路径为我们能拿到的技术标识）。
+    private var loginSubtitle: String {
+        let caption = L("apps.startup.loginCaption")
+        guard !item.path.isEmpty else { return caption }
+        return caption + " · " + (item.path as NSString).abbreviatingWithTildeInPath
+    }
+
+    var body: some View {
+        HStack(spacing: 13) {
+            Image(nsImage: icon)
+                .resizable()
+                .frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 1) {
+                if item.category.isLogin {
+                    Text(item.label)
+                        .font(Fonts.ui(13, .semibold))
+                        .foregroundStyle(look.text)
+                        .lineLimit(1)
+                    Text(verbatim: loginSubtitle)
+                        .font(Fonts.mono(10.5))
+                        .foregroundStyle(look.textMute)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text(verbatim: item.label)
+                        .font(Fonts.mono(12, .medium))
+                        .foregroundStyle(look.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(verbatim: serviceType)
+                        .font(Fonts.ui(10.5))
+                        .foregroundStyle(look.textMute)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            LaunchToggle(
+                on: item.enabled, mutable: item.mutable, pending: store.isPending(item),
+                accent: accent, look: look
+            ) {
+                store.toggle(item)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 12).fill(look.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(look.line, lineWidth: 1))
+        .opacity(item.sys ? 0.6 : 1) // 系统项整行降透明（只读提示）
+    }
+}
+
+/// 设计稿开关（34×20 胶囊 + 16 白滑块）。开=accent 轨道滑块右移；系统项恒暗轨道且只读。
+private struct LaunchToggle: View {
+    var on: Bool
+    var mutable: Bool
+    var pending: Bool
+    var accent: ModuleAccent
+    var look: Look
+    var onToggle: () -> Void
+
+    private var trackColor: Color {
+        guard mutable else { return look.text.opacity(0.1) } // 系统项：恒暗轨道
+        return on ? accent.a : look.text.opacity(0.14)
+    }
+
+    var body: some View {
+        ZStack {
+            Capsule().fill(trackColor)
+                .frame(width: 34, height: 20)
+            Circle()
+                .fill(.white)
+                .frame(width: 16, height: 16)
+                .offset(x: on ? 7 : -7)
+        }
+        .frame(width: 34, height: 20)
+        .opacity(pending ? 0.6 : 1)
+        .animation(.easeOut(duration: 0.2), value: on)
+        .contentShape(Rectangle())
+        .onTapGesture { if mutable, !pending { onToggle() } }
+        .modifier(ConditionalPointer(active: mutable && !pending))
+    }
+}
+
+/// 仅在可操作时挂 pointingCursor（系统项/进行中不给可点暗示）。
+private struct ConditionalPointer: ViewModifier {
+    var active: Bool
+    func body(content: Content) -> some View {
+        if active { content.pointingCursor() } else { content }
     }
 }
 
