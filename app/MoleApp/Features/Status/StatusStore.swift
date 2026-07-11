@@ -17,7 +17,9 @@ final class StatusStore {
 
     var phase: Phase = .connecting
     var snapshot: MetricsSnapshot?
-    var refreshSeconds: Int = 2 { didSet { if oldValue != refreshSeconds { restart() } } }
+    var refreshSeconds: Int = 2 {
+        didSet { if oldValue != refreshSeconds { restart() } }
+    }
 
     // 近 60 采样历史（图表用）
     private(set) var cpuHistory: [Double] = []
@@ -47,7 +49,9 @@ final class StatusStore {
     private(set) var procWaitExpired = false
     private var procWaitTask: Task<Void, Never>?
 
-    var hasProcessData: Bool { !(snapshot?.topProcesses?.isEmpty ?? true) }
+    var hasProcessData: Bool {
+        !(snapshot?.topProcesses?.isEmpty ?? true)
+    }
 
     /// 页面级 loading → 仪表盘的切换条件：有快照且（有进程数据或等待超时）。
     /// 避免"很快进页面但进程表还空着"的割裂体验。
@@ -98,25 +102,25 @@ final class StatusStore {
             do {
                 for try await snap in stream.snapshots(intervalSeconds: interval) {
                     guard let self, !Task.isCancelled else { return }
-                    self.ingest(snap)
+                    ingest(snap)
                 }
             } catch {
                 failureMessage = error.localizedDescription
             }
             await MainActor.run { [weak self] in
                 guard let self, !Task.isCancelled else { return }
-                self.subscription = nil
+                subscription = nil
                 // 快速失败（<2s 且无数据）计数；连续 3 次停止自动重试并报告原因，
                 // 避免"无限转圈"（如旧 status-go 不认识新 flag、核心路径错误）。
-                if Date().timeIntervalSince(startedAt) < 2, self.snapshot == nil {
-                    self.consecutiveFailures += 1
-                    if self.consecutiveFailures >= 3 {
-                        self.phase = .failed(failureMessage ?? "status-go 无法启动（检查 make build 与 MOLE_CORE_PATH）")
-                        self.stop()
+                if Date().timeIntervalSince(startedAt) < 2, snapshot == nil {
+                    consecutiveFailures += 1
+                    if consecutiveFailures >= 3 {
+                        phase = .failed(failureMessage ?? L("status.failed.launch"))
+                        stop()
                         return
                     }
                 }
-                self.phase = self.snapshot == nil ? .connecting : .disconnected
+                phase = snapshot == nil ? .connecting : .disconnected
             }
         }
     }
@@ -127,12 +131,12 @@ final class StatusStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self else { return }
-                if case .failed = self.phase { return }
-                if let last = self.lastSnapshotAt,
-                   Date().timeIntervalSince(last) > Double(self.refreshSeconds * 3) {
-                    self.phase = .disconnected
+                if case .failed = phase { return }
+                if let last = lastSnapshotAt,
+                   Date().timeIntervalSince(last) > Double(refreshSeconds * 3) {
+                    phase = .disconnected
                 }
-                if self.subscription == nil { self.subscribe() }
+                if subscription == nil { subscribe() }
             }
         }
     }
@@ -168,18 +172,16 @@ final class StatusStore {
 
     var sortedProcesses: [MetricsSnapshot.ProcessInfo] {
         let procs = snapshot?.topProcesses ?? []
-        let sorted = procs.sorted { a, b in
-            let cmp: Bool
-            switch sortColumn {
-            case .name: cmp = (a.name ?? "").localizedCaseInsensitiveCompare(b.name ?? "") == .orderedAscending
-            case .pid: cmp = a.pid < b.pid
-            case .cpu: cmp = (a.cpu ?? 0) < (b.cpu ?? 0)
-            case .energy: cmp = (a.cpu ?? 0) < (b.cpu ?? 0) // 能耗列 M0 以 CPU 代理，--proc 落地后换真值
-            case .memory: cmp = (a.memoryBytes ?? 0) < (b.memoryBytes ?? 0)
+        return procs.sorted { a, b in
+            let cmp: Bool = switch sortColumn {
+            case .name: (a.name ?? "").localizedCaseInsensitiveCompare(b.name ?? "") == .orderedAscending
+            case .pid: a.pid < b.pid
+            case .cpu: (a.cpu ?? 0) < (b.cpu ?? 0)
+            case .energy: (a.cpu ?? 0) < (b.cpu ?? 0) // 能耗列 M0 以 CPU 代理，--proc 落地后换真值
+            case .memory: (a.memoryBytes ?? 0) < (b.memoryBytes ?? 0)
             }
             return sortDescending ? !cmp : cmp
         }
-        return sorted
     }
 
     func toggleSort(_ column: SortColumn) {
@@ -264,7 +266,7 @@ final class StatusStore {
         let probed = probe(p)
         var lines = ["\(p.name ?? "?") (\(p.pid))"]
         if let from = origin(of: probed, selfPid: p.pid) {
-            lines.append("来自 \(from)。")
+            lines.append(L("status.summary.from", from))
         }
         let chain = friendlyChain(probed)
         if chain.count > 1 {

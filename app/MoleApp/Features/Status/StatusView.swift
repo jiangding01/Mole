@@ -21,16 +21,16 @@ struct StatusView: View {
         .onAppear { store.start() }
         .onDisappear { store.stop() }
         .confirmationDialog(
-            "结束进程 \(store.confirmKill?.name ?? "")？",
+            L("status.kill.title", store.confirmKill?.name ?? ""),
             isPresented: Binding(get: { store.confirmKill != nil }, set: { if !$0 { store.confirmKill = nil } })
         ) {
             if let p = store.confirmKill {
-                Button("终止") { store.kill(p, force: false); store.confirmKill = nil }
-                Button("强制退出", role: .destructive) { store.kill(p, force: true); store.confirmKill = nil }
-                Button("取消", role: .cancel) { store.confirmKill = nil }
+                Button(L("status.kill.terminate")) { store.kill(p, force: false); store.confirmKill = nil }
+                Button(L("status.kill.force"), role: .destructive) { store.kill(p, force: true); store.confirmKill = nil }
+                Button(L("common.cancel"), role: .cancel) { store.confirmKill = nil }
             }
         } message: {
-            Text("终止会请求进程正常退出；强制退出立即结束，未保存内容将丢失。")
+            Text(L("status.kill.message"))
         }
         .sheet(item: Binding(get: { store.detailProc }, set: { store.detailProc = $0 })) { proc in
             ProcessDetailSheet(proc: proc, store: store, look: look, accent: accent)
@@ -45,7 +45,7 @@ struct StatusView: View {
                 Image(systemName: "bolt.horizontal.circle")
                     .font(.system(size: 30))
                     .foregroundStyle(Semantic.warn)
-                Text("无法读取系统指标")
+                Text(L("status.failed.title"))
                     .font(Fonts.ui(14, .semibold))
                     .foregroundStyle(look.text)
                 Text(reason)
@@ -54,7 +54,7 @@ struct StatusView: View {
                     .lineLimit(3)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 460)
-                Button("重试") { store.retry() }
+                Button(L("common.retry")) { store.retry() }
                     .buttonStyle(.plain)
                     .pointingCursor()
                     .font(Fonts.ui(12, .semibold))
@@ -74,11 +74,11 @@ struct StatusView: View {
                 Fonts.eyebrow("Reading Sensors", size: 11)
                     .foregroundStyle(look.textMute)
                     .padding(.top, 38)
-                Text("正在读取系统指标")
+                Text(L("status.connecting.title"))
                     .font(Fonts.serif(30, .semibold))
                     .foregroundStyle(look.text)
                     .padding(.top, 12)
-                Text(store.snapshot == nil ? "采集 CPU · 内存 · 磁盘 · 网络 · 传感器数据" : "正在采集进程列表…")
+                Text(store.snapshot == nil ? L("status.connecting.subtitle") : L("status.connecting.procs"))
                     .font(Fonts.ui(13))
                     .foregroundStyle(look.textDim)
                     .padding(.top, 10)
@@ -104,12 +104,12 @@ struct StatusView: View {
     private var headerBar: some View {
         HStack(spacing: 12) {
             // 设计稿：衬线大标题 + 绿色"实时监测中"胶囊
-            Text("系统状态")
+            Text(L("status.title"))
                 .font(Fonts.serif(28, .semibold))
                 .foregroundStyle(look.text)
             livePill
             Spacer()
-            Text("刷新频率")
+            Text(L("status.refresh.label"))
                 .font(Fonts.ui(11))
                 .foregroundStyle(look.textMute)
             refreshSegment
@@ -121,7 +121,7 @@ struct StatusView: View {
         return HStack(spacing: 5) {
             Circle().fill(live ? accent.b : Semantic.warn)
                 .frame(width: 6, height: 6)
-            Text(live ? "实时监测中" : "重连中")
+            Text(live ? L("status.live") : L("status.reconnecting"))
                 .font(Fonts.ui(11, .medium))
         }
         .padding(.horizontal, 10).padding(.vertical, 4)
@@ -136,7 +136,7 @@ struct StatusView: View {
                 Button {
                     store.refreshSeconds = s
                 } label: {
-                    Text("\(s)s")
+                    Text(verbatim: "\(s)s")
                         .font(Fonts.mono(10.5, .semibold))
                         .padding(.horizontal, 10).padding(.vertical, 4)
                         .background {
@@ -156,7 +156,7 @@ struct StatusView: View {
     private var disconnectBanner: some View {
         HStack(spacing: 8) {
             Circle().fill(Semantic.warn).frame(width: 6, height: 6)
-            Text("数据流中断，正在重连…")
+            Text(L("status.disconnected"))
                 .font(Fonts.ui(12))
                 .foregroundStyle(look.textDim)
             Spacer()
@@ -187,10 +187,10 @@ struct StatusView: View {
     private func healthCard(_ s: MetricsSnapshot?) -> some View {
         let score = Double(s?.healthScore ?? 0)
         let hw = s?.hardware
-        return MetricCard(title: "健康分", icon: "heart", tint: Semantic.health(score), look: look) {
+        return MetricCard(title: L("status.card.health"), icon: "heart", tint: Semantic.health(score), look: look) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("\(Int(score))")
+                    Text(verbatim: "\(Int(score))")
                         .font(Fonts.serif(40, .semibold))
                         .foregroundStyle(Semantic.health(score))
                     Text(healthMsg(s?.healthScoreMsg))
@@ -199,12 +199,12 @@ struct StatusView: View {
                         .lineLimit(2)
                 }
                 // 设计稿：芯片 / 内存 · 系统 / 运行 三行规格
-                specRow("芯片", hw?.cpuModel ?? hw?.model ?? "—")
+                specRow(L("status.spec.chip"), hw?.cpuModel ?? hw?.model ?? "—")
                 HStack(spacing: 10) {
-                    specRow("内存", hw?.totalRAM ?? "—")
-                    specRow("系统", hw?.osVersion ?? "—")
+                    specRow(L("status.spec.ram"), hw?.totalRAM ?? "—")
+                    specRow(L("status.spec.os"), hw?.osVersion ?? "—")
                 }
-                specRow("运行", s?.uptime ?? "—")
+                specRow(L("status.spec.uptime"), s?.uptime ?? "—")
             }
         }
     }
@@ -224,7 +224,7 @@ struct StatusView: View {
                 bigPercent(cpu?.usage)
                 BarHistoryChart(values: store.cpuHistory, color: Semantic.success)
                     .frame(height: 32)
-                Text("负载 \(String(format: "%.1f", cpu?.load1 ?? 0)) / \(cpu?.coreCount ?? 0) 核 · \(loadQualifier(cpu))")
+                Text(L("status.cpu.load", String(format: "%.1f", cpu?.load1 ?? 0), Int64(cpu?.coreCount ?? 0), loadQualifier(cpu)))
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
             }
@@ -234,8 +234,13 @@ struct StatusView: View {
     private func gpuCard(_ s: MetricsSnapshot?) -> some View {
         let gpu = s?.gpu?.first
         let usage = validPercent(gpu?.usage)
-        return MetricCard(title: "GPU", icon: "display", tint: Color(hex: 0xDD8464),
-                          badge: tempBadge(s?.thermal?.gpuTemp), look: look) {
+        return MetricCard(
+            title: "GPU",
+            icon: "display",
+            tint: Color(hex: 0xDD8464),
+            badge: tempBadge(s?.thermal?.gpuTemp),
+            look: look
+        ) {
             VStack(alignment: .leading, spacing: 5) {
                 bigPercent(usage)
                 if usage != nil {
@@ -243,12 +248,13 @@ struct StatusView: View {
                         .frame(height: 32)
                 } else {
                     // powermetrics 需要 root：helper（Phase 3）落地前使用率不可读。
-                    Text("使用率需要管理员组件")
+                    Text(L("status.gpu.needsHelper"))
                         .font(Fonts.ui(11))
                         .foregroundStyle(look.textMute)
                         .frame(height: 32, alignment: .center)
                 }
-                Text(usage.map { "\($0 > 70 ? "繁忙" : "正常") · \(gpu?.coreCount ?? 0) GPU 核" } ?? "\(gpu?.coreCount ?? 0) GPU 核")
+                let cores = L("status.gpu.cores", Int64(gpu?.coreCount ?? 0))
+                Text(usage.map { "\($0 > 70 ? L("status.gpu.busy") : L("status.load.normal")) · \(cores)" } ?? cores)
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
             }
@@ -257,21 +263,31 @@ struct StatusView: View {
 
     private func memoryCard(_ s: MetricsSnapshot?) -> some View {
         let mem = s?.memory
-        let pressureLabel = ["normal": "正常", "warn": "偏高", "critical": "告急"][mem?.pressure ?? ""]
-        return MetricCard(title: "内存", icon: "memorychip", tint: Color(hex: 0xE6C078), badge: pressureLabel.map { "压力 \($0)" }, look: look) {
+        let pressureLabel = [
+            "normal": L("status.load.normal"),
+            "warn": L("status.load.high"),
+            "critical": L("status.pressure.critical"),
+        ][mem?.pressure ?? ""]
+        return MetricCard(
+            title: L("status.card.memory"),
+            icon: "memorychip",
+            tint: Color(hex: 0xE6C078),
+            badge: pressureLabel.map { L("status.pressure.badge", $0) },
+            look: look
+        ) {
             VStack(alignment: .leading, spacing: 5) {
                 // 设计稿：14.2 / 16 GB（已用 / 总量），非百分比
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(fmtGB(mem?.used))
                         .font(Fonts.serif(34, .semibold))
                         .foregroundStyle(look.text)
-                    Text("/ \(fmtGB(mem?.total)) GB")
+                    Text(verbatim: "/ \(fmtGB(mem?.total)) GB")
                         .font(Fonts.mono(12))
                         .foregroundStyle(look.textDim)
                 }
                 AreaHistoryChart(values: store.memHistory, color: accent.a)
                     .frame(height: 32)
-                Text("交换空间 \(fmtBytes(mem?.swapUsed))")
+                Text(L("status.mem.swap", fmtBytes(mem?.swapUsed)))
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
             }
@@ -281,9 +297,9 @@ struct StatusView: View {
     private func batteryCard(_ s: MetricsSnapshot?) -> some View {
         let bat = s?.batteries?.first
         // 设计稿徽标形如"健康 94%"（健康度 + 最大容量）
-        let badge = bat?.capacity.map { "健康 \($0)%" } ?? healthLabel(bat?.health)
+        let badge = bat?.capacity.map { L("status.battery.healthBadge", Int64($0)) } ?? healthLabel(bat?.health)
         let top = s?.topProcesses?.max { ($0.cpu ?? 0) < ($1.cpu ?? 0) }
-        return MetricCard(title: "电池", icon: "battery.75percent", tint: Semantic.successAlt, badge: badge, look: look) {
+        return MetricCard(title: L("status.card.battery"), icon: "battery.75percent", tint: Semantic.successAlt, badge: badge, look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     bigPercent(bat?.percent)
@@ -291,14 +307,14 @@ struct StatusView: View {
                         .font(Fonts.ui(11))
                         .foregroundStyle(look.textDim)
                 }
-                Text("\(bat?.cycleCount ?? 0) 次循环")
+                Text(L("status.battery.cycles", Int64(bat?.cycleCount ?? 0)))
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
                 // 设计稿：最大消耗 <进程> · <CPU%>
                 if let top, let cpu = top.cpu {
                     HStack(spacing: 4) {
                         Image(systemName: "flame").font(.system(size: 8)).foregroundStyle(Semantic.warnAlt)
-                        Text("最大消耗 \(top.name ?? "?") · \(Int(cpu))%")
+                        Text(L("status.battery.top", top.name ?? "?", Int64(Int(cpu))))
                     }
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
@@ -311,13 +327,13 @@ struct StatusView: View {
     private func diskCard(_ s: MetricsSnapshot?) -> some View {
         let disk = s?.disks?.first
         let free = (disk?.total ?? 0) &- (disk?.used ?? 0)
-        return MetricCard(title: "磁盘", icon: "internaldrive", tint: Color(hex: 0x5AB4CE), look: look) {
+        return MetricCard(title: L("status.card.disk"), icon: "internaldrive", tint: Color(hex: 0x5AB4CE), look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(fmtDisk(free))
                         .font(Fonts.serif(28, .semibold))
                         .foregroundStyle(look.text)
-                    Text("可用").font(Fonts.ui(11)).foregroundStyle(look.textDim)
+                    Text(L("status.disk.free")).font(Fonts.ui(11)).foregroundStyle(look.textDim)
                 }
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
@@ -329,9 +345,9 @@ struct StatusView: View {
                 .frame(height: 5)
                 // 设计稿：已用 % 靠左、共 N GB 靠右
                 HStack {
-                    Text(String(format: "已用 %.0f%%", disk?.usedPercent ?? 0))
+                    Text(L("status.disk.used", Int64((disk?.usedPercent ?? 0).rounded())))
                     Spacer()
-                    Text("共 \(fmtDisk(disk?.total))")
+                    Text(L("status.disk.total", fmtDisk(disk?.total)))
                 }
                 .font(Fonts.mono(10))
                 .foregroundStyle(look.textMute)
@@ -341,16 +357,20 @@ struct StatusView: View {
 
     private func networkCard(_ s: MetricsSnapshot?) -> some View {
         let iface = s?.network?.first?.name
-        return MetricCard(title: "网络", icon: "globe", tint: Color(hex: 0x5AB4CE), badge: iface, look: look) {
+        return MetricCard(title: L("status.card.network"), icon: "globe", tint: Color(hex: 0x5AB4CE), badge: iface, look: look) {
             VStack(alignment: .leading, spacing: 5) {
                 // 设计稿：下行 / 上行 双列并排
                 HStack(spacing: 18) {
-                    netColumn("arrow.down", "下行", store.netRxHistory.last ?? 0, Color(hex: 0x63BB95))
-                    netColumn("arrow.up", "上行", store.netTxHistory.last ?? 0, Color(hex: 0x5AB4CE))
+                    netColumn("arrow.down", L("status.net.down"), store.netRxHistory.last ?? 0, Color(hex: 0x63BB95))
+                    netColumn("arrow.up", L("status.net.up"), store.netTxHistory.last ?? 0, Color(hex: 0x5AB4CE))
                 }
-                DualLineChart(a: store.netRxHistory, b: store.netTxHistory,
-                              colorA: Color(hex: 0x63BB95), colorB: Color(hex: 0x5AB4CE))
-                    .frame(height: 32)
+                DualLineChart(
+                    a: store.netRxHistory,
+                    b: store.netTxHistory,
+                    colorA: Color(hex: 0x63BB95),
+                    colorB: Color(hex: 0x5AB4CE)
+                )
+                .frame(height: 32)
             }
         }
     }
@@ -370,28 +390,34 @@ struct StatusView: View {
     private func fanCard(_ s: MetricsSnapshot?) -> some View {
         let fan = s?.thermal
         let hasFan = (fan?.fanSpeed ?? 0) > 0
-        return MetricCard(title: "风扇", icon: "fan.fill", tint: Color(hex: 0xC9C0B0), badge: hasFan ? "自动" : nil, look: look) {
+        return MetricCard(
+            title: L("status.card.fan"),
+            icon: "fan.fill",
+            tint: Color(hex: 0xC9C0B0),
+            badge: hasFan ? L("status.fan.auto") : nil,
+            look: look
+        ) {
             VStack(alignment: .leading, spacing: 5) {
                 if hasFan {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text((fan?.fanSpeed ?? 0).formatted(.number.grouping(.automatic)))
                             .font(Fonts.serif(28, .semibold))
                             .foregroundStyle(look.text)
-                        Text("RPM").font(Fonts.mono(10)).foregroundStyle(look.textDim)
+                        Text(verbatim: "RPM").font(Fonts.mono(10)).foregroundStyle(look.textDim)
                     }
                 } else {
-                    Text("静音")
+                    Text(L("status.fan.silent"))
                         .font(Fonts.serif(28, .semibold))
                         .foregroundStyle(look.textDim)
                 }
                 HStack(spacing: 4) {
                     Image(systemName: "fanblades").font(.system(size: 9)).foregroundStyle(look.textMute)
-                    Text("散热正常 · 由 macOS 调节")
+                    Text(L("status.fan.normal"))
                 }
                 .font(Fonts.ui(11))
                 .foregroundStyle(look.textDim)
                 if let power = fan?.systemPower, power > 0 {
-                    Text(String(format: "功耗 %.1fW", power))
+                    Text(L("status.fan.power", power))
                         .font(Fonts.mono(10)).foregroundStyle(look.textMute)
                 }
             }
@@ -411,14 +437,16 @@ struct StatusView: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(store.sortedProcesses.prefix(50).enumerated()), id: \.element.pid) { index, proc in
-                            ProcessRow(proc: proc,
-                                       icon: store.icon(for: proc),
-                                       look: look,
-                                       isSystem: store.isSystemProcess(proc),
-                                       maxCPU: store.sortedProcesses.first?.cpu ?? 100,
-                                       zebra: index % 2 == 1,
-                                       onOpen: { store.detailProc = proc },
-                                       onKill: { store.confirmKill = proc })
+                            ProcessRow(
+                                proc: proc,
+                                icon: store.icon(for: proc),
+                                look: look,
+                                isSystem: store.isSystemProcess(proc),
+                                maxCPU: store.sortedProcesses.first?.cpu ?? 100,
+                                zebra: index % 2 == 1,
+                                onOpen: { store.detailProc = proc },
+                                onKill: { store.confirmKill = proc }
+                            )
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .top)
@@ -436,14 +464,14 @@ struct StatusView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 RingSpinner(accent: accent, size: 14, lineWidth: 2)
-                Text("正在采集进程…")
+                Text(L("status.table.collecting"))
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
                 Spacer()
             }
             .padding(.horizontal, 14)
             .frame(height: 30)
-            ForEach(0..<10, id: \.self) { i in
+            ForEach(0 ..< 10, id: \.self) { i in
                 SkeletonRow(look: look, wide: i % 3 == 0)
             }
         }
@@ -452,12 +480,12 @@ struct StatusView: View {
 
     private var processHeader: some View {
         HStack(spacing: 0) {
-            sortHeader("名称（\(store.sortedProcesses.count)）", .name)
+            sortHeader(L("status.table.name", Int64(store.sortedProcesses.count)), .name)
                 .frame(maxWidth: .infinity, alignment: .leading)
             sortHeader("PID", .pid).frame(width: 80, alignment: .trailing)
             sortHeader("CPU", .cpu).frame(width: 130, alignment: .trailing)
-            sortHeader("能耗", .energy).frame(width: 70, alignment: .trailing)
-            sortHeader("内存", .memory).frame(width: 90, alignment: .trailing)
+            sortHeader(L("status.table.energy"), .energy).frame(width: 70, alignment: .trailing)
+            sortHeader(L("status.card.memory"), .memory).frame(width: 90, alignment: .trailing)
             Color.clear.frame(width: 36, height: 1)
         }
         .font(Fonts.mono(10, .semibold))
@@ -491,9 +519,9 @@ struct StatusView: View {
     private func loadQualifier(_ cpu: MetricsSnapshot.CPUStatus?) -> String {
         guard let load = cpu?.load1, let cores = cpu?.coreCount, cores > 0 else { return "—" }
         let ratio = load / Double(cores)
-        if ratio < 0.5 { return "低负载" }
-        if ratio < 1.0 { return "正常" }
-        return "偏高"
+        if ratio < 0.5 { return L("status.load.low") }
+        if ratio < 1.0 { return L("status.load.normal") }
+        return L("status.load.high")
     }
 
     /// 内存卡的 GB 数字（14.2 这种一位小数，去掉单位由调用方拼）。
@@ -511,10 +539,10 @@ struct StatusView: View {
 
     private func bigPercent(_ v: Double?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text(v.map { "\(Int($0))" } ?? "--")
+            Text(verbatim: v.map { "\(Int($0))" } ?? "--")
                 .font(Fonts.serif(34, .semibold))
                 .foregroundStyle(look.text)
-            Text("%").font(Fonts.mono(12)).foregroundStyle(look.textDim)
+            Text(verbatim: "%").font(Fonts.mono(12)).foregroundStyle(look.textDim)
         }
     }
 
@@ -526,21 +554,21 @@ struct StatusView: View {
 
     private func batteryStatusLabel(_ s: String?) -> String {
         switch (s ?? "").lowercased() {
-        case "ac", "ac power": return "电源供电"
-        case "charging": return "充电中"
-        case "discharging", "battery power": return "电池供电"
-        case "charged", "full", "fully charged": return "已充满"
-        default: return s ?? "—"
+        case "ac", "ac power": L("status.battery.ac")
+        case "charging": L("status.battery.charging")
+        case "discharging", "battery power": L("status.battery.onBattery")
+        case "charged", "full", "fully charged": L("status.battery.full")
+        default: s ?? "—"
         }
     }
 
     private func healthLabel(_ h: String?) -> String? {
         switch (h ?? "").lowercased() {
-        case "good": return "健康"
-        case "fair": return "一般"
-        case "poor", "bad": return "较差"
-        case "": return nil
-        default: return h
+        case "good": L("status.battery.health.good")
+        case "fair": L("status.battery.health.fair")
+        case "poor", "bad": L("status.battery.health.poor")
+        case "": nil
+        default: h
         }
     }
 
@@ -558,6 +586,9 @@ struct StatusView: View {
     /// 健康诊断短语常见模式的中文化（CLI 输出英文；完整 i18n 见 §8.5）。
     private func healthMsg(_ msg: String?) -> String {
         guard var m = msg, !m.isEmpty else { return "—" }
+        guard L10n.shared.isChinese else {
+            return m.replacingOccurrences(of: ", ", with: " · ")
+        }
         let table = [
             "Disk Almost Full": "磁盘空间不足",
             "Restart Recommended": "建议重启",
@@ -565,7 +596,9 @@ struct StatusView: View {
             "High Memory Pressure": "内存压力偏高",
             "Good": "良好", "Fair": "一般", "Poor": "较差", "Excellent": "极佳",
         ]
-        for (en, zh) in table { m = m.replacingOccurrences(of: en, with: zh) }
+        for (en, zh) in table {
+            m = m.replacingOccurrences(of: en, with: zh)
+        }
         return m.replacingOccurrences(of: ": ", with: "：").replacingOccurrences(of: ", ", with: " · ")
     }
 
@@ -580,7 +613,7 @@ private struct MetricCard<Content: View>: View {
     var title: String
     var icon: String
     var tint: Color
-    var badge: String? = nil
+    var badge: String?
     var look: Look
     @ViewBuilder var content: Content
 
@@ -634,7 +667,7 @@ private struct ProcessRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(proc.pid)").frame(width: 80, alignment: .trailing)
+            Text(verbatim: "\(proc.pid)").frame(width: 80, alignment: .trailing)
             HStack(spacing: 6) {
                 Capsule().fill(look.line)
                     .overlay(alignment: .leading) {
@@ -646,17 +679,17 @@ private struct ProcessRow: View {
                 Text(String(format: "%.1f", proc.cpu ?? 0)).frame(width: 50, alignment: .trailing)
             }
             .frame(width: 130, alignment: .trailing)
-            Text("--").frame(width: 70, alignment: .trailing)
+            Text(verbatim: "--").frame(width: 70, alignment: .trailing)
             Text(fmtMem(proc.memoryBytes)).frame(width: 90, alignment: .trailing)
             Menu {
-                Button("查看详情", action: onOpen)
-                Button("结束进程…", action: onKill).disabled(isSystem)
-                Button("在活动监视器中打开") {
+                Button(L("status.menu.detail"), action: onOpen)
+                Button(L("status.menu.kill"), action: onKill).disabled(isSystem)
+                Button(L("status.menu.activityMonitor")) {
                     if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.ActivityMonitor") {
                         NSWorkspace.shared.openApplication(at: url, configuration: .init())
                     }
                 }
-                if isSystem { Text("系统进程") }
+                if isSystem { Text(L("status.proc.system")) }
             } label: {
                 Image(systemName: "ellipsis").foregroundStyle(look.textMute)
             }
@@ -770,12 +803,12 @@ private struct ProcessDetailSheet: View {
         .task(id: proc.pid) { probe = store.probe(proc) }
     }
 
-    // 已退出：极简卡片 + 红字提示
+    /// 已退出：极简卡片 + 红字提示
     private var goneCard: some View {
         VStack(spacing: 0) {
             header(titleSize: 19)
             Divider().overlay(look.line)
-            Text("进程 \(proc.pid) 已不在运行。")
+            Text(L("status.detail.gone", Int64(proc.pid)))
                 .font(Fonts.ui(14))
                 .foregroundStyle(Semantic.danger)
                 .padding(.vertical, 34)
@@ -832,7 +865,7 @@ private struct ProcessDetailSheet: View {
                 .frame(width: 40, height: 40)
                 .clipShape(RoundedRectangle(cornerRadius: 11))
         } else {
-            Text("exec")
+            Text(verbatim: "exec")
                 .font(Fonts.mono(9, .bold))
                 .foregroundStyle(look.textMute)
                 .frame(width: 40, height: 40)
@@ -855,15 +888,14 @@ private struct ProcessDetailSheet: View {
         }
         if let user = probe?.user { parts.append(user) }
         if let probe, let from = store.origin(of: probe, selfPid: proc.pid) {
-            parts.append("来自 \(from)")
+            parts.append(L("status.detail.from", from))
         } else if proc.ppid == 1 {
-            parts.append("由 launchd 启动")
+            parts.append(L("status.detail.launchd"))
         }
         return parts.joined(separator: " · ")
     }
 
     /// 进程树：完整祖先链 launchd 1 › … › 本进程 pid（探测失败时退化为 ppid 单级）。
-    @ViewBuilder
     private var processTree: some View {
         Group {
             if let probe, probe.chain.count > 1 {
@@ -874,12 +906,12 @@ private struct ProcessDetailSheet: View {
                     let parent = store.parent(of: proc)
                     Text(parent?.name ?? (proc.ppid == 1 ? "launchd" : "PPID"))
                         .foregroundStyle(look.textDim)
-                    Text("\(proc.ppid ?? 0)").foregroundStyle(look.textMute)
+                    Text(verbatim: "\(proc.ppid ?? 0)").foregroundStyle(look.textMute)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(look.textMute)
                     Text(proc.name ?? "?").foregroundStyle(look.text)
-                    Text("\(proc.pid)").foregroundStyle(look.textMute)
+                    Text(verbatim: "\(proc.pid)").foregroundStyle(look.textMute)
                 }
             }
         }
@@ -888,41 +920,40 @@ private struct ProcessDetailSheet: View {
     }
 
     private func chainText(_ chain: [(pid: Int32, name: String)]) -> Text {
-        var result = Text("")
+        var result = Text(verbatim: "")
         for (i, link) in chain.enumerated() {
-            if i > 0 { result = result + Text("  ›  ").foregroundStyle(look.textMute) }
+            if i > 0 { result = result + Text(verbatim: "  ›  ").foregroundStyle(look.textMute) }
             let isLast = i == chain.count - 1
             result = result + Text(link.name).foregroundStyle(isLast ? look.text : look.textDim)
-            result = result + Text(" \(link.pid)").foregroundStyle(look.textMute)
+            result = result + Text(verbatim: " \(link.pid)").foregroundStyle(look.textMute)
         }
         return result
     }
 
-    @ViewBuilder
     private func infoRows(isSystem: Bool, app: NSRunningApplication?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if let app, let bundle = app.bundleURL?.path {
-                infoRow("置信度", "高 · 正在运行的应用")
-                infoRow("识别依据", bundle)
+                infoRow(L("status.detail.confidence"), L("status.detail.confidence.high"))
+                infoRow(L("status.detail.evidence"), bundle)
             } else if let bundle = inferredBundlePath {
-                infoRow("置信度", "中 · 从可执行路径推断")
-                infoRow("识别依据", bundle)
+                infoRow(L("status.detail.confidence"), L("status.detail.confidence.medium"))
+                infoRow(L("status.detail.evidence"), bundle)
             }
-            if let threads = probe?.threadCount { infoRow("线程数", "\(threads)") }
-            if let files = probe?.openFileCount { infoRow("打开文件", "\(files)") }
+            if let threads = probe?.threadCount { infoRow(L("status.detail.threads"), "\(threads)") }
+            if let files = probe?.openFileCount { infoRow(L("status.detail.files"), "\(files)") }
             if let read = probe?.diskBytesRead, let written = probe?.diskBytesWritten {
-                infoRow("磁盘 I/O", "\(fmtIO(read)) R · \(fmtIO(written)) W")
+                infoRow(L("status.detail.io"), "\(fmtIO(read)) R · \(fmtIO(written)) W")
             }
-            infoRow("子进程", "\(store.childCount(of: proc))")
-            if let user = probe?.user { infoRow("用户", user) }
+            infoRow(L("status.detail.children"), "\(store.childCount(of: proc))")
+            if let user = probe?.user { infoRow(L("status.detail.user"), user) }
             if let started = app?.launchDate ?? probe?.startTime {
-                infoRow("启动时间", elapsed(started))
+                infoRow(L("status.detail.started"), elapsed(started))
             }
             if let dir = probe?.workingDirectory {
-                infoRow("工作目录", (dir as NSString).abbreviatingWithTildeInPath)
+                infoRow(L("status.detail.cwd"), (dir as NSString).abbreviatingWithTildeInPath)
             }
             if let exec = executableDisplay {
-                infoRow("可执行文件", exec)
+                infoRow(L("status.detail.exec"), exec)
             }
             rawCommandSection
         }
@@ -957,8 +988,8 @@ private struct ProcessDetailSheet: View {
                     HStack(spacing: 5) {
                         Image(systemName: showRawCommand ? "chevron.down" : "chevron.right")
                             .font(.system(size: 8, weight: .semibold))
-                        Text("原始路径与命令")
-                        Text("1")
+                        Text(L("status.detail.rawCommand"))
+                        Text(verbatim: "1")
                     }
                     .font(Fonts.mono(11, .medium))
                     .foregroundStyle(look.textDim)
@@ -969,7 +1000,7 @@ private struct ProcessDetailSheet: View {
                 .pointingCursor()
                 if showRawCommand {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("命令").font(Fonts.mono(10)).foregroundStyle(look.textMute)
+                        Text(L("status.detail.command")).font(Fonts.mono(10)).foregroundStyle(look.textMute)
                         Text(cmd)
                             .font(Fonts.mono(11.5))
                             .foregroundStyle(look.text)
@@ -1021,16 +1052,16 @@ private struct ProcessDetailSheet: View {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 11))
-                    Text("系统进程，无法终止。")
+                    Text(L("status.detail.systemWarning"))
                         .font(Fonts.ui(12))
                 }
                 .foregroundStyle(Semantic.warn)
             }
             Spacer()
-            ghostButton("复制摘要") { store.copySummary(proc) }
-            ghostButton("显示") { store.reveal(proc) }
+            ghostButton(L("status.detail.copySummary")) { store.copySummary(proc) }
+            ghostButton(L("status.detail.reveal")) { store.reveal(proc) }
             if !isSystem {
-                ghostButton("终止") {
+                ghostButton(L("status.kill.terminate")) {
                     store.detailProc = nil
                     store.confirmKill = proc
                 }
@@ -1038,7 +1069,7 @@ private struct ProcessDetailSheet: View {
                     store.detailProc = nil
                     store.confirmKill = proc
                 } label: {
-                    Text("强制退出")
+                    Text(L("status.kill.force"))
                         .font(Fonts.ui(12.5, .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 15).padding(.vertical, 8)
@@ -1125,8 +1156,11 @@ private struct AreaHistoryChart: View {
                 path.addLine(to: CGPoint(x: geo.size.width, y: geo.size.height))
                 path.closeSubpath()
             }
-            .fill(LinearGradient(colors: [color.opacity(0.4), color.opacity(0.05)],
-                                 startPoint: .top, endPoint: .bottom))
+            .fill(LinearGradient(
+                colors: [color.opacity(0.4), color.opacity(0.05)],
+                startPoint: .top,
+                endPoint: .bottom
+            ))
         }
     }
 }

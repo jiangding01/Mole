@@ -10,7 +10,8 @@ struct PagePlaceholder: View {
             Spacer()
             Text(title)
                 .font(.system(size: 28, weight: .semibold))
-            Text("规格见 docs/MAC_APP_DESIGN.md \(designRef)")
+            // verbatim：开发期占位文案，不进 String Catalog（避免 Xcode 自动抽取）
+            Text(verbatim: "规格见 docs/MAC_APP_DESIGN.md \(designRef)")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
             Spacer()
