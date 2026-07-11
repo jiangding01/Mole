@@ -22,6 +22,7 @@ const (
 var (
 	gpuActiveResidencyRe = regexp.MustCompile(`GPU HW active residency:\s+([\d.]+)%`)
 	gpuIdleResidencyRe   = regexp.MustCompile(`GPU idle residency:\s+([\d.]+)%`)
+	gpuDeviceUtilRe      = regexp.MustCompile(`"Device Utilization %"=(\d+)`)
 )
 
 func (c *Collector) collectGPU(now time.Time) ([]GPUStatus, error) {
@@ -163,8 +164,44 @@ func (c *Collector) getMacGPUUsage(now time.Time) float64 {
 	return usage
 }
 
-// getMacGPUUsage reads GPU active residency from powermetrics.
+// getMacGPUUsage reads GPU utilization, preferring the unprivileged ioreg
+// path; powermetrics (root only) is the fallback for setups where the
+// accelerator does not publish PerformanceStatistics.
 func getMacGPUUsage() float64 {
+	if usage := getMacGPUUsageIOReg(); usage >= 0 {
+		return usage
+	}
+	return getMacGPUUsagePowermetrics()
+}
+
+// getMacGPUUsageIOReg reads "Device Utilization %" from the accelerator's
+// PerformanceStatistics via ioreg. IOAccelerator covers both Apple Silicon
+// (AGXAccelerator subclass) and Intel GPUs, and requires no privileges.
+func getMacGPUUsageIOReg() float64 {
+	ctx, cancel := context.WithTimeout(context.Background(), powermetricsTimeout)
+	defer cancel()
+
+	out, err := runCmd(ctx, "ioreg", "-r", "-d", "1", "-w0", "-c", "IOAccelerator")
+	if err != nil {
+		return -1
+	}
+	return parseGPUDeviceUtilization(out)
+}
+
+// parseGPUDeviceUtilization extracts the first "Device Utilization %" value
+// from ioreg output; -1 when absent or out of range.
+func parseGPUDeviceUtilization(out string) float64 {
+	matches := gpuDeviceUtilRe.FindStringSubmatch(out)
+	if len(matches) >= 2 {
+		if usage, err := strconv.ParseFloat(matches[1], 64); err == nil && usage >= 0 && usage <= 100 {
+			return usage
+		}
+	}
+	return -1
+}
+
+// getMacGPUUsagePowermetrics reads GPU active residency from powermetrics.
+func getMacGPUUsagePowermetrics() float64 {
 	ctx, cancel := context.WithTimeout(context.Background(), powermetricsTimeout)
 	defer cancel()
 

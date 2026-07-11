@@ -435,3 +435,24 @@ func TestMetricsSnapshotFieldsHaveCollectionClassifications(t *testing.T) {
 		t.Fatalf("field classification count = %d, want %d", len(classified), typ.NumField())
 	}
 }
+
+func TestParseGPUDeviceUtilization(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want float64
+	}{
+		{"apple silicon ioreg", `    "PerformanceStatistics" = {"Device Utilization %"=34,"Renderer Utilization %"=28}`, 34},
+		{"zero utilization", `"Device Utilization %"=0`, 0},
+		{"missing key", `"Renderer Utilization %"=28`, -1},
+		{"empty output", ``, -1},
+		{"out of range", `"Device Utilization %"=250`, -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseGPUDeviceUtilization(tc.in); got != tc.want {
+				t.Fatalf("parseGPUDeviceUtilization(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
