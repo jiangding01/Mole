@@ -22,8 +22,13 @@ struct RootView: View {
     @State private var analyzeStore = AnalyzeStore()
     @State private var statusStore = StatusStore()
 
+    /// 首启引导（设计 §5.8）：会话级 Store，overlay 挂在根 ZStack 最顶层。
+    @State private var onboardingStore = OnboardingStore()
+
     private let look = Look.ink
-    private var accent: ModuleAccent { Theme.moduleAccent(for: selectedTab) }
+    private var accent: ModuleAccent {
+        Theme.moduleAccent(for: selectedTab)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -37,6 +42,13 @@ struct RootView: View {
             topBar
                 .padding(.horizontal, 20)
                 .padding(.top, 10)
+
+            // 首启引导 overlay：必须是根 ZStack 最顶层直接子级，盖住 topBar 与页面
+            // （设计红线：全屏弹窗不能嵌在带 transform 动画的容器里）。
+            if onboardingStore.isPresented {
+                OnboardingView()
+                    .transition(.opacity)
+            }
         }
         .environment(scanSession)
         .environment(cleanStore)
@@ -44,8 +56,10 @@ struct RootView: View {
         .environment(optimizeStore)
         .environment(analyzeStore)
         .environment(statusStore)
+        .environment(onboardingStore)
         .sheet(isPresented: $showsHistory) { HistoryView() }
         .sheet(isPresented: $showsSettings) { SettingsView() }
+        .onAppear { onboardingStore.presentIfFirstLaunch() }
     }
 
     @ViewBuilder
