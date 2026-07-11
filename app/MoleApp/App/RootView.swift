@@ -21,6 +21,7 @@ struct RootView: View {
     @State private var optimizeStore = OptimizeStore()
     @State private var analyzeStore = AnalyzeStore()
     @State private var statusStore = StatusStore()
+    @State private var historyStore = HistoryStore()
 
     /// 首启引导（设计 §5.8）：会话级 Store，overlay 挂在根 ZStack 最顶层。
     @State private var onboardingStore = OnboardingStore()
@@ -56,6 +57,7 @@ struct RootView: View {
         .environment(optimizeStore)
         .environment(analyzeStore)
         .environment(statusStore)
+        .environment(historyStore)
         .environment(onboardingStore)
         .sheet(isPresented: $showsHistory) { HistoryView() }
         .sheet(isPresented: $showsSettings) { SettingsView() }
