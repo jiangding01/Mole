@@ -26,6 +26,10 @@ Usage: robot.sh <domain> <verb> [options]
   apps list                        (passthrough: JSON document, not NDJSON)
   apps plan <path> <bundle_id> [name]    read-only discovery + plan (NDJSON items)
   apps apply --plan <id>           ids via stdin; Trash-routed removal
+  apps updates list                read-only outdated-cask detection (NDJSON items)
+  apps update --id cask:<token>    delegate to brew upgrade --cask (never patches bundles)
+  launchitems list                 read-only login items + LaunchAgents/Daemons
+  launchitems disable|enable       ids via stdin; user-level, reversible (quarantine)
   optimize list                    read-only task inventory (NDJSON items)
   optimize run                     task ids via stdin; task_status stream
   history list [--limit n] [--deletions]
@@ -216,6 +220,72 @@ run_apps_apply() {
     robot_clean_apply "$plan_id"
 }
 
+run_apps_updates() {
+    # `apps updates <sub>` — v1 supports only `list` (§5.2.2). Detection is a
+    # pure `brew outdated --cask` read; degrades honestly when brew is absent.
+    local sub="${1:-list}"
+    case "$sub" in
+        list) ;;
+        *)
+            robot_emit_error "E_INTERNAL" "unknown apps updates verb: $sub" "true"
+            exit 2
+            ;;
+    esac
+    # shellcheck source=lib/uninstall/updates.sh
+    source "$SCRIPT_DIR/lib/uninstall/updates.sh"
+    updates_list
+}
+
+run_apps_update() {
+    # `apps update --id cask:<token>` — delegate the upgrade to brew. Non-cask
+    # ids are refused with E_UNSUPPORTED (App routes them elsewhere). No path
+    # here ever downloads or replaces a .app bundle.
+    local id=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --id)
+                shift
+                id="${1:-}"
+                ;;
+            *)
+                robot_emit_error "E_INTERNAL" "unknown update option: $1" "true"
+                exit 2
+                ;;
+        esac
+        shift
+    done
+    if [[ -z "$id" ]]; then
+        robot_emit_error "E_INTERNAL" "missing --id <id>" "true"
+        exit 2
+    fi
+    # shellcheck source=lib/uninstall/updates.sh
+    source "$SCRIPT_DIR/lib/uninstall/updates.sh"
+    updates_update "$id"
+}
+
+run_launchitems() {
+    # `launchitems list|disable|enable`. list is read-only; disable/enable are
+    # user-level and reversible (launchctl bootout/bootstrap + quarantine mv),
+    # ids one per line on stdin. common.sh provides the shared oplog helper.
+    local verb="$1"
+    local root="$SCRIPT_DIR"
+    # shellcheck source=lib/core/common.sh
+    source "$root/lib/core/common.sh"
+    # shellcheck source=lib/optimize/launch_items.sh
+    source "$root/lib/optimize/launch_items.sh"
+    export MOLE_CURRENT_COMMAND="optimize"
+
+    case "$verb" in
+        list) launchitems_list ;;
+        disable) launchitems_disable ;;
+        enable) launchitems_enable ;;
+        *)
+            robot_emit_error "E_INTERNAL" "unknown launchitems verb: $verb" "true"
+            exit 2
+            ;;
+    esac
+}
+
 run_history_list() {
     local limit=20 deletions=0
     while [[ $# -gt 0 ]]; do
@@ -274,6 +344,11 @@ main() {
         apps/list) run_apps_list ;;
         apps/plan) run_apps_plan "$@" ;;
         apps/apply) run_apps_apply "$@" ;;
+        apps/updates) run_apps_updates "$@" ;;
+        apps/update) run_apps_update "$@" ;;
+        launchitems/list) run_launchitems list ;;
+        launchitems/disable) run_launchitems disable ;;
+        launchitems/enable) run_launchitems enable ;;
         optimize/list) exec "$SCRIPT_DIR/bin/optimize.sh" --robot-list ;;
         optimize/run) exec "$SCRIPT_DIR/bin/optimize.sh" --robot-run ;;
         history/list) run_history_list "$@" ;;
