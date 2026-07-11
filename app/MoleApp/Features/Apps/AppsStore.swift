@@ -17,7 +17,10 @@ final class AppsStore {
 
     enum Tab: String, CaseIterable, Identifiable {
         case uninstall, update, startup
-        var id: String { rawValue }
+        var id: String {
+            rawValue
+        }
+
         var title: String {
             switch self {
             case .uninstall: L("apps.tab.uninstall")
@@ -41,8 +44,13 @@ final class AppsStore {
     struct AppPlan {
         var planId: String
         var items: [RobotItem]
-        var leftovers: [RobotItem] { items.filter { $0.section != "app" } }
-        var bundleItemId: String? { items.first { $0.section == "app" }?.id }
+        var leftovers: [RobotItem] {
+            items.filter { $0.section != "app" }
+        }
+
+        var bundleItemId: String? {
+            items.first { $0.section == "app" }?.id
+        }
     }
 
     enum LeftoverState {
@@ -78,11 +86,11 @@ final class AppsStore {
                 let apps = try await self?.client.list() ?? []
                 guard let self, !Task.isCancelled else { return }
                 self.apps = apps
-                self.phase = .loaded
+                phase = .loaded
             } catch {
                 guard let self, !Task.isCancelled else { return }
-                if silent, self.phase == .loaded { return } // 静默失败：下次进页再试
-                self.phase = .failed(error.localizedDescription)
+                if silent, phase == .loaded { return } // 静默失败：下次进页再试
+                phase = .failed(error.localizedDescription)
             }
         }
     }
@@ -103,16 +111,14 @@ final class AppsStore {
                     || $0.bundleId.localizedCaseInsensitiveContains(query)
             }
         }
-        let sorted = list.sorted { a, b in
-            let ascending: Bool
-            switch sortKey {
-            case .name: ascending = a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-            case .size: ascending = (a.sizeBytes ?? 0) < (b.sizeBytes ?? 0)
-            case .source: ascending = a.source < b.source
+        return list.sorted { a, b in
+            let ascending: Bool = switch sortKey {
+            case .name: a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            case .size: (a.sizeBytes ?? 0) < (b.sizeBytes ?? 0)
+            case .source: a.source < b.source
             }
             return sortDescending ? !ascending : ascending
         }
-        return sorted
     }
 
     var totalSizeText: String {
@@ -131,14 +137,31 @@ final class AppsStore {
     // MARK: - 选择
 
     /// 勾选应用同时触发残留发现（选中态要展示"移除本体 + 残留 x/y 项"摘要）。
+    /// 残留勾选与本体选中绑定（设计稿 toggleAppSel）：选中 → 非复核残留全选；
+    /// 取消 → 残留全部清空。展开预览本身不勾选任何残留。
     func toggleSelection(_ app: InstalledApp) {
-        if selection.contains(app.id) { selection.remove(app.id) } else {
+        if selection.contains(app.id) {
+            selection.remove(app.id)
+            checkedLeftovers[app.id] = []
+        } else {
             selection.insert(app.id)
+            checkedLeftovers[app.id] = defaultLeftoverSelection(for: app.id)
             fetchLeftovers(for: app)
         }
     }
 
-    var selectedApps: [InstalledApp] { apps.filter { selection.contains($0.id) } }
+    /// 本体选中时的残留默认勾选集 = 核心侧 default_selected（系统级需复核项不勾）。
+    /// plan 未加载时为空集，加载完成的回调会按当时的选中态补齐。
+    private func defaultLeftoverSelection(for appId: String) -> Set<String> {
+        if case let .loaded(plan) = leftovers[appId] {
+            return Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
+        }
+        return []
+    }
+
+    var selectedApps: [InstalledApp] {
+        apps.filter { selection.contains($0.id) }
+    }
 
     /// 批量条总量 = 已选应用本体 + 各自勾选残留。
     var selectedSizeText: String {
@@ -167,9 +190,12 @@ final class AppsStore {
             do {
                 let plan = try await Self.runPlan(for: app)
                 guard let self else { return }
-                self.leftovers[app.id] = .loaded(plan)
-                // 默认勾选 = 核心侧 default_selected（系统级需复核项默认不勾）
-                self.checkedLeftovers[app.id] = Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
+                leftovers[app.id] = .loaded(plan)
+                // 勾选状态跟随本体：已选中 → 默认集（系统级需复核项不勾）；
+                // 未选中（纯展开预览）→ 全部不勾（设计稿：残留勾选与选中绑定）。
+                checkedLeftovers[app.id] = selection.contains(app.id)
+                    ? Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
+                    : []
             } catch {
                 self?.leftovers[app.id] = .failed(error.localizedDescription)
             }
@@ -224,6 +250,15 @@ final class AppsStore {
 
     func toggleLeftover(_ app: InstalledApp, _ item: RobotItem) {
         guard !isReviewOnly(item) else { return }
+        // 本体未选中时点残留（设计稿 toggleAppPart）：自动选中本体 + 默认集 + 该项。
+        // 卸载语义上残留不能脱离本体单独执行，这样也消除"只勾残留"的歧义态。
+        if !selection.contains(app.id) {
+            selection.insert(app.id)
+            var set = defaultLeftoverSelection(for: app.id)
+            set.insert(item.id)
+            checkedLeftovers[app.id] = set
+            return
+        }
         var set = checkedLeftovers[app.id] ?? []
         if set.contains(item.id) { set.remove(item.id) } else { set.insert(item.id) }
         checkedLeftovers[app.id] = set
@@ -346,15 +381,15 @@ final class AppsStore {
             var plans: [(InstalledApp, AppPlan, Set<String>)] = []
             for app in targets {
                 do {
-                    let plan = try await self.ensurePlan(for: app)
-                    let checked = self.checkedLeftovers[app.id]
+                    let plan = try await ensurePlan(for: app)
+                    let checked = checkedLeftovers[app.id]
                         ?? Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
                     var bytes = plan.items.first { $0.section == "app" }?.bytes ?? 0
                     bytes += plan.leftovers.filter { checked.contains($0.id) }.compactMap(\.bytes).reduce(0, +)
-                    self.removalPlannedBytes += bytes
+                    removalPlannedBytes += bytes
                     plans.append((app, plan, checked))
                 } catch {
-                    self.removalLog.append(.init(id: app.id, name: app.name, bytes: 0, ok: false))
+                    removalLog.append(.init(id: app.id, name: app.name, bytes: 0, ok: false))
                 }
             }
 
@@ -362,35 +397,39 @@ final class AppsStore {
             var removed = 0
             for (index, entry) in plans.enumerated() {
                 let (app, plan, checked) = entry
-                self.removalPhase = .running(app: app.name, index: index, total: plans.count)
+                removalPhase = .running(app: app.name, index: index, total: plans.count)
                 do {
-                    let summary = try await self.applyWithRetry(app: app, plan: plan, checked: checked)
+                    let summary = try await applyWithRetry(app: app, plan: plan, checked: checked)
                     failedItems += summary.failed ?? 0
                     removed += 1
                 } catch {
                     failedItems += 1
-                    self.removalLog.append(.init(id: app.id, name: app.name, bytes: 0, ok: false))
+                    removalLog.append(.init(id: app.id, name: app.name, bytes: 0, ok: false))
                 }
             }
-            let related = self.removalLog.filter { $0.ok && !$0.id.hasSuffix("|app") }.count
-            self.removalPhase = .done(removed: removed, freedBytes: self.removalFreed,
-                                      failedItems: failedItems, relatedFiles: related)
+            let related = removalLog.filter { $0.ok && !$0.id.hasSuffix("|app") }.count
+            removalPhase = .done(
+                removed: removed,
+                freedBytes: removalFreed,
+                failedItems: failedItems,
+                relatedFiles: related
+            )
             // 清理会话状态
             for app in targets {
-                self.selection.remove(app.id)
-                self.expanded.remove(app.id)
-                self.leftovers[app.id] = nil
-                self.checkedLeftovers[app.id] = nil
+                selection.remove(app.id)
+                expanded.remove(app.id)
+                leftovers[app.id] = nil
+                checkedLeftovers[app.id] = nil
             }
             // 本地先删行：本体确认移除的应用立即从内存清单剔除（返回列表即时
             // 呈现），随后后台静默重扫校准体积与来源——不闪加载页。
             let succeededIds = Set(
-                self.removalLog
+                removalLog
                     .filter { $0.ok && $0.id.hasSuffix("|app") }
                     .map { String($0.id.dropLast("|app".count)) }
             )
-            self.apps.removeAll { succeededIds.contains($0.id) }
-            self.reload(silent: true)
+            apps.removeAll { succeededIds.contains($0.id) }
+            reload(silent: true)
         }
     }
 
@@ -433,7 +472,9 @@ final class AppsStore {
 
         // id → 条目映射（结果事件回填名称与体积）
         var itemsById: [String: RobotItem] = [:]
-        for item in plan.items { itemsById[item.id] = item }
+        for item in plan.items {
+            itemsById[item.id] = item
+        }
 
         var summary: RobotSummary?
         var robotError: RobotError?
