@@ -14,34 +14,16 @@ struct AppsView: View {
     private let look = Look.ink
     private let accent = ModuleAccent.apps
 
+    /// 设计稿 apps 页无页级标题：直接以「子 tab 胶囊 + 工具栏」开始（dc L427）。
     var body: some View {
         VStack(spacing: 14) {
-            pageHeader
             toolbar
             content
         }
         .padding(.horizontal, 24)
+        .padding(.top, 8)
         .padding(.bottom, 20)
         .onAppear { store.loadIfNeeded() }
-    }
-
-    // MARK: - 页头
-
-    private var pageHeader: some View {
-        HStack(spacing: 12) {
-            Text(L("apps.title"))
-                .font(Fonts.serif(28, .semibold))
-                .foregroundStyle(look.text)
-            if store.phase == .loaded {
-                Text(L("apps.header.count", Int64(store.apps.count)) + (store.totalSizeText.isEmpty ? "" : " · " + L(
-                    "apps.header.total",
-                    store.totalSizeText
-                )))
-                .font(Fonts.mono(11.5))
-                .foregroundStyle(look.textMute)
-            }
-            Spacer()
-        }
     }
 
     // MARK: - 子 tab + 工具条

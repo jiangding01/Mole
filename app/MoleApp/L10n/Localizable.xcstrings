@@ -2958,6 +2958,57 @@
         }
       }
     },
+    "optimize.list.sub.prefix" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Explain first, then run · "
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先解释，后执行 · 已选 "
+          }
+        }
+      }
+    },
+    "optimize.list.sub.suffix" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " selected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " 项"
+          }
+        }
+      }
+    },
+    "optimize.list.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Custom maintenance tasks"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义养护任务"
+          }
+        }
+      }
+    },
     "optimize.loading" : {
       "extractionState" : "manual",
       "localizations" : {

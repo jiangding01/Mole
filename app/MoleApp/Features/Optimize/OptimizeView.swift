@@ -10,28 +10,16 @@ struct OptimizeView: View {
     private let look = Look.ink
     private let accent = ModuleAccent.optimize
 
+    /// 设计稿 optimize 页无页级标题：列表态自带头部（Customize eyebrow + serif
+    /// 标题 + 已选副行 + 右侧开始钮，dc L730-740）。
     var body: some View {
         VStack(spacing: 14) {
-            pageHeader
             content
         }
         .padding(.horizontal, 24)
+        .padding(.top, 8)
         .padding(.bottom, 20)
         .onAppear { store.loadIfNeeded() }
-    }
-
-    private var pageHeader: some View {
-        HStack(spacing: 12) {
-            Text(L("optimize.title"))
-                .font(Fonts.serif(28, .semibold))
-                .foregroundStyle(look.text)
-            if store.phase == .list {
-                Text(L("optimize.header.selected", Int64(store.checked.count), Int64(store.tasks.count)))
-                    .font(Fonts.mono(11.5))
-                    .foregroundStyle(look.textMute)
-            }
-            Spacer()
-        }
     }
 
     @ViewBuilder
@@ -62,6 +50,8 @@ struct OptimizeView: View {
 
     private var listView: some View {
         VStack(spacing: 0) {
+            listHeader
+                .padding(.bottom, 16)
             adminNote
             ScrollView {
                 VStack(spacing: 12) {
@@ -72,7 +62,47 @@ struct OptimizeView: View {
                 .padding(.vertical, 2)
             }
             .frame(maxHeight: .infinity)
-            listBar
+        }
+    }
+
+    /// 列表态头部（设计稿 optList，dc L730-740）：Customize eyebrow + serif 27
+    /// 标题 + 已选副行（数字 accent 高亮），右侧开始按钮（底部对齐）。
+    private var listHeader: some View {
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                Fonts.eyebrow("Customize", size: 10)
+                    .foregroundStyle(look.textMute)
+                Text(L("optimize.list.title"))
+                    .font(Fonts.serif(27))
+                    .foregroundStyle(look.text)
+                    .padding(.top, 6)
+                (Text(L("optimize.list.sub.prefix"))
+                    + Text(verbatim: "\(store.checked.count)")
+                    .foregroundColor(accent.a)
+                    .fontWeight(.semibold)
+                    + Text(L("optimize.list.sub.suffix")))
+                    .font(Fonts.ui(13))
+                    .foregroundColor(look.textDim)
+                    .padding(.top, 7)
+            }
+            Spacer()
+            Button {
+                store.execute()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 12))
+                    Text(L("optimize.cta.run", Int64(store.checked.count)))
+                }
+                .font(Fonts.ui(13, .semibold))
+                .padding(.horizontal, 24).padding(.vertical, 11)
+                .background(Capsule().fill(accent.gradient))
+                .foregroundStyle(accent.onAccent)
+            }
+            .buttonStyle(.plain)
+            .pointingCursor()
+            .disabled(store.checked.isEmpty)
+            .opacity(store.checked.isEmpty ? 0.45 : 1)
         }
     }
 
@@ -140,36 +170,6 @@ struct OptimizeView: View {
         .contentShape(Rectangle())
         .onTapGesture { store.toggle(task) }
         .pointingCursor()
-    }
-
-    private var listBar: some View {
-        HStack(spacing: 10) {
-            Text(L("optimize.bar.note"))
-                .font(Fonts.ui(11.5))
-                .foregroundStyle(look.textMute)
-            Spacer()
-            Button {
-                store.execute()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "wand.and.stars")
-                        .font(.system(size: 12))
-                    Text(L("optimize.cta.run", Int64(store.checked.count)))
-                }
-                .font(Fonts.ui(13, .semibold))
-                .padding(.horizontal, 22).padding(.vertical, 10)
-                .background(Capsule().fill(accent.gradient))
-                .foregroundStyle(accent.onAccent)
-            }
-            .buttonStyle(.plain)
-            .pointingCursor()
-            .disabled(store.checked.isEmpty)
-            .opacity(store.checked.isEmpty ? 0.45 : 1)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
-        .padding(.top, 12)
     }
 
     // MARK: - 执行中（tending 环逐段点亮 + 任务状态列表）

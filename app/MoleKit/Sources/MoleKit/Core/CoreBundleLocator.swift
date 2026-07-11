@@ -15,7 +15,9 @@ public struct CoreBundleLocator: Sendable {
     }
 
     public func moleEntrypoint() throws -> URL {
-        if let overridePath {
+        // override 必须真实可执行才采用：LSEnvironment 注入的开发路径在别的机器
+        // /发布环境下不存在，此时静默落回内嵌核心而不是拿着坏路径去起子进程。
+        if let overridePath, FileManager.default.isExecutableFile(atPath: overridePath) {
             return URL(fileURLWithPath: overridePath)
         }
         guard let resourceURL = Bundle.main.resourceURL else {

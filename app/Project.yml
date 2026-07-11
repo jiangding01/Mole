@@ -44,6 +44,11 @@ targets:
         CFBundleDisplayName: Mole
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: ""
+        # 开发期核心定位：Finder/open 启动拿不到 scheme 环境变量，经 LSEnvironment
+        # 注入源码树路径。构建时 $(SRCROOT) 展开为本机路径；发布/他机上路径不存在时
+        # CoreBundleLocator 会校验可执行性并落回内嵌 mole-core，残留无害。
+        LSEnvironment:
+          MOLE_CORE_PATH: $(SRCROOT)/../mole
         # 非沙盒（设计 ADR-3）：Developer ID 直发 + 公证
     # 内嵌 CLI 核心：fetch_core.sh 产出后取消注释下列资源拷贝
     # postBuildScripts 阶段在 Phase 1 接 CI 时补充（拷贝 mole-core + 校验清单）

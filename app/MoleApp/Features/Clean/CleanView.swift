@@ -13,31 +13,18 @@ struct CleanView: View {
     private let look = Look.ink
     private let accent = ModuleAccent.clean
 
+    /// 设计稿 clean 页无页级标题：idle 态居中呈现，confirm 态以汇总条开始（dc L253）。
     var body: some View {
         VStack(spacing: 14) {
-            pageHeader
             content
         }
         .padding(.horizontal, 24)
+        .padding(.top, 8)
         .padding(.bottom, 20)
         .task {
             // 会话正向闭环（§5.0）：注入会话资产，复用智能扫描已产出的 clean plan。
             store.scanSession = scanSession
             store.adoptSessionPlanIfAvailable()
-        }
-    }
-
-    private var pageHeader: some View {
-        HStack(spacing: 12) {
-            Text(L("clean.title"))
-                .font(Fonts.serif(28, .semibold))
-                .foregroundStyle(look.text)
-            if case .confirm = store.phase {
-                Text(L("clean.header.found", fmt(store.totalBytes)))
-                    .font(Fonts.mono(11.5))
-                    .foregroundStyle(look.textMute)
-            }
-            Spacer()
         }
     }
 
