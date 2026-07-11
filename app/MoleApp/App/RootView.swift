@@ -86,6 +86,13 @@ struct RootView: View {
             onboardingStore.presentIfFirstLaunch()
             fdaBannerStore.probe()
         }
+        // App 回到前台时复测 FDA：授权在系统设置里完成（期间本 App 失焦），
+        // 切回来即刷新横幅；只测启动一刻会让横幅永远停在旧结果上。
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+        ) { _ in
+            fdaBannerStore.probe()
+        }
     }
 
     @ViewBuilder
