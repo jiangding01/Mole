@@ -690,3 +690,71 @@ EOF
 
     [ "$status" -eq 0 ]
 }
+
+# Regression: _detect_cask_via_caskroom_search's dedupe loop iterated over
+# "${uniq[@]}" while uniq was still an empty array on the loop's first pass.
+# On macOS's shipped /bin/bash (3.2), `set -u` treats that expansion as
+# unbound rather than zero elements, which killed the whole uninstall
+# process the instant Caskroom search matched at least one token. Bats
+# itself may run on a newer Homebrew bash where this never reproduces, so
+# the target code must be exercised through an explicit /bin/bash 3.2
+# subprocess (see tests/uninstall_scan_bash32.bats for the same pattern).
+@test "_brew_dedupe_cask_tokens survives an empty accumulator under bash 3.2 set -u" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/brew.sh"
+
+# A single token is the exact shape that used to crash: the dedupe loop's
+# very first inner iteration reads "${uniq[@]}" while uniq is still empty.
+_brew_dedupe_cask_tokens "only-token"
+echo SURVIVED
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" != *"unbound variable"* ]] || return 1
+    [[ "$output" == *"only-token"* ]] || return 1
+    [[ "$output" == *"SURVIVED"* ]] || return 1
+}
+
+@test "_brew_dedupe_cask_tokens deduplicates while preserving first-seen order" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/brew.sh"
+
+_brew_dedupe_cask_tokens "app-b" "app-a" "app-b" "app-a" "app-c"
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == "app-b"$'\n'"app-a"$'\n'"app-c" ]]
+}
+
+@test "_brew_dedupe_cask_tokens handles zero tokens without unbound variable" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/brew.sh"
+
+_brew_dedupe_cask_tokens
+echo SURVIVED
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == "SURVIVED" ]]
+}
+
+# Note: an end-to-end regression against _detect_cask_via_caskroom_search
+# itself would need to redirect its hardcoded "/opt/homebrew/Caskroom" and
+# "/usr/local/Caskroom" roots, and on a dev machine with real Homebrew
+# installed those directories already exist and shadow any fixture (the
+# `[[ -d "$room" ]]` check short-circuits before the `find` call that could
+# be stubbed). The extracted _brew_dedupe_cask_tokens helper above exercises
+# the exact loop shape that crashed, without depending on host Homebrew
+# state.

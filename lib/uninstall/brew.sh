@@ -110,6 +110,33 @@ _detect_cask_via_resolved_path() {
     return 1
 }
 
+# Deduplicate a list of cask tokens, preserving first-seen order.
+# Pure helper (args in, stdout out, no globals) so bash 3.2's `set -u`
+# behavior on the internal accumulator can be exercised directly in tests.
+# Args: $@ - cask tokens (may be zero)
+# Prints: each unique token on its own line
+_brew_dedupe_cask_tokens() {
+    local -a uniq=()
+    local candidate existing seen
+    for candidate in "$@"; do
+        seen=false
+        for existing in "${uniq[@]+"${uniq[@]}"}"; do
+            if [[ "$candidate" == "$existing" ]]; then
+                seen=true
+                break
+            fi
+        done
+        [[ "$seen" == true ]] || uniq+=("$candidate")
+    done
+    # printf always runs its template at least once, even with zero
+    # arguments, so an unconditional call would emit one spurious blank
+    # line when $@ was empty. Guard it so the zero-token case prints
+    # nothing (and the function still returns 0).
+    if ((${#uniq[@]} > 0)); then
+        printf '%s\n' "${uniq[@]}"
+    fi
+}
+
 # Stage 2: Search Caskroom by app bundle name using find
 # Catches apps where the .app in /Applications doesn't link to Caskroom
 # Only succeeds if exactly one cask matches (avoids wrong uninstall)
@@ -156,17 +183,14 @@ _detect_cask_via_caskroom_search() {
 
     # Deduplicate and check count
     local -a uniq=()
-    local candidate existing seen
-    for candidate in "${tokens[@]}"; do
-        seen=false
-        for existing in "${uniq[@]}"; do
-            if [[ "$candidate" == "$existing" ]]; then
-                seen=true
-                break
-            fi
-        done
-        [[ "$seen" == true ]] || uniq+=("$candidate")
-    done
+    local dedup_line=""
+    while IFS= read -r dedup_line; do
+        # Plain if: `[[ -n ]] && cmd` as the sole body command is the
+        # documented set -e short-circuit pitfall (CLAUDE.md).
+        if [[ -n "$dedup_line" ]]; then
+            uniq+=("$dedup_line")
+        fi
+    done < <(_brew_dedupe_cask_tokens "${tokens[@]}")
 
     # Only succeed if exactly one unique token found and it's installed
     if ((${#uniq[@]} == 1)) && [[ -n "${uniq[0]}" ]]; then
