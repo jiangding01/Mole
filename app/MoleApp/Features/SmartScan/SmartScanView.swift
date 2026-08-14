@@ -341,8 +341,8 @@ struct SmartScanView: View {
                 icon: "square.grid.2x2",
                 iconTint: ModuleAccent.analyze.a,
                 accentColor: ModuleAccent.analyze.b,
-                number: r.insight.map { gbConcise($0.bytes) } ?? "—",
-                unit: r.insight == nil ? "" : L("smart.unit.gb"),
+                number: r.insight.flatMap { $0.bytes.map(gbConcise) } ?? "—",
+                unit: r.insight?.bytes == nil ? "" : L("smart.unit.gb"),
                 title: L("smart.card.insight.title"),
                 badge: .init(text: L("smart.badge.insight"), symbol: nil),
                 body: r.insight.map { L("smart.card.insight.body", insightPathText($0.path)) }

@@ -269,7 +269,7 @@ struct CleanView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
-                    Text(fmt(insight.bytes ?? 0))
+                    Text(insight.bytes.map(fmt) ?? L("clean.size.unknown"))
                         .font(Fonts.mono(11))
                         .foregroundStyle(look.textMute)
                 }

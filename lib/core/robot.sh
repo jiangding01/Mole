@@ -259,7 +259,8 @@ robot_clean_plan_from_export() {
         fi
 
         if robot_section_is_insight "$section_slug"; then
-            robot_emit_insight "$section_slug" "$path" "$bytes"
+            # Insights carry the same unknown-size honesty: null, not 0.
+            robot_emit_insight "$section_slug" "$path" "$bytes_json"
             continue
         fi
 

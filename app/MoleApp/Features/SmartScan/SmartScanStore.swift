@@ -29,7 +29,8 @@ final class SmartScanStore {
     struct Insight: Equatable {
         /// insight.label 即路径（CLI `robot_emit_insight` 以 path 作 label）。
         var path: String
-        var bytes: Int64
+        /// nil = 协议里的"大小未知"（测量超时），显示为 "—" 而不是 0。
+        var bytes: Int64?
     }
 
     /// results 态的四卡 + 甜甜圈数据（一次扫描组装，UI 只读）。
@@ -171,7 +172,7 @@ final class SmartScanStore {
             }
         }
         if let top = insights.max(by: { ($0.bytes ?? 0) < ($1.bytes ?? 0) }) {
-            r.insight = Insight(path: top.label, bytes: top.bytes ?? 0)
+            r.insight = Insight(path: top.label, bytes: top.bytes)
         }
         r.insightCount = insights.count
         r.totalReclaimableBytes = r.safeBytes + r.leftoverBytes + r.installerBytes
