@@ -107,6 +107,12 @@ func (m model) scanFreshCmd(path string) tea.Cmd {
 	}
 }
 
+func (m model) scanBypassingCacheCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		return startLiveScanCmdWithPolicy(path, m.filesScanned, m.dirsScanned, m.bytesScanned, m.currentPath, scanCacheBypass)()
+	}
+}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(uiTickInterval, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -184,7 +190,7 @@ func (m *model) applyLiveChildSize(entry dirEntry, complete bool, result scanRes
 		m.cache[entry.Path] = historyEntryFromScanResult(entry.Path, childResult, m.cache[entry.Path], true)
 	}
 	if m.autoSortLiveEntries {
-		m.sortLiveEntriesPreservingSelection()
+		m.sortLiveEntriesForActiveMode()
 	} else {
 		m.applyEntryFilter()
 	}
@@ -193,6 +199,7 @@ func (m *model) applyLiveChildSize(entry dirEntry, complete bool, result scanRes
 }
 
 func (m *model) finishLiveScan(result scanResult) {
+	pinFirstRow := m.liveSortMode == liveSortFreezeOnMove && m.autoSortLiveEntries
 	m.scanning = false
 	m.liveScanID = 0
 	m.liveScanCancel = nil
@@ -210,7 +217,10 @@ func (m *model) finishLiveScan(result scanResult) {
 	m.viewNeedsRefresh = false
 	m.applyEntryFilter()
 	m.applyLargeFilter()
-	if selectedPath != "" {
+	if pinFirstRow {
+		m.selected = 0
+		m.offset = 0
+	} else if selectedPath != "" {
 		m.selectEntryPath(selectedPath)
 	}
 	m.cache[m.path] = historyEntryFromScanResult(m.path, result, m.cache[m.path], false)
@@ -239,11 +249,19 @@ func (m *model) finishCanceledLiveScan() {
 	m.status = "Scan cancelled"
 }
 
-func (m *model) sortLiveEntriesPreservingSelection() {
+func (m *model) sortLiveEntriesForActiveMode() {
 	m.ensureLiveEntryBacking()
-	selectedPath := m.selectedEntryPath()
+	selectedPath := ""
+	if m.liveSortMode == liveSortContinuous {
+		selectedPath = m.selectedEntryPath()
+	}
 	sortDirEntriesBySize(m.entriesAll)
 	m.applyEntryFilter()
+	if m.liveSortMode == liveSortFreezeOnMove {
+		m.selected = 0
+		m.offset = 0
+		return
+	}
 	if selectedPath == "" {
 		return
 	}
@@ -280,15 +298,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.deleting = false
 			m.multiSelected = make(map[string]bool)
 			m.largeMultiSelected = make(map[string]bool)
-			if msg.err != nil {
-				m.status = fmt.Sprintf("Failed to delete: %v", msg.err)
-			} else {
-				if msg.path != "" {
-					m.removePathFromView(msg.path)
-					invalidateCache(msg.path)
-				}
+			removedPaths := append([]string(nil), msg.removedPaths...)
+			if msg.err == nil && msg.path != "" {
+				removedPaths = append(removedPaths, msg.path)
+			}
+			for _, removedPath := range removedPaths {
+				m.removePathFromView(removedPath)
+				invalidateCache(removedPath)
+			}
+
+			if len(removedPaths) > 0 {
 				invalidateCache(m.path)
-				m.status = fmt.Sprintf("Deleted %d items", msg.count)
+				if msg.err != nil {
+					m.status = fmt.Sprintf("Deleted %d items; some failed: %v", msg.count, msg.err)
+				} else {
+					m.status = fmt.Sprintf("Deleted %d items", msg.count)
+				}
 
 				// Selective invalidation: only mark current path and ancestors as needing refresh
 				currentPath := m.path
@@ -317,6 +342,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.currentPath.Store("")
 				}
 				return m, tea.Batch(m.scanCmd(m.path), tickCmd())
+			}
+			if msg.err != nil {
+				m.status = fmt.Sprintf("Failed to delete: %v", msg.err)
+			} else {
+				m.status = fmt.Sprintf("Deleted %d items", msg.count)
 			}
 		}
 		return m, nil
@@ -399,7 +429,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.liveScanningPaths[path] = true
 		}
 		m.autoSortLiveEntries = true
-		selectedPath := m.selectedEntryPath()
+		selectedPath := ""
+		if m.liveSortMode == liveSortContinuous {
+			selectedPath = m.selectedEntryPath()
+		}
 		m.entriesAll = slices.Clone(msg.entries)
 		m.largeFilesAll = slices.Clone(msg.largeFiles)
 		m.totalSize = msg.totalSize
@@ -407,7 +440,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewNeedsRefresh = false
 		m.scanning = true
 		m.status = fmt.Sprintf("Scanning %s...", displayPath(m.path))
-		m.sortLiveEntriesPreservingSelection()
+		m.sortLiveEntriesForActiveMode()
 		m.applyLargeFilter()
 		if selectedPath != "" {
 			m.selectEntryPath(selectedPath)
@@ -581,7 +614,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.goBack()
 	case "up", "k", "K":
-		m.noteLiveCursorMove()
 		if m.showLargeFiles {
 			if m.largeSelected > 0 {
 				m.largeSelected--
@@ -590,6 +622,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if len(m.entries) > 0 && m.selected > 0 {
+			m.noteLiveCursorMove()
 			next := m.selected - 1
 			for next > 0 && m.entries[next].Size == 0 {
 				next--
@@ -600,7 +633,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "down", "j", "J":
-		m.noteLiveCursorMove()
 		if m.showLargeFiles {
 			if m.largeSelected < len(m.largeFiles)-1 {
 				m.largeSelected++
@@ -610,6 +642,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if len(m.entries) > 0 && m.selected < len(m.entries)-1 {
+			m.noteLiveCursorMove()
 			next := m.selected + 1
 			for next < len(m.entries)-1 && m.entries[next].Size == 0 {
 				next++
@@ -646,6 +679,8 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.overviewSizeCache = make(map[string]int64)
 			m.overviewScanningSet = make(map[string]bool)
 			m.hydrateOverviewEntries() // Reset sizes to pending
+			m.selected = 0
+			m.offset = 0
 
 			for i := range m.entries {
 				m.entries[i].Size = -1
@@ -669,7 +704,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.currentPath != nil {
 			m.currentPath.Store("")
 		}
-		return m, tea.Batch(m.scanFreshCmd(m.path), tickCmd())
+		return m, tea.Batch(m.scanBypassingCacheCmd(m.path), tickCmd())
 	case "t", "T":
 		if m.scanning {
 			m.status = "Top files are available after the scan finishes"
@@ -706,7 +741,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.liveSortMode = nextLiveSortMode(m.liveSortMode)
 			m.autoSortLiveEntries = m.liveSortMode == liveSortContinuous
 			if m.autoSortLiveEntries {
-				m.sortLiveEntriesPreservingSelection()
+				m.sortLiveEntriesForActiveMode()
 			}
 			m.status = fmt.Sprintf("Live sort: %s", liveSortModeLabel(m.liveSortMode))
 		}

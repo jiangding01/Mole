@@ -29,7 +29,7 @@ teardown_file() {
 @test "clean_corepack_cache suppresses the corepack download prompt" {
     local log="$HOME/corepack-calls.log"
     : > "$log"
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" COREPACK_LOG="$log" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" COREPACK_LOG="$log" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/dev.sh"
@@ -61,7 +61,7 @@ EOF
 # When corepack is not installed the cleanup must fall through to the safe
 # local-path delete and never invoke corepack.
 @test "clean_corepack_cache falls back to safe_clean without corepack" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="/usr/bin:/bin" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="/usr/bin:/bin" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/dev.sh"

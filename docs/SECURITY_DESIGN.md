@@ -16,9 +16,9 @@ and `tests/path_validation_fuzz.bats`.
 Mole is a user-invoked CLI that performs three classes of destructive
 operations on the local machine:
 
-1. **Cleanup** — remove caches, logs, and temp data the OS or apps regenerate.
-2. **Uninstall** — remove an app bundle and its data directories.
-3. **Trash routing** — move user-selected files in `mo analyze` to Trash.
+1. **Cleanup**: remove caches, logs, and temp data the OS or apps regenerate.
+2. **Uninstall**: remove an app bundle and its data directories.
+3. **Trash routing**: move user-selected files in `mo analyze` to Trash.
 
 We assume:
 - The invoking user has shell access and runs mole intentionally.
@@ -56,9 +56,9 @@ The lines we will not cross, regardless of input:
 Every removal in mole funnels through `mole_delete` /
 `safe_remove` / `safe_sudo_remove`, which all call
 `validate_path_for_deletion` before touching the filesystem. The validator
-applies five independent checks. Any one rejecting kills the operation.
+applies six independent checks. Any one rejecting kills the operation.
 
-Location: `lib/core/file_ops.sh:67`.
+Location: `lib/core/file_ops.sh:133`.
 
 1. **Non-empty + absolute.** Empty paths and any path not starting with
    `/` are rejected. Eliminates ambiguity from relative paths interacting
@@ -70,17 +70,37 @@ Location: `lib/core/file_ops.sh:67`.
    an accidental config bug) from pointing `/tmp/foo` at `/System` and
    getting the validator to wave it through.
 
-3. **Path traversal.** `..` is rejected only when it appears as a full
+3. **Ancestor symlink resolution.** Check 2 only inspects the leaf. If an
+   *ancestor* component is a symlink, the literal path string matches
+   nothing dangerous while the actual `rm` follows the link into the real
+   target: a redirected `~/Library/Caches` would let a cache sweep walk
+   into `~/Documents` or a system tree. So the validator canonicalizes the
+   parent (a physical `cd` resolves every ancestor link) and re-runs the
+   deny predicates on the resolved leaf. Two properties matter here:
+   - **Deny-only.** A resolved path never *grants* permission the literal
+     path lacked, so legitimate targets keep their existing verdict. This
+     is why `/var` is deliberately not in the fuzz test's critical-root
+     list: `/var/folders` temp trees are cleanable literally, so they must
+     stay cleanable through a link too.
+   - **Runs before the allow-list** in check 6, which would otherwise
+     early-return past this gate for `/private/*` paths.
+
+   The common case stays fork-free: ancestors are walked with the `[[ -L ]]`
+   builtin and the canonicalizing subshell is only paid for when one of them
+   really is a symlink. Doing it unconditionally cost ~2ms per call, about
+   +23% on validation, on a function that runs once per deletion candidate.
+
+4. **Path traversal.** `..` is rejected only when it appears as a full
    path component (`/foo/../bar`, `/..`, `../bar`, `foo/..`). This is
    tighter than naive substring matching: it allows legitimate names
    like Firefox's `name..files` directory while still blocking
    `/Users/me/Library/../../etc`.
 
-4. **Control characters.** Any path containing `\n`, `\t`, or other
+5. **Control characters.** Any path containing `\n`, `\t`, or other
    `[[:cntrl:]]` bytes is rejected. Defends against log-injection and
    surprising-shell-interpretation scenarios.
 
-5. **Allow-then-deny match.**
+6. **Allow-then-deny match.**
    - First, explicit allow-list for known-safe subtrees under `/private`
      (`/private/tmp`, `/private/var/log`, `/private/var/folders`,
      `/private/var/db/diagnostics`, etc.) and `/System/Library/Caches/com.apple.coresymbolicationd/data` (rebuildable).
@@ -119,12 +139,20 @@ to a stub container we just created, confined to `tests/tmp-*` from a
 test runner. The annotation forces the author to articulate the constraint
 before the code can land.
 
-See `lib/clean/apps.sh:848`, `lib/core/base.sh:750`, `scripts/test.sh`
-(orphan-tmp cleanup) for current uses.
+For current uses, grep `# SAFE:`. Anchored by symbol rather than line number,
+because line refs rot: `_remove_verified_container_stub` in `lib/clean/apps.sh`,
+`cleanup_temp_files` and the Mole-temp-root sweeps in `lib/core/base.sh`, and
+the orphan-tmp cleanup in `scripts/test.sh`.
+
+`_remove_verified_container_stub` is the one bypass worth understanding before
+you "fix" it: it *must* use raw `rm`, because `should_protect_path` blankets
+`~/Library/Containers`, so routing it through `safe_remove` would have the
+validator refuse both stub paths and silently kill the feature. That reasoning
+is pinned by a test in `tests/clean_apps.bats`.
 
 ---
 
-## Layer 3: App protection — split fast vs. detailed lists
+## Layer 3: App protection, split fast vs. detailed lists
 
 Uninstall and per-app cleanup decisions go through
 `should_protect_from_uninstall` and `should_protect_data` in
@@ -184,10 +212,10 @@ rejected before it reaches Finder.
 Three orthogonal mechanisms make the safety claims testable and
 prevent live-machine test runs from doing real damage:
 
-- `MOLE_DRY_RUN=1` — every safe-remove logs what it would do and
+- `MOLE_DRY_RUN=1`: every safe-remove logs what it would do and
   returns 0 without touching the filesystem. Used in CI for the
   no-mock path coverage and recommended before any local cleanup.
-- `MOLE_TEST_NO_AUTH=1` — refuses to call `sudo`, `osascript`,
+- `MOLE_TEST_NO_AUTH=1`: refuses to call `sudo`, `osascript`,
   `launchctl`, or any path that would prompt the user. Required for
   bats and the integration tests. Enforced by `scripts/test.sh` PATH
   stubs that fail loudly when called.

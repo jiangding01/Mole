@@ -70,7 +70,7 @@ EOF
 @test "bundle_has_installed_app finds an app by CFBundleIdentifier (Spotlight miss)" {
     make_app "$FAKE_APPS/KeePassXC.app" "org.keepassxc.KeePassXC"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "org.keepassxc.KeePassXC"
 EOF
@@ -85,7 +85,7 @@ EOF
     # timeout path here proves the filesystem fallback still executes.
     make_app "$FAKE_APPS/KeePassXC.app" "org.keepassxc.KeePassXC"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/base.sh"
 source "$PROJECT_ROOT/lib/core/timeout.sh"
@@ -113,7 +113,7 @@ EOF
     mkdir -p "$app/Contents/Library/LaunchServices"
     : > "$app/Contents/Library/LaunchServices/com.adobe.ARMDC.SMJobBlessHelper"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.adobe.ARMDC.SMJobBlessHelper"
 EOF
@@ -124,7 +124,7 @@ EOF
 @test "bundle_has_installed_app returns non-zero when no app declares the bundle ID" {
     make_app "$FAKE_APPS/SomeoneElse.app" "com.example.someone"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.ghost.app"
 EOF
@@ -135,9 +135,31 @@ EOF
 @test "bundle_has_installed_app finds parent app via .helper suffix (issue #753)" {
     make_app "$FAKE_APPS/AlDente Pro.app" "com.apphousekitchen.aldente-pro"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.apphousekitchen.aldente-pro.helper"
+EOF
+
+    [ "$status" -eq 0 ]
+}
+
+@test "bundle_has_installed_app finds parent app via capitalized .Helper suffix (issue #1210)" {
+    make_app "$FAKE_APPS/App Tamer.app" "com.stclairsoft.AppTamer"
+
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
+$(prelude)
+bundle_has_installed_app "com.stclairsoft.AppTamer.Helper"
+EOF
+
+    [ "$status" -eq 0 ]
+}
+
+@test "bundle_has_installed_app matches CFBundleIdentifier case-insensitively" {
+    make_app "$FAKE_APPS/Example.app" "com.Example.MyApp"
+
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
+$(prelude)
+bundle_has_installed_app "com.example.myapp"
 EOF
 
     [ "$status" -eq 0 ]
@@ -146,7 +168,7 @@ EOF
 @test "bundle_has_installed_app finds parent app via .daemon suffix" {
     make_app "$FAKE_APPS/Example.app" "com.example.myapp"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.example.myapp.daemon"
 EOF
@@ -157,7 +179,7 @@ EOF
 @test "bundle_has_installed_app finds parent app via .service suffix" {
     make_app "$FAKE_APPS/Clash Verge.app" "io.github.clash-verge-rev.clash-verge-rev"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "io.github.clash-verge-rev.clash-verge-rev.service"
 EOF
@@ -168,7 +190,7 @@ EOF
 @test "bundle_has_installed_app returns non-zero for .helper when parent app absent" {
     make_app "$FAKE_APPS/Other.app" "com.example.other"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.apphousekitchen.aldente-pro.helper"
 EOF
@@ -177,7 +199,7 @@ EOF
 }
 
 @test "bundle_has_installed_app rejects malformed bundle IDs" {
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "has spaces"
 EOF
@@ -190,7 +212,7 @@ EOF
     # com.microsoft.autoupdate.helper should match Office apps only.
     make_app "$FAKE_APPS/Microsoft Word.app" "com.microsoft.Word"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.microsoft.autoupdate.helper"
 EOF
@@ -201,7 +223,7 @@ EOF
 @test "bundle_has_installed_app does not use broad Microsoft vendor prefix" {
     make_app "$FAKE_APPS/Microsoft Teams.app" "com.microsoft.teams2"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.microsoft.some.other.helper"
 EOF
@@ -215,11 +237,156 @@ EOF
     make_app "$FAKE_APPS/SomeApp.app" "com.example.someapp"
     make_app "$FAKE_APPS/AnotherApp.app" "com.example.otherapp"
 
-    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 $(prelude)
 bundle_has_installed_app "com.example.unmapped.id"
 EOF
 
     # Exit 1 = not found (expected). Exit 2+ or crash = unbound variable bug.
     [ "$status" -eq 1 ]
+}
+
+@test "bundle_has_installed_app bounds its direct fallback with the caller deadline" {
+    make_app "$FAKE_APPS/Deadline.app" "com.example.deadline"
+
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mdfind() { return 0; }
+export -f mdfind
+_MOLE_BUNDLE_RESOLVER_APP_ROOTS=("$FAKE_APPS")
+bundle_has_installed_app "com.example.deadline" "$((SECONDS + 5))"
+EOF
+
+    [ "$status" -eq 0 ]
+}
+
+@test "bundle_has_installed_app fails closed when its bounded app scan times out" {
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mdfind() { return 0; }
+export -f mdfind
+_MOLE_BUNDLE_RESOLVER_APP_ROOTS=("$FAKE_APPS")
+run_with_timeout() {
+    local _duration="$1"
+    shift
+    if [[ "${1:-}" == "/usr/bin/find" ]]; then
+        return 124
+    fi
+    "$@"
+}
+bundle_has_installed_app "com.example.unknown" "$((SECONDS + 5))"
+EOF
+
+    # Returning success means "installed or unknown" to orphan detection.
+    [ "$status" -eq 0 ]
+}
+
+@test "bundle_has_installed_app fails closed when a bounded plist probe times out" {
+    make_app "$FAKE_APPS/Unknown.app" "com.example.some-app"
+
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mdfind() { return 0; }
+export -f mdfind
+_MOLE_BUNDLE_RESOLVER_APP_ROOTS=("$FAKE_APPS")
+run_with_timeout() {
+    local _duration="$1"
+    shift
+    if [[ "${1:-}" == "plutil" ]]; then
+        return 124
+    fi
+    "$@"
+}
+bundle_has_installed_app "com.example.unknown" "$((SECONDS + 5))"
+EOF
+
+    [ "$status" -eq 0 ]
+}
+
+@test "bundle_has_installed_app propagates an interrupted Spotlight probe" {
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mdfind() { return 0; }
+export -f mdfind
+run_with_timeout() { return 130; }
+_MOLE_BUNDLE_RESOLVER_APP_ROOTS=("$FAKE_APPS")
+rc=0
+bundle_has_installed_app "com.example.interrupted" "$((SECONDS + 5))" || rc=$?
+printf 'RC=%s\n' "$rc"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=130"* ]]
+}
+
+@test "bundle_has_installed_app propagates an interrupted direct app scan" {
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mdfind() { return 0; }
+export -f mdfind
+run_with_timeout() {
+    local _duration="$1"
+    shift
+    case "${1:-}" in
+        mdfind) return 124 ;;
+        /usr/bin/find) return 130 ;;
+        *) "$@" ;;
+    esac
+}
+_MOLE_BUNDLE_RESOLVER_APP_ROOTS=("$FAKE_APPS")
+rc=0
+bundle_has_installed_app "com.example.interrupted" "$((SECONDS + 5))" || rc=$?
+printf 'RC=%s\n' "$rc"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=130"* ]]
+}
+
+@test "bundle_has_installed_app propagates an interrupted direct plist probe" {
+    make_app "$FAKE_APPS/Interrupted.app" "com.example.some-app"
+
+    run env FAKE_APPS="$FAKE_APPS" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mdfind() { return 0; }
+export -f mdfind
+run_with_timeout() {
+    local _duration="$1"
+    shift
+    case "${1:-}" in
+        mdfind) return 124 ;;
+        plutil) return 130 ;;
+        *) "$@" ;;
+    esac
+}
+_MOLE_BUNDLE_RESOLVER_APP_ROOTS=("$FAKE_APPS")
+rc=0
+bundle_has_installed_app "com.example.interrupted" "$((SECONDS + 5))" || rc=$?
+printf 'RC=%s\n' "$rc"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=130"* ]]
+}
+
+@test "bundle_has_installed_app covers nested Homebrew Caskroom apps" {
+    local cask_root="$HOME/Caskroom"
+    make_app "$cask_root/example/1.2.3/Example.app" "com.example.caskroom"
+
+    run env CASK_ROOT="$cask_root" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+mdfind() { return 0; }
+export -f mdfind
+_MOLE_BUNDLE_RESOLVER_APP_ROOTS=("$CASK_ROOT")
+bundle_has_installed_app "com.example.caskroom" "$((SECONDS + 5))"
+EOF
+
+    [ "$status" -eq 0 ]
 }

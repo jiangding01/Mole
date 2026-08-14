@@ -138,7 +138,7 @@ setup() {
     local temp_file
     temp_file=$(mktemp_file "test_prefix")
 
-    [[ "$temp_file" =~ test_prefix ]]
+    [[ "$temp_file" =~ test_prefix ]] || return 1
 
     [ -f "$temp_file" ]
 
@@ -149,7 +149,7 @@ setup() {
     local result
 
     result=$(get_optimal_parallel_jobs)
-    [[ "$result" =~ ^[0-9]+$ ]]
+    [[ "$result" =~ ^[0-9]+$ ]] || return 1
     [ "$result" -gt 0 ]
     [ "$result" -le 128 ]
 

@@ -103,8 +103,9 @@ update_via_homebrew() {
     fi
 
     local brew_upgrade_timeout="${MOLE_HOMEBREW_UPGRADE_TIMEOUT:-120}"
+    local upgrade_status=0
     HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1 \
-        run_with_timeout "$brew_upgrade_timeout" brew upgrade mole > "$temp_upgrade" 2>&1 || true
+        run_with_timeout "$brew_upgrade_timeout" brew upgrade mole > "$temp_upgrade" 2>&1 || upgrade_status=$?
 
     local upgrade_output
     upgrade_output=$(cat "$temp_upgrade")
@@ -120,24 +121,30 @@ update_via_homebrew() {
     safe_remove "$temp_update" true
     safe_remove "$temp_upgrade" true
 
-    if echo "$upgrade_output" | grep -q "already installed"; then
+    if [[ "$upgrade_status" -ne 0 ]]; then
+        log_error "Homebrew upgrade failed"
+        if [[ -n "$upgrade_output" ]]; then
+            printf '%s\n' "$upgrade_output" >&2
+        else
+            printf 'brew upgrade mole exited with status %s\n' "$upgrade_status" >&2
+        fi
+        return 1
+    elif echo "$upgrade_output" | grep -q "already installed"; then
         local installed_version
         installed_version=$(HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
             run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" brew list --versions mole 2> /dev/null | awk '{print $2}')
-        [[ -z "$installed_version" ]] && installed_version=$(mo --version 2> /dev/null | awk '/Mole version/ {print $3; exit}')
+        [[ -z "$installed_version" ]] && installed_version=$(run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
+            mo --version 2> /dev/null | awk '/Mole version/ {print $3; exit}' || true)
         echo ""
         echo -e "${GREEN}${ICON_SUCCESS}${NC} Already on latest version, ${installed_version:-$current_version}"
         echo ""
-    elif echo "$upgrade_output" | grep -q "Error:"; then
-        log_error "Homebrew upgrade failed"
-        echo "$upgrade_output" | grep "Error:" >&2
-        return 1
     else
         echo "$upgrade_output" | grep -Ev "^(==>|Updating Homebrew|Warning:)" || true
         local new_version
         new_version=$(HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
             run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" brew list --versions mole 2> /dev/null | awk '{print $2}')
-        [[ -z "$new_version" ]] && new_version=$(mo --version 2> /dev/null | awk '/Mole version/ {print $3; exit}')
+        [[ -z "$new_version" ]] && new_version=$(run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
+            mo --version 2> /dev/null | awk '/Mole version/ {print $3; exit}' || true)
         echo ""
         echo -e "${GREEN}${ICON_SUCCESS}${NC} Updated to latest version, ${new_version:-$current_version}"
         echo ""

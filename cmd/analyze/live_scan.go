@@ -35,6 +35,10 @@ type liveScanTarget struct {
 }
 
 func startLiveScanCmd(path string, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value) tea.Cmd {
+	return startLiveScanCmdWithPolicy(path, filesScanned, dirsScanned, bytesScanned, currentPath, scanCacheReuse)
+}
+
+func startLiveScanCmdWithPolicy(path string, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value, cachePolicy scanCachePolicy) tea.Cmd {
 	return func() tea.Msg {
 		id := nextLiveScanID.Add(1)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -54,7 +58,7 @@ func startLiveScanCmd(path string, filesScanned, dirsScanned, bytesScanned *int6
 		}
 
 		events := make(chan liveScanEventMsg, max(len(targets)*4, 1))
-		go runLiveScan(ctx, id, path, entries, targets, totalSize, totalFiles, largeFiles, limiter, filesScanned, dirsScanned, bytesScanned, currentPath, events)
+		go runLiveScan(ctx, id, path, entries, targets, totalSize, totalFiles, largeFiles, limiter, filesScanned, dirsScanned, bytesScanned, currentPath, events, cachePolicy)
 
 		scanningPaths := make([]string, 0, len(targets))
 		for _, target := range targets {
@@ -185,6 +189,7 @@ func runLiveScan(
 	filesScanned, dirsScanned, bytesScanned *int64,
 	currentPath *atomic.Value,
 	events chan<- liveScanEventMsg,
+	cachePolicy scanCachePolicy,
 ) {
 	defer close(events)
 
@@ -214,7 +219,7 @@ func runLiveScan(
 		target := target
 		scanTarget := func() {
 			defer wg.Done()
-			result, err := scanLiveTargetWithProgress(ctx, id, root, target, largeFileChan, &largeFileMinSize, limiter, currentPath, events)
+			result, err := scanLiveTargetWithProgress(ctx, id, root, target, largeFileChan, &largeFileMinSize, limiter, currentPath, events, cachePolicy)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				sendLiveScanEvent(ctx, events, liveScanEventMsg{id: id, path: root, kind: liveScanFailed, entry: dirEntry{Name: target.name, Path: target.path, IsDir: true}, err: err})
 				return
@@ -299,7 +304,7 @@ func runLiveScan(
 	sendLiveScanEvent(ctx, events, liveScanEventMsg{id: id, path: root, kind: liveScanComplete, result: result})
 }
 
-func scanLiveTargetWithProgress(ctx context.Context, id int64, root string, target liveScanTarget, largeFileChan chan<- fileEntry, largeFileMinSize *int64, limiter *scanLimiter, currentPath *atomic.Value, events chan<- liveScanEventMsg) (scanResult, error) {
+func scanLiveTargetWithProgress(ctx context.Context, id int64, root string, target liveScanTarget, largeFileChan chan<- fileEntry, largeFileMinSize *int64, limiter *scanLimiter, currentPath *atomic.Value, events chan<- liveScanEventMsg, cachePolicy scanCachePolicy) (scanResult, error) {
 	var filesScanned int64
 	var dirsScanned int64
 	var bytesScanned int64
@@ -346,7 +351,7 @@ func scanLiveTargetWithProgress(ctx context.Context, id int64, root string, targ
 		}
 	}()
 
-	result, err := scanLiveTarget(ctx, target, largeFileChan, largeFileMinSize, limiter, &filesScanned, &dirsScanned, &bytesScanned, localCurrentPath)
+	result, err := scanLiveTarget(ctx, target, largeFileChan, largeFileMinSize, limiter, &filesScanned, &dirsScanned, &bytesScanned, localCurrentPath, cachePolicy)
 	close(done)
 	<-progressDone
 	if result.TotalFiles == 0 {
@@ -358,15 +363,17 @@ func scanLiveTargetWithProgress(ctx context.Context, id int64, root string, targ
 	return result, err
 }
 
-func scanLiveTarget(ctx context.Context, target liveScanTarget, largeFileChan chan<- fileEntry, largeFileMinSize *int64, limiter *scanLimiter, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value) (scanResult, error) {
+func scanLiveTarget(ctx context.Context, target liveScanTarget, largeFileChan chan<- fileEntry, largeFileMinSize *int64, limiter *scanLimiter, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value, cachePolicy scanCachePolicy) (scanResult, error) {
 	if err := ctx.Err(); err != nil {
 		return scanResult{}, err
 	}
 
 	switch target.kind {
 	case liveScanTargetHomeLibrary:
-		if cached, err := loadStoredOverviewSize(target.path); err == nil && cached > 0 {
-			return scanResult{TotalSize: cached}, nil
+		if cachePolicy == scanCacheReuse {
+			if cached, err := loadStoredOverviewSize(target.path); err == nil && cached > 0 {
+				return scanResult{TotalSize: cached}, nil
+			}
 		}
 	case liveScanTargetFoldedDirectory:
 		size, err := getDirectorySizeFromDu(target.path)
@@ -382,7 +389,7 @@ func scanLiveTarget(ctx context.Context, target liveScanTarget, largeFileChan ch
 		return scanResult{}, err
 	}
 
-	result := scanSubdirWithCache(target.path, largeFileChan, largeFileMinSize, limiter, limiter.dirSem, limiter.duSem, limiter.duQueueSem, filesScanned, dirsScanned, bytesScanned, currentPath)
+	result := scanSubdirWithCache(target.path, largeFileChan, largeFileMinSize, limiter, limiter.dirSem, limiter.duSem, limiter.duQueueSem, filesScanned, dirsScanned, bytesScanned, currentPath, cachePolicy)
 	return result, ctx.Err()
 }
 

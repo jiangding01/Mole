@@ -29,6 +29,7 @@ declare -a HISTORY_SESSION_FAILED=()
 declare -a HISTORY_SESSION_REBUILT=()
 declare -a HISTORY_SESSION_OTHER=()
 declare -a HISTORY_SESSION_OPERATIONS=()
+declare -a HISTORY_SESSION_FAILED_TASKS=()
 
 declare -a HISTORY_DELETE_TIMESTAMPS=()
 declare -a HISTORY_DELETE_MODES=()
@@ -48,6 +49,7 @@ HISTORY_ACTIVE_FAILED=0
 HISTORY_ACTIVE_REBUILT=0
 HISTORY_ACTIVE_OTHER=0
 HISTORY_ACTIVE_OPERATIONS=0
+HISTORY_ACTIVE_FAILED_TASKS=0
 
 history_operations_log_file() {
     printf '%s\n' "${MOLE_OPERATIONS_LOG:-${OPERATIONS_LOG_FILE:-$HOME/Library/Logs/mole/operations.log}}"
@@ -116,6 +118,7 @@ history_reset_active_session() {
     HISTORY_ACTIVE_REBUILT=0
     HISTORY_ACTIVE_OTHER=0
     HISTORY_ACTIVE_OPERATIONS=0
+    HISTORY_ACTIVE_FAILED_TASKS=0
 }
 
 history_start_session() {
@@ -146,6 +149,7 @@ history_finish_session() {
     HISTORY_SESSION_REBUILT+=("$HISTORY_ACTIVE_REBUILT")
     HISTORY_SESSION_OTHER+=("$HISTORY_ACTIVE_OTHER")
     HISTORY_SESSION_OPERATIONS+=("$HISTORY_ACTIVE_OPERATIONS")
+    HISTORY_SESSION_FAILED_TASKS+=("$HISTORY_ACTIVE_FAILED_TASKS")
 
     history_reset_active_session
 }
@@ -165,6 +169,7 @@ history_record_operation() {
         TRASHED) HISTORY_ACTIVE_TRASHED=$((HISTORY_ACTIVE_TRASHED + 1)) ;;
         SKIPPED) HISTORY_ACTIVE_SKIPPED=$((HISTORY_ACTIVE_SKIPPED + 1)) ;;
         FAILED) HISTORY_ACTIVE_FAILED=$((HISTORY_ACTIVE_FAILED + 1)) ;;
+        TASK_FAILED) HISTORY_ACTIVE_FAILED_TASKS=$((HISTORY_ACTIVE_FAILED_TASKS + 1)) ;;
         REBUILT) HISTORY_ACTIVE_REBUILT=$((HISTORY_ACTIVE_REBUILT + 1)) ;;
         *) HISTORY_ACTIVE_OTHER=$((HISTORY_ACTIVE_OTHER + 1)) ;;
     esac
@@ -254,6 +259,7 @@ history_reset_sessions() {
     HISTORY_SESSION_REBUILT=()
     HISTORY_SESSION_OTHER=()
     HISTORY_SESSION_OPERATIONS=()
+    HISTORY_SESSION_FAILED_TASKS=()
 }
 
 history_reset_deletions() {
@@ -433,8 +439,12 @@ history_render_text() {
             local failed="${HISTORY_SESSION_FAILED[$idx]}"
             local rebuilt="${HISTORY_SESSION_REBUILT[$idx]}"
             local other="${HISTORY_SESSION_OTHER[$idx]}"
+            local failed_tasks="${HISTORY_SESSION_FAILED_TASKS[$idx]}"
             local count_text
             count_text=$(history_join_counts "$removed" "$trashed" "$skipped" "$failed" "$rebuilt" "$other")
+            if [[ "$failed_tasks" -gt 0 ]]; then
+                count_text+=", $failed_tasks optimize tasks failed"
+            fi
             [[ -z "$ended" ]] && ended="not ended"
             printf '  %-10s %s, %s items, %s\n' "$command" "$started" "$items" "$size"
             printf '             %s, ended %s\n' "$count_text" "$ended"
@@ -486,6 +496,7 @@ history_render_json_sessions() {
             history_json_number_field "      " "items" "${HISTORY_SESSION_ITEMS[$idx]}"
             history_json_string_field "      " "size" "${HISTORY_SESSION_SIZE[$idx]}"
             history_json_number_field "      " "operation_count" "${HISTORY_SESSION_OPERATIONS[$idx]}"
+            history_json_number_field "      " "failed_tasks" "${HISTORY_SESSION_FAILED_TASKS[$idx]}"
             printf '      "actions": {"removed": %s, "trashed": %s, "skipped": %s, "failed": %s, "rebuilt": %s, "other": %s}\n' \
                 "${HISTORY_SESSION_REMOVED[$idx]}" \
                 "${HISTORY_SESSION_TRASHED[$idx]}" \

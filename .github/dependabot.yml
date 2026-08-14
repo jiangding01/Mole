@@ -9,6 +9,10 @@ updates:
     reviewers:
       - "tw93"
     open-pull-requests-limit: 10
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "gomod"
     directory: "/"

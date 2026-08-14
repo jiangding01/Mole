@@ -3,12 +3,13 @@
 package main
 
 import (
+	"context"
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -290,8 +291,8 @@ func TestDeletePathWithProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trashPathWithProgress returned error: %v", err)
 	}
-	if count != int64(len(files)) {
-		t.Fatalf("expected %d files trashed, got %d", len(files), count)
+	if count != 1 {
+		t.Fatalf("expected one path-level Trash operation, got %d", count)
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("expected target to be moved to Trash, stat err=%v", err)
@@ -392,6 +393,30 @@ func TestViewShowsEscBackAndCtrlCQuitHints(t *testing.T) {
 	}
 }
 
+func TestOverviewPendingSizeUsesScanningSpinner(t *testing.T) {
+	// A pending overview row reuses the list view's animated scanning idiom
+	// instead of a static text placeholder: "pending.." broke the numeric
+	// column rhythm, and a static "--" read as stuck. The spinner string is
+	// exactly 10 display columns, flush with the right-aligned sizes.
+	m := model{
+		isOverview: true,
+		path:       "/",
+		entries: []dirEntry{
+			{Name: "Applications", Path: "/Applications", Size: 16 << 30, IsDir: true},
+			{Name: "iOS Backups", Path: "/tmp/backups", Size: -1, IsDir: true},
+		},
+		totalSize: 16 << 30,
+	}
+
+	view := m.View()
+	if strings.Contains(view, "pending") {
+		t.Fatalf("pending rows must not render a text placeholder, got:\n%s", view)
+	}
+	if !strings.Contains(view, fmt.Sprintf("%s scanning", spinnerFrames[0])) {
+		t.Fatalf("expected animated scanning placeholder for pending row, got:\n%s", view)
+	}
+}
+
 func TestViewKeepsCachedEntriesWhileRefreshing(t *testing.T) {
 	m := model{
 		path:             "/tmp/project/child",
@@ -462,6 +487,81 @@ func TestOverviewViewOmitsFreeSpaceLabelWhenUnknown(t *testing.T) {
 	view := m.View()
 	if strings.Contains(view, "free)") {
 		t.Fatalf("expected overview view to omit free-space label when unavailable, got:\n%s", view)
+	}
+}
+
+func TestOverviewViewUsesTextOnlyLabels(t *testing.T) {
+	m := model{
+		path:       "/",
+		isOverview: true,
+		entries: []dirEntry{
+			{Name: "Home", Path: "/tmp/home", Size: 80, IsDir: true},
+			{Name: "iOS Backups", Path: "/tmp/backups", Size: 20, IsDir: true},
+		},
+		totalSize: 100,
+	}
+
+	view := m.View()
+	for _, label := range []string{"Home", "iOS Backups"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("expected overview label %q, got:\n%s", label, view)
+		}
+	}
+	for _, icon := range []string{"📁", "👀"} {
+		if strings.Contains(view, icon) {
+			t.Fatalf("overview should not render emoji icon %q, got:\n%s", icon, view)
+		}
+	}
+}
+
+func TestDirectoryViewKeepsLowPercentRowsAligned(t *testing.T) {
+	m := model{
+		path:      "/tmp/project",
+		width:     120,
+		height:    20,
+		selected:  -1,
+		totalSize: 100_000,
+		entries: []dirEntry{
+			{Name: "large", Path: "/tmp/project/large", Size: 47_000, IsDir: true},
+			{Name: "tiny", Path: "/tmp/project/tiny", Size: 46, IsDir: true},
+		},
+	}
+
+	stripColors := strings.NewReplacer(
+		colorPurple, "",
+		colorPurpleBold, "",
+		colorGray, "",
+		colorRed, "",
+		colorYellow, "",
+		colorGreen, "",
+		colorBlue, "",
+		colorCyan, "",
+		colorReset, "",
+		colorBold, "",
+	)
+	largeRow := stripColors.Replace(rowContaining(m.View(), "large"))
+	tinyRow := stripColors.Replace(rowContaining(m.View(), "tiny"))
+	if !strings.Contains(tinyRow, "< 0.1%") {
+		t.Fatalf("expected tiny row to show < 0.1%%, got:\n%s", tinyRow)
+	}
+	if strings.Contains(m.View(), "░") {
+		t.Fatalf("directory view should not render gray progress tracks:\n%s", m.View())
+	}
+
+	largePrefix, _, largeHasDivider := strings.Cut(largeRow, "  |  ")
+	tinyPrefix, _, tinyHasDivider := strings.Cut(tinyRow, "  |  ")
+	if !largeHasDivider || !tinyHasDivider {
+		t.Fatalf("missing percent divider\nlarge: %q\ntiny:  %q", largeRow, tinyRow)
+	}
+	largeDividerColumn := displayWidth(largePrefix)
+	tinyDividerColumn := displayWidth(tinyPrefix)
+	if largeDividerColumn != tinyDividerColumn {
+		t.Fatalf("percent divider columns differ: large=%d tiny=%d\nlarge: %q\ntiny:  %q",
+			largeDividerColumn, tinyDividerColumn, largeRow, tinyRow)
+	}
+	if largeWidth, tinyWidth := displayWidth(largeRow), displayWidth(tinyRow); largeWidth != tinyWidth {
+		t.Fatalf("row widths differ: large=%d tiny=%d\nlarge: %q\ntiny:  %q",
+			largeWidth, tinyWidth, largeRow, tinyRow)
 	}
 }
 
@@ -588,6 +688,524 @@ func TestPruneAnalyzerCacheDirIgnoresRemoveFailures(t *testing.T) {
 	}
 }
 
+// writeAgedCacheFiles lays down n fresh cache files, oldest first, one minute
+// apart so eviction order is unambiguous.
+func writeAgedCacheFiles(t *testing.T, cacheDir string, n int, payload int) []string {
+	t.Helper()
+	base := time.Now().Add(-time.Duration(n) * time.Minute)
+	names := make([]string, 0, n)
+	for i := range n {
+		name := filepath.Join(cacheDir, fmt.Sprintf("entry-%03d.cache", i))
+		if err := os.WriteFile(name, []byte(strings.Repeat("x", payload)), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		stamp := base.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(name, stamp, stamp); err != nil {
+			t.Fatalf("chtimes %s: %v", name, err)
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+// A TTL alone cannot bound a store whose entries are all refreshed inside it;
+// the count cap is what keeps the newest N and drops the rest, oldest first.
+func TestPruneAnalyzerCacheDirEnforcesEntryCap(t *testing.T) {
+	cacheDir := t.TempDir()
+	names := writeAgedCacheFiles(t, cacheDir, 10, 16)
+
+	if err := pruneAnalyzerCacheDirWithLimits(cacheDir, time.Now(), 4, 0); err != nil {
+		t.Fatalf("pruneAnalyzerCacheDirWithLimits: %v", err)
+	}
+
+	for i, name := range names {
+		_, err := os.Stat(name)
+		if i < 6 && !os.IsNotExist(err) {
+			t.Fatalf("expected oldest entry %s to be evicted, stat err: %v", name, err)
+		}
+		if i >= 6 && err != nil {
+			t.Fatalf("expected newest entry %s to be retained: %v", name, err)
+		}
+	}
+}
+
+func TestPruneAnalyzerCacheDirEnforcesByteCap(t *testing.T) {
+	cacheDir := t.TempDir()
+	names := writeAgedCacheFiles(t, cacheDir, 10, 100)
+
+	// The count cap is set out of the way so only the byte cap can evict:
+	// room for exactly three of the 100-byte entries.
+	if err := pruneAnalyzerCacheDirWithLimits(cacheDir, time.Now(), len(names), 300); err != nil {
+		t.Fatalf("pruneAnalyzerCacheDirWithLimits: %v", err)
+	}
+
+	for i, name := range names {
+		_, err := os.Stat(name)
+		if i < 7 && !os.IsNotExist(err) {
+			t.Fatalf("expected oldest entry %s to be evicted, stat err: %v", name, err)
+		}
+		if i >= 7 && err != nil {
+			t.Fatalf("expected newest entry %s to be retained: %v", name, err)
+		}
+	}
+}
+
+// The legacy flat store shares `~/.cache/mole` with shell-side state, so the
+// sweep is scoped to the two names the analyzer ever wrote there.
+func TestSweepLegacyAnalyzerCacheRemovesOnlyAnalyzerFiles(t *testing.T) {
+	root := t.TempDir()
+
+	legacyEntry := filepath.Join(root, "deadbeef.cache")
+	legacyOverview := filepath.Join(root, overviewCacheFile)
+	shellState := filepath.Join(root, "installed_apps_cache")
+	permissionFlag := filepath.Join(root, "permissions_granted")
+	for _, path := range []string{legacyEntry, legacyOverview, shellState, permissionFlag} {
+		if err := os.WriteFile(path, []byte("state"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	analyzerDir := filepath.Join(root, analyzerCacheDirName)
+	if err := os.Mkdir(analyzerDir, 0o755); err != nil {
+		t.Fatalf("mkdir analyzer dir: %v", err)
+	}
+	currentEntry := filepath.Join(analyzerDir, "deadbeef.cache")
+	if err := os.WriteFile(currentEntry, []byte("current"), 0o644); err != nil {
+		t.Fatalf("write current entry: %v", err)
+	}
+
+	if err := sweepLegacyAnalyzerCache(root); err != nil {
+		t.Fatalf("sweepLegacyAnalyzerCache: %v", err)
+	}
+
+	for _, path := range []string{legacyEntry, legacyOverview} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected legacy file %s to be swept, stat err: %v", path, err)
+		}
+	}
+	for _, path := range []string{shellState, permissionFlag, currentEntry, analyzerDir} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("expected %s to be preserved: %v", path, err)
+		}
+	}
+}
+
+func TestSweepLegacyAnalyzerCacheMissingRoot(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if err := sweepLegacyAnalyzerCache(missing); err != nil {
+		t.Fatalf("expected missing root to be ignored, got: %v", err)
+	}
+}
+
+// Rejecting an expired entry without deleting it leaves the file on disk for a
+// whole TTL, waiting on a prune pass that may never reach it.
+func TestLoadCacheFromDiskRemovesExpiredEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(home, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := saveCacheToDisk(target, scanResult{TotalSize: 1024, TotalFiles: 4}); err != nil {
+		t.Fatalf("saveCacheToDisk: %v", err)
+	}
+	cachePath, err := getCachePath(target)
+	if err != nil {
+		t.Fatalf("getCachePath: %v", err)
+	}
+
+	expired := time.Now().Add(-analyzerCacheTTL - time.Hour)
+	if err := os.Chtimes(cachePath, expired, expired); err != nil {
+		t.Fatalf("chtimes cache: %v", err)
+	}
+	// ScanTime lives inside the payload, so age it there too.
+	entry, err := loadRawCacheFromDisk(target)
+	if err != nil {
+		t.Fatalf("loadRawCacheFromDisk: %v", err)
+	}
+	entry.ScanTime = expired
+	file, err := os.Create(cachePath)
+	if err != nil {
+		t.Fatalf("rewrite cache: %v", err)
+	}
+	if err := gob.NewEncoder(file).Encode(*entry); err != nil {
+		file.Close() //nolint:errcheck
+		t.Fatalf("encode cache: %v", err)
+	}
+	file.Close() //nolint:errcheck
+
+	if _, err := loadCacheFromDisk(target); err == nil {
+		t.Fatalf("expected expired cache to be rejected")
+	}
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("expected expired cache file to be deleted, stat err: %v", err)
+	}
+}
+
+func TestLoadCacheFromDiskRemovesEntryForMissingDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(home, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := saveCacheToDisk(target, scanResult{TotalSize: 1024, TotalFiles: 4}); err != nil {
+		t.Fatalf("saveCacheToDisk: %v", err)
+	}
+	cachePath, err := getCachePath(target)
+	if err != nil {
+		t.Fatalf("getCachePath: %v", err)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatalf("remove target: %v", err)
+	}
+
+	if _, err := loadCacheFromDisk(target); err == nil {
+		t.Fatalf("expected missing directory to fail the load")
+	}
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("expected orphaned cache file to be deleted, stat err: %v", err)
+	}
+}
+
+func TestLoadRawCacheFromDiskRemovesUndecodableEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(home, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	cachePath, err := getCachePath(target)
+	if err != nil {
+		t.Fatalf("getCachePath: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("not gob"), 0o644); err != nil {
+		t.Fatalf("write corrupt cache: %v", err)
+	}
+
+	if _, err := loadRawCacheFromDisk(target); err == nil {
+		t.Fatalf("expected corrupt cache to fail decoding")
+	}
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("expected corrupt cache file to be deleted, stat err: %v", err)
+	}
+}
+
+// getCacheDir memoizes MkdirAll, so it has to notice when HOME moves or every
+// test after the first would write into the first one's temp directory.
+func TestGetCacheDirFollowsHomeChanges(t *testing.T) {
+	firstHome := t.TempDir()
+	t.Setenv("HOME", firstHome)
+	first, err := getCacheDir()
+	if err != nil {
+		t.Fatalf("getCacheDir(first): %v", err)
+	}
+	if !strings.HasPrefix(first, firstHome) {
+		t.Fatalf("cache dir %q not under HOME %q", first, firstHome)
+	}
+
+	secondHome := t.TempDir()
+	t.Setenv("HOME", secondHome)
+	second, err := getCacheDir()
+	if err != nil {
+		t.Fatalf("getCacheDir(second): %v", err)
+	}
+	if !strings.HasPrefix(second, secondHome) {
+		t.Fatalf("cache dir %q not under new HOME %q", second, secondHome)
+	}
+	if first == second {
+		t.Fatalf("expected cache dir to change with HOME, got %q twice", first)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Fatalf("expected new cache dir to be created: %v", err)
+	}
+}
+
+// Every save rewrites the whole overview store, so re-measuring a directory to
+// the size already on record must not touch the disk at all.
+func TestStoreOverviewSizeSkipsWriteWhenValueUnchanged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetOverviewSnapshotForTest()
+
+	const target = "/Users/someone/project"
+	if err := storeOverviewSize(target, 4096); err != nil {
+		t.Fatalf("storeOverviewSize: %v", err)
+	}
+	storePath, err := getOverviewSizeStorePath()
+	if err != nil {
+		t.Fatalf("getOverviewSizeStorePath: %v", err)
+	}
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("remove store: %v", err)
+	}
+
+	if err := storeOverviewSize(target, 4096); err != nil {
+		t.Fatalf("storeOverviewSize(repeat): %v", err)
+	}
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Fatalf("expected repeat save of an unchanged size to skip the write, stat err: %v", err)
+	}
+
+	if err := storeOverviewSize(target, 8192); err != nil {
+		t.Fatalf("storeOverviewSize(changed): %v", err)
+	}
+	if _, err := os.Stat(storePath); err != nil {
+		t.Fatalf("expected a changed size to be persisted: %v", err)
+	}
+}
+
+func TestEnsureOverviewSnapshotCacheDropsExpiredAndLegacyEntries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetOverviewSnapshotForTest()
+
+	storePath, err := getOverviewSizeStorePath()
+	if err != nil {
+		t.Fatalf("getOverviewSizeStorePath: %v", err)
+	}
+	seeded := map[string]overviewSizeSnapshot{
+		"/fresh":   {Size: 1 << 20, Updated: time.Now().Add(-time.Hour), SchemaVersion: cacheSchemaVersion},
+		"/expired": {Size: 1 << 20, Updated: time.Now().Add(-overviewCacheTTL - time.Hour), SchemaVersion: cacheSchemaVersion},
+		"/empty":   {Size: 0, Updated: time.Now(), SchemaVersion: cacheSchemaVersion},
+		"/legacy":  {Size: 1 << 20, Updated: time.Now()},
+	}
+	data, err := json.Marshal(seeded)
+	if err != nil {
+		t.Fatalf("marshal seed: %v", err)
+	}
+	if err := os.WriteFile(storePath, data, 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+
+	if _, err := loadStoredOverviewSize("/fresh"); err != nil {
+		t.Fatalf("expected fresh snapshot to load: %v", err)
+	}
+
+	overviewSnapshotMu.Lock()
+	_, hasExpired := overviewSnapshotCache["/expired"]
+	_, hasEmpty := overviewSnapshotCache["/empty"]
+	_, hasLegacy := overviewSnapshotCache["/legacy"]
+	_, hasFresh := overviewSnapshotCache["/fresh"]
+	overviewSnapshotMu.Unlock()
+
+	if hasExpired || hasEmpty || hasLegacy {
+		t.Fatalf("expected expired, empty, and legacy snapshots to be dropped on load")
+	}
+	if !hasFresh {
+		t.Fatalf("expected fresh snapshot to survive load")
+	}
+}
+
+func TestEvictOverviewSnapshotsKeepsNewest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetOverviewSnapshotForTest()
+
+	base := time.Now().Add(-time.Duration(overviewCacheMaxEntries+1) * time.Minute)
+	overviewSnapshotMu.Lock()
+	overviewSnapshotCache = make(map[string]overviewSizeSnapshot, overviewCacheMaxEntries+1)
+	overviewSnapshotLoaded = true
+	for i := range overviewCacheMaxEntries + 1 {
+		overviewSnapshotCache[fmt.Sprintf("/dir-%04d", i)] = overviewSizeSnapshot{
+			Size:          int64(i + 1),
+			Updated:       base.Add(time.Duration(i) * time.Minute),
+			SchemaVersion: cacheSchemaVersion,
+		}
+	}
+	evictOverviewSnapshotsLocked()
+	remaining := len(overviewSnapshotCache)
+	_, oldestKept := overviewSnapshotCache["/dir-0000"]
+	_, newestKept := overviewSnapshotCache[fmt.Sprintf("/dir-%04d", overviewCacheMaxEntries)]
+	overviewSnapshotMu.Unlock()
+
+	if remaining != overviewCacheKeepEntries {
+		t.Fatalf("expected %d snapshots after eviction, got %d", overviewCacheKeepEntries, remaining)
+	}
+	if oldestKept {
+		t.Fatalf("expected the oldest snapshot to be evicted")
+	}
+	if !newestKept {
+		t.Fatalf("expected the newest snapshot to be kept")
+	}
+}
+
+// Dropping snapshots one child at a time rewrote the whole overview store per
+// child; the tree invalidation has to land as a single save.
+func TestInvalidateCacheTreeDropsChildSnapshotsInOneSave(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetOverviewSnapshotForTest()
+
+	parent := filepath.Join(home, "parent")
+	childA := filepath.Join(parent, "a")
+	childB := filepath.Join(parent, "b")
+	for _, dir := range []string{childA, childB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	for _, dir := range []string{parent, childA, childB} {
+		if err := storeOverviewSize(dir, 1<<20); err != nil {
+			t.Fatalf("storeOverviewSize(%s): %v", dir, err)
+		}
+		if err := saveCacheToDisk(dir, scanResult{TotalSize: 1 << 20, TotalFiles: 3}); err != nil {
+			t.Fatalf("saveCacheToDisk(%s): %v", dir, err)
+		}
+	}
+
+	storePath, err := getOverviewSizeStorePath()
+	if err != nil {
+		t.Fatalf("getOverviewSizeStorePath: %v", err)
+	}
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("remove store: %v", err)
+	}
+
+	invalidateCacheTree(parent)
+
+	// Exactly one save recreated the file, and it holds none of the tree.
+	data, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatalf("expected the invalidation to persist once: %v", err)
+	}
+	var persisted map[string]overviewSizeSnapshot
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("unmarshal store: %v", err)
+	}
+	for _, dir := range []string{parent, childA, childB} {
+		if _, ok := persisted[dir]; ok {
+			t.Fatalf("expected %s snapshot to be dropped", dir)
+		}
+		cachePath, err := getCachePath(dir)
+		if err != nil {
+			t.Fatalf("getCachePath(%s): %v", dir, err)
+		}
+		if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+			t.Fatalf("expected %s cache entry to be removed, stat err: %v", dir, err)
+		}
+	}
+}
+
+// Atomic saves stage through temp files, and prune is the only thing that ever
+// looks in that directory: without this, a process killed mid-write leaks a
+// temp file that nothing would ever collect.
+func TestPruneAnalyzerCacheDirRemovesStaleTempFiles(t *testing.T) {
+	cacheDir := t.TempDir()
+	now := time.Now()
+
+	staleTemp := filepath.Join(cacheDir, "entry-123.tmp")
+	freshTemp := filepath.Join(cacheDir, "entry-456.tmp")
+	liveCache := filepath.Join(cacheDir, "live.cache")
+	for _, path := range []string{staleTemp, freshTemp, liveCache} {
+		if err := os.WriteFile(path, []byte("payload"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	old := now.Add(-staleTempFileTTL - time.Minute)
+	if err := os.Chtimes(staleTemp, old, old); err != nil {
+		t.Fatalf("chtimes stale temp: %v", err)
+	}
+
+	if err := pruneAnalyzerCacheDir(cacheDir, now); err != nil {
+		t.Fatalf("pruneAnalyzerCacheDir: %v", err)
+	}
+
+	if _, err := os.Stat(staleTemp); !os.IsNotExist(err) {
+		t.Fatalf("expected stale temp file to be removed, stat err: %v", err)
+	}
+	for _, path := range []string{freshTemp, liveCache} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s to be preserved: %v", path, err)
+		}
+	}
+}
+
+func TestSaveCacheToDiskLeavesNoTempFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(home, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := saveCacheToDisk(target, scanResult{TotalSize: 2048, TotalFiles: 8}); err != nil {
+		t.Fatalf("saveCacheToDisk: %v", err)
+	}
+
+	cacheDir, err := getCacheDir()
+	if err != nil {
+		t.Fatalf("getCacheDir: %v", err)
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("read cache dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("expected no temp file left behind, found %s", entry.Name())
+		}
+	}
+	if _, err := loadCacheFromDisk(target); err != nil {
+		t.Fatalf("expected the entry to be readable after an atomic save: %v", err)
+	}
+}
+
+func TestPeekCacheTotalFilesRejectsSchemaMismatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(home, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	cachePath, err := getCachePath(target)
+	if err != nil {
+		t.Fatalf("getCachePath: %v", err)
+	}
+	file, err := os.Create(cachePath)
+	if err != nil {
+		t.Fatalf("create cache: %v", err)
+	}
+	stale := cacheEntry{TotalFiles: 42, SchemaVersion: cacheSchemaVersion + 1, ScanTime: time.Now()}
+	if err := gob.NewEncoder(file).Encode(stale); err != nil {
+		file.Close() //nolint:errcheck
+		t.Fatalf("encode stale entry: %v", err)
+	}
+	file.Close() //nolint:errcheck
+
+	if _, err := peekCacheTotalFiles(target); err == nil {
+		t.Fatalf("expected a schema mismatch to be rejected")
+	}
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("expected the stale entry to be deleted, stat err: %v", err)
+	}
+}
+
+// The analyzer store must not sit in the directory the shell side uses for its
+// own state: the legacy sweep and the entry caps both assume they own it.
+func TestGetCacheDirIsAnalyzerScoped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root, err := getMoleCacheRoot()
+	if err != nil {
+		t.Fatalf("getMoleCacheRoot: %v", err)
+	}
+	cacheDir, err := getCacheDir()
+	if err != nil {
+		t.Fatalf("getCacheDir: %v", err)
+	}
+	if want := filepath.Join(root, analyzerCacheDirName); cacheDir != want {
+		t.Fatalf("cache dir = %q, want %q", cacheDir, want)
+	}
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Fatalf("expected cache dir to be created: %v", err)
+	}
+}
+
 func TestScanPathConcurrentWarmsChildDirectoryCache(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -600,8 +1218,13 @@ func TestScanPathConcurrentWarmsChildDirectoryCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "root.txt"), []byte("root-data"), 0o644); err != nil {
 		t.Fatalf("write root data: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(child, "data.bin"), []byte(strings.Repeat("x", 4096)), 0o644); err != nil {
-		t.Fatalf("write child data: %v", err)
+	// Only subtrees expensive enough to rescan are persisted, so the child has
+	// to clear subdirCacheMinFiles to be warmed at all.
+	for i := range subdirCacheMinFiles {
+		name := filepath.Join(child, fmt.Sprintf("data-%d.bin", i))
+		if err := os.WriteFile(name, []byte(strings.Repeat("x", 64)), 0o644); err != nil {
+			t.Fatalf("write child data: %v", err)
+		}
 	}
 
 	var filesScanned, dirsScanned, bytesScanned int64
@@ -622,11 +1245,158 @@ func TestScanPathConcurrentWarmsChildDirectoryCache(t *testing.T) {
 	if len(cached.Entries) == 0 {
 		t.Fatalf("expected cached child entries to be populated")
 	}
-	if cached.TotalFiles != 1 {
-		t.Fatalf("expected warmed child cache to track local file count 1, got %d", cached.TotalFiles)
+	if cached.TotalFiles != subdirCacheMinFiles {
+		t.Fatalf("expected warmed child cache to track local file count %d, got %d", subdirCacheMinFiles, cached.TotalFiles)
 	}
 	if !cached.NeedsRefresh {
 		t.Fatalf("expected warmed child cache to be marked for refresh")
+	}
+}
+
+// A cache file costs a 4KB block plus an inode to memoize what one readdir
+// returns, so cheap subtrees must not get one. Unbounded admission is what grew
+// ~/.cache/mole to 1.88M files / 7.82GB on a user's Mac.
+func TestScanPathConcurrentSkipsCacheForCheapSubdir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := filepath.Join(home, "root")
+	child := filepath.Join(root, "child")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "root.txt"), []byte("root-data"), 0o644); err != nil {
+		t.Fatalf("write root data: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(child, "data.bin"), []byte(strings.Repeat("x", 4096)), 0o644); err != nil {
+		t.Fatalf("write child data: %v", err)
+	}
+
+	var filesScanned, dirsScanned, bytesScanned int64
+	current := &atomic.Value{}
+	current.Store("")
+
+	result, err := scanPathConcurrent(root, &filesScanned, &dirsScanned, &bytesScanned, current)
+	if err != nil {
+		t.Fatalf("scanPathConcurrent(root): %v", err)
+	}
+
+	childPath, err := getCachePath(child)
+	if err != nil {
+		t.Fatalf("getCachePath: %v", err)
+	}
+	if _, err := os.Stat(childPath); !os.IsNotExist(err) {
+		t.Fatalf("expected cheap subtree to be left uncached, stat err: %v", err)
+	}
+
+	// The size still has to be reported; only the persistence is skipped.
+	found := false
+	for _, entry := range result.Entries {
+		if entry.Path == child {
+			found = true
+			if entry.Size <= 0 {
+				t.Fatalf("expected uncached child to still report a size, got %d", entry.Size)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected child entry in scan result")
+	}
+}
+
+func TestAnalyzeIncludesParallelsVMStorageButKeepsOtherVirtualizationSkips(t *testing.T) {
+	root := t.TempDir()
+	parallels := filepath.Join(root, "Parallels")
+	orbStack := filepath.Join(root, "OrbStack")
+	for _, dir := range []string{parallels, orbStack} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "disk.img"), []byte(strings.Repeat("x", 4096)), 0o644); err != nil {
+			t.Fatalf("write data in %s: %v", dir, err)
+		}
+	}
+
+	var filesScanned, dirsScanned, bytesScanned int64
+	current := &atomic.Value{}
+	current.Store("")
+	result, err := scanPathConcurrentWithOptions(root, &filesScanned, &dirsScanned, &bytesScanned, current, false, 0)
+	if err != nil {
+		t.Fatalf("scan root: %v", err)
+	}
+
+	foundParallels := false
+	for _, entry := range result.Entries {
+		switch entry.Path {
+		case parallels:
+			foundParallels = true
+			if entry.Size <= 0 {
+				t.Fatalf("expected Parallels to contribute a positive size, got %d", entry.Size)
+			}
+		case orbStack:
+			t.Fatalf("expected existing OrbStack skip to remain in place")
+		}
+	}
+	if !foundParallels {
+		t.Fatalf("expected Parallels VM storage in scan entries")
+	}
+}
+
+func TestLiveScanIncludesParallelsVMStorageButKeepsOtherVirtualizationSkips(t *testing.T) {
+	root := t.TempDir()
+	parallels := filepath.Join(root, "Parallels")
+	orbStack := filepath.Join(root, "OrbStack")
+	for _, dir := range []string{parallels, orbStack} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+
+	entries, targets, _, _, _, err := readLiveScanInitialEntries(root, nil)
+	if err != nil {
+		t.Fatalf("read live scan entries: %v", err)
+	}
+
+	foundParallelsEntry := false
+	for _, entry := range entries {
+		switch entry.Path {
+		case parallels:
+			foundParallelsEntry = true
+		case orbStack:
+			t.Fatalf("expected existing OrbStack skip to remain in live entries")
+		}
+	}
+	foundParallelsTarget := false
+	for _, target := range targets {
+		switch target.path {
+		case parallels:
+			foundParallelsTarget = true
+		case orbStack:
+			t.Fatalf("expected existing OrbStack skip to remain in live targets")
+		}
+	}
+	if !foundParallelsEntry || !foundParallelsTarget {
+		t.Fatalf("expected Parallels in both live entries and targets, entry=%v target=%v", foundParallelsEntry, foundParallelsTarget)
+	}
+}
+
+func TestShouldPersistSubdirCacheThresholds(t *testing.T) {
+	cases := []struct {
+		name   string
+		result scanResult
+		want   bool
+	}{
+		{"tiny subtree", scanResult{TotalFiles: 1, TotalSize: 4096}, false},
+		{"just below file threshold", scanResult{TotalFiles: subdirCacheMinFiles - 1, TotalSize: 1024}, false},
+		{"file threshold", scanResult{TotalFiles: subdirCacheMinFiles, TotalSize: 1024}, true},
+		{"size threshold", scanResult{TotalFiles: 1, TotalSize: subdirCacheMinSize}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldPersistSubdirCache(tc.result); got != tc.want {
+				t.Fatalf("shouldPersistSubdirCache(%+v) = %v, want %v", tc.result, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -714,17 +1484,15 @@ func TestScanPathConcurrentWarmsChildCachesWithoutRecursiveSpotlight(t *testing.
 		}
 	}
 
-	logPath := filepath.Join(home, "mdfind.log")
-	stubDir := filepath.Join(home, "bin")
-	if err := os.MkdirAll(stubDir, 0o755); err != nil {
-		t.Fatalf("create stub dir: %v", err)
+	originalRunner := spotlightQueryRunner
+	spotlightRoots := []string{}
+	spotlightQueryRunner = func(_ context.Context, queryRoot, _ string) ([]byte, error) {
+		spotlightRoots = append(spotlightRoots, queryRoot)
+		return nil, nil
 	}
-	stubPath := filepath.Join(stubDir, "mdfind")
-	stubScript := fmt.Sprintf("#!/bin/sh\necho \"$*\" >> %s\nexit 0\n", strconv.Quote(logPath))
-	if err := os.WriteFile(stubPath, []byte(stubScript), 0o755); err != nil {
-		t.Fatalf("write mdfind stub: %v", err)
-	}
-	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() {
+		spotlightQueryRunner = originalRunner
+	})
 
 	var filesScanned, dirsScanned, bytesScanned int64
 	current := &atomic.Value{}
@@ -734,13 +1502,8 @@ func TestScanPathConcurrentWarmsChildCachesWithoutRecursiveSpotlight(t *testing.
 		t.Fatalf("scanPathConcurrent(root): %v", err)
 	}
 
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("read mdfind log: %v", err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 1 {
-		t.Fatalf("expected only root spotlight invocation, got %d lines: %q", len(lines), string(data))
+	if len(spotlightRoots) != 1 || spotlightRoots[0] != root {
+		t.Fatalf("expected only root spotlight invocation, got %q", spotlightRoots)
 	}
 }
 
@@ -778,12 +1541,23 @@ func TestScanCmdTreatsWarmedCacheAsStale(t *testing.T) {
 }
 
 func TestLiveScanSortConfigFromEnv(t *testing.T) {
-	t.Setenv(liveSortModeEnv, "freeze-on-move")
+	t.Run("defaults to freeze on move", func(t *testing.T) {
+		t.Setenv(liveSortModeEnv, "")
 
-	m := newModel(t.TempDir(), false)
-	if m.liveSortMode != liveSortFreezeOnMove {
-		t.Fatalf("expected freeze-on-move sort mode, got %v", m.liveSortMode)
-	}
+		m := newModel(t.TempDir(), false)
+		if m.liveSortMode != liveSortFreezeOnMove {
+			t.Fatalf("expected freeze-on-move sort mode, got %v", m.liveSortMode)
+		}
+	})
+
+	t.Run("continuous remains available", func(t *testing.T) {
+		t.Setenv(liveSortModeEnv, "continuous")
+
+		m := newModel(t.TempDir(), false)
+		if m.liveSortMode != liveSortContinuous {
+			t.Fatalf("expected continuous sort mode, got %v", m.liveSortMode)
+		}
+	})
 }
 
 func TestLiveScanInitialListingShowsImmediateChildren(t *testing.T) {
@@ -971,6 +1745,148 @@ func TestLiveScanChildUpdateUpdatesRowTotalAndCache(t *testing.T) {
 	}
 }
 
+func TestManualRefreshBypassesNestedSubdirCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	root := filepath.Join(home, "root")
+	nested := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+	for i := range subdirCacheMinFiles {
+		path := filepath.Join(nested, fmt.Sprintf("data-%d.bin", i))
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", 64)), 0o644); err != nil {
+			t.Fatalf("write nested data: %v", err)
+		}
+	}
+	removedPath := filepath.Join(nested, "removed.bin")
+	if err := os.WriteFile(removedPath, []byte(strings.Repeat("x", 2*1024*1024)), 0o644); err != nil {
+		t.Fatalf("write removable data: %v", err)
+	}
+
+	m := newModel(root, false)
+	warmed := runScanResultCmd(t, m.scanFreshCmd(root))
+	if warmed.err != nil {
+		t.Fatalf("warm scan: %v", warmed.err)
+	}
+	if _, err := loadCacheFromDisk(nested); err != nil {
+		t.Fatalf("expected nested cache to be warmed: %v", err)
+	}
+
+	if err := os.Remove(removedPath); err != nil {
+		t.Fatalf("remove nested data: %v", err)
+	}
+
+	reused := runScanResultCmd(t, m.scanFreshCmd(root))
+	if reused.err != nil {
+		t.Fatalf("cached scan: %v", reused.err)
+	}
+	if reused.result.TotalSize != warmed.result.TotalSize {
+		t.Fatalf("expected ordinary scan to reuse nested cache size %d, got %d", warmed.result.TotalSize, reused.result.TotalSize)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	if cmd == nil {
+		t.Fatalf("expected manual refresh command")
+	}
+	if !updated.(model).scanning {
+		t.Fatalf("expected manual refresh to enter scanning state")
+	}
+	refreshed := runScanResultCmd(t, cmd)
+	if refreshed.err != nil {
+		t.Fatalf("manual refresh: %v", refreshed.err)
+	}
+	if refreshed.result.TotalSize >= warmed.result.TotalSize {
+		t.Fatalf("expected manual refresh to drop removed file size below %d, got %d", warmed.result.TotalSize, refreshed.result.TotalSize)
+	}
+
+	cached, err := loadCacheFromDisk(nested)
+	if err != nil {
+		t.Fatalf("load refreshed nested cache: %v", err)
+	}
+	for _, entry := range cached.Entries {
+		if entry.Path == removedPath {
+			t.Fatalf("manual refresh left removed file in nested cache")
+		}
+	}
+}
+
+func TestCacheBypassSkipsHomeLibraryOverviewSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	resetOverviewSnapshotForTest()
+	t.Cleanup(resetOverviewSnapshotForTest)
+
+	library := filepath.Join(home, "Library")
+	if err := os.MkdirAll(library, 0o755); err != nil {
+		t.Fatalf("create Library: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(library, "live.bin"), []byte(strings.Repeat("x", 8192)), 0o644); err != nil {
+		t.Fatalf("write Library data: %v", err)
+	}
+	if err := storeOverviewSize(library, 1); err != nil {
+		t.Fatalf("store stale overview size: %v", err)
+	}
+
+	scanTarget := func(policy scanCachePolicy) scanResult {
+		t.Helper()
+		var filesScanned, dirsScanned, bytesScanned int64
+		current := &atomic.Value{}
+		current.Store("")
+		limiter := newScanLimiter(1)
+		largeFileMinSize := int64(largeFileWarmupMinSize)
+		result, err := scanLiveTarget(
+			context.Background(),
+			liveScanTarget{name: "Library", path: library, kind: liveScanTargetHomeLibrary},
+			make(chan fileEntry, maxLargeFiles*2),
+			&largeFileMinSize,
+			limiter,
+			&filesScanned,
+			&dirsScanned,
+			&bytesScanned,
+			current,
+			policy,
+		)
+		if err != nil {
+			t.Fatalf("scan Home Library: %v", err)
+		}
+		return result
+	}
+
+	if got := scanTarget(scanCacheReuse).TotalSize; got != 1 {
+		t.Fatalf("expected reuse policy to return snapshot size 1, got %d", got)
+	}
+	if got := scanTarget(scanCacheBypass).TotalSize; got <= 1 {
+		t.Fatalf("expected bypass policy to scan live Library size, got %d", got)
+	}
+
+	scanHome := func(policy scanCachePolicy) int64 {
+		t.Helper()
+		var filesScanned, dirsScanned, bytesScanned int64
+		current := &atomic.Value{}
+		current.Store("")
+		result, err := scanPathConcurrentWithLimiter(home, &filesScanned, &dirsScanned, &bytesScanned, current, false, maxEntries, nil, policy)
+		if err != nil {
+			t.Fatalf("scan Home: %v", err)
+		}
+		for _, entry := range result.Entries {
+			if entry.Path == library {
+				return entry.Size
+			}
+		}
+		t.Fatalf("Library entry missing from Home scan")
+		return 0
+	}
+
+	if got := scanHome(scanCacheReuse); got != 1 {
+		t.Fatalf("expected concurrent reuse policy to return snapshot size 1, got %d", got)
+	}
+	if got := scanHome(scanCacheBypass); got <= 1 {
+		t.Fatalf("expected concurrent bypass policy to scan live Library size, got %d", got)
+	}
+}
+
 func TestLiveScanStartPreservesEntryFilterBackingList(t *testing.T) {
 	root := t.TempDir()
 	apps := filepath.Join(root, "apps")
@@ -1029,7 +1945,7 @@ func TestLiveScanIgnoresStaleEventsAfterNavigation(t *testing.T) {
 	}
 }
 
-func TestLiveScanDefaultCursorByPathKeepsSelectedPathAcrossReorder(t *testing.T) {
+func TestLiveScanDefaultCursorStaysOnFirstRowAcrossReorder(t *testing.T) {
 	root := t.TempDir()
 	a := filepath.Join(root, "a")
 	b := filepath.Join(root, "b")
@@ -1039,7 +1955,6 @@ func TestLiveScanDefaultCursorByPathKeepsSelectedPathAcrossReorder(t *testing.T)
 	m.liveScanEvents = make(chan liveScanEventMsg)
 	m.scanning = true
 	m.autoSortLiveEntries = true
-	m.liveSortMode = liveSortContinuous
 	m.liveScanningPaths = map[string]bool{a: true, b: true}
 	m.entries = []dirEntry{
 		{Name: "a", Path: a, Size: -1, IsDir: true},
@@ -1058,14 +1973,14 @@ func TestLiveScanDefaultCursorByPathKeepsSelectedPathAcrossReorder(t *testing.T)
 	if got := []string{m.entries[0].Path, m.entries[1].Path}; !slices.Equal(got, []string{b, a}) {
 		t.Fatalf("expected live sort to reorder by size, got %v", got)
 	}
-	if m.entries[m.selected].Path != a {
-		t.Fatalf("expected default cursor to stay on %s, selected=%d entries=%+v", a, m.selected, m.entries)
+	if m.selected != 0 || m.entries[m.selected].Path != b {
+		t.Fatalf("expected default cursor to stay on the first row, selected=%d entries=%+v", m.selected, m.entries)
 	}
 
 	updated, _ = m.enterSelectedDir()
 	got := updated.(model)
-	if got.path != a {
-		t.Fatalf("expected Enter to drill into selected path %s, got %s", a, got.path)
+	if got.path != b {
+		t.Fatalf("expected Enter to drill into first-row path %s, got %s", b, got.path)
 	}
 }
 
@@ -1215,6 +2130,30 @@ func TestLiveScanSortCanFreezeAfterNavigationKey(t *testing.T) {
 	after := []string{m.entries[0].Path, m.entries[1].Path}
 	if !slices.Equal(before, after) {
 		t.Fatalf("expected freeze-on-move to keep row order %v, got %v", before, after)
+	}
+}
+
+func TestLiveScanSortDoesNotFreezeWhenCursorCannotMove(t *testing.T) {
+	root := t.TempDir()
+
+	m := newModel(root, false)
+	m.scanning = true
+	m.autoSortLiveEntries = true
+	m.liveSortMode = liveSortFreezeOnMove
+	m.entries = []dirEntry{
+		{Name: "only", Path: filepath.Join(root, "only"), Size: 10, IsDir: true},
+	}
+
+	updated, _ := m.updateKey(tea.KeyMsg{Type: tea.KeyUp})
+	m = updated.(model)
+	if !m.autoSortLiveEntries {
+		t.Fatal("an up key at the first row must not freeze live sorting")
+	}
+
+	updated, _ = m.updateKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	if !m.autoSortLiveEntries {
+		t.Fatal("a down key with no next row must not freeze live sorting")
 	}
 }
 
@@ -1978,4 +2917,136 @@ func TestCalculateDirSizeFastHighFanoutCompletes(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("calculateDirSizeFast did not complete under high fan-out")
 	}
+}
+
+func TestSystemOverviewRootsDefaultsToRealSystemPaths(t *testing.T) {
+	roots := systemOverviewRoots()
+	if len(roots) != 2 {
+		t.Fatalf("expected 2 default system roots, got %d", len(roots))
+	}
+	if roots[0].Path != "/Applications" || roots[1].Path != "/Library" {
+		t.Fatalf("unexpected default system roots: %q, %q", roots[0].Path, roots[1].Path)
+	}
+	for _, root := range roots {
+		if root.Size != -1 || !root.IsDir {
+			t.Fatalf("default root %q must start pending and be a dir, got size=%d isDir=%v",
+				root.Path, root.Size, root.IsDir)
+		}
+	}
+}
+
+func TestDeleteViewHidesZeroTally(t *testing.T) {
+	// The delete counter is path-level and only advances once a move finishes, so a
+	// single large directory sits at zero for the whole operation. Printing
+	// "0 items removed" there reads as a stalled delete.
+	var counter int64
+	m := model{deleting: true, deleteCount: &counter}
+
+	view := m.View()
+	if strings.Contains(view, "0 items") {
+		t.Fatalf("expected no zero tally while nothing has completed, got:\n%s", view)
+	}
+	if !strings.Contains(view, "moving to Trash") {
+		t.Fatalf("expected a progress line while deleting, got:\n%s", view)
+	}
+
+	atomic.StoreInt64(&counter, 2)
+	view = m.View()
+	if !strings.Contains(view, "2") || !strings.Contains(view, "items") {
+		t.Fatalf("expected the tally once paths completed, got:\n%s", view)
+	}
+}
+
+func TestDeleteProgressPartialFailureRemovesSucceededPathsAndRefreshes(t *testing.T) {
+	var filesScanned int64
+	var dirsScanned int64
+	var bytesScanned int64
+	var currentPath atomic.Value
+	parent := t.TempDir()
+	removed := filepath.Join(parent, "removed")
+	failed := filepath.Join(parent, "failed")
+
+	m := model{
+		path:         parent,
+		entries:      []dirEntry{{Path: removed, Size: 10}, {Path: failed, Size: 20}},
+		entriesAll:   []dirEntry{{Path: removed, Size: 10}, {Path: failed, Size: 20}},
+		totalSize:    30,
+		deleting:     true,
+		filesScanned: &filesScanned,
+		dirsScanned:  &dirsScanned,
+		bytesScanned: &bytesScanned,
+		currentPath:  &currentPath,
+		cache: map[string]historyEntry{
+			parent: {},
+		},
+		multiSelected:      map[string]bool{removed: true, failed: true},
+		largeMultiSelected: map[string]bool{},
+	}
+
+	updated, cmd := m.Update(deleteProgressMsg{
+		done:         true,
+		err:          fmt.Errorf("permission denied"),
+		count:        1,
+		removedPaths: []string{removed},
+	})
+	got := updated.(model)
+
+	if len(got.entries) != 1 || got.entries[0].Path != failed {
+		t.Fatalf("expected only failed path to remain, got %#v", got.entries)
+	}
+	if got.totalSize != 20 {
+		t.Fatalf("expected successful removal to update total size, got %d", got.totalSize)
+	}
+	if !strings.Contains(got.status, "Deleted 1 items; some failed") {
+		t.Fatalf("expected partial-failure status, got %q", got.status)
+	}
+	if entry := got.cache[parent]; !entry.NeedsRefresh {
+		t.Fatal("expected current path cache to be marked for refresh")
+	}
+	if cmd == nil {
+		t.Fatal("expected partial success to trigger a rescan")
+	}
+}
+
+// The no-argument invocation is the overview scan. Flipping that routing used to
+// be invisible: every Go and CLI JSON test passed with the overview branch
+// disabled, because the CLI cases all pass an explicit directory.
+func TestResolveScanTargetRouting(t *testing.T) {
+	cases := []struct {
+		name         string
+		envPath      string
+		args         []string
+		wantOverview bool
+		wantPath     string
+	}{
+		{name: "no target is the overview scan", wantOverview: true, wantPath: "/"},
+		{name: "explicit arg is a directory scan", args: []string{"/tmp"}, wantPath: "/tmp"},
+		{name: "env target is a directory scan", envPath: "/tmp", wantPath: "/tmp"},
+		{name: "env target wins over args", envPath: "/tmp", args: []string{"/var"}, wantPath: "/tmp"},
+		{name: "relative arg resolves to absolute", args: []string{"."}, wantPath: mustAbs(t, ".")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path, isOverview, err := resolveScanTarget(tc.envPath, tc.args)
+			if err != nil {
+				t.Fatalf("resolveScanTarget: %v", err)
+			}
+			if isOverview != tc.wantOverview {
+				t.Errorf("isOverview = %v, want %v", isOverview, tc.wantOverview)
+			}
+			if path != tc.wantPath {
+				t.Errorf("path = %q, want %q", path, tc.wantPath)
+			}
+		})
+	}
+}
+
+func mustAbs(t *testing.T, path string) string {
+	t.Helper()
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q): %v", path, err)
+	}
+	return abs
 }

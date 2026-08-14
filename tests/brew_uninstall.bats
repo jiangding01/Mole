@@ -42,7 +42,7 @@ setup() {
     mkdir -p "$HOME/Applications/TestApp.app"
     ln -s "$HOME/Applications/TestApp.app" "$HOME/Caskroom/test-app/1.0.0/TestApp.app"
 
-    run bash <<EOF
+    run /bin/bash << EOF
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/brew.sh"
 
@@ -74,7 +74,8 @@ EOF
 @test "get_brew_cask_name handles non-brew apps" {
     mkdir -p "$HOME/Applications/ManualApp.app"
 
-    result=$(bash <<EOF
+    result=$(
+        /bin/bash << EOF
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/brew.sh"
 # Mock brew to return nothing for this
@@ -87,10 +88,10 @@ EOF
     [[ "$result" == "not_found" ]]
 }
 
-@test "brew list fallback requires brew info to mention the app" {
-    mkdir -p "$HOME/Applications/Owned.app" "$HOME/Applications/Other.app"
+@test "brew detection requires brew info to mention the exact selected app path" {
+    mkdir -p "$HOME/Applications/Owned.app" "$HOME/Applications/Other.app" "$HOME/Applications/SameName.app"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/brew.sh"
@@ -98,10 +99,16 @@ source "$PROJECT_ROOT/lib/uninstall/brew.sh"
 brew() {
     case "$*" in
         "list --cask")
-            printf '%s\n' "owned"
+            printf '%s\n' "owned" "samename" "standard"
             ;;
         "info --cask owned")
-            printf '%s\n' "app \"/Applications/Owned.app\""
+            printf 'app "%s"\n' "$HOME/Applications/Owned.app"
+            ;;
+        "info --cask samename")
+            printf '%s\n' 'app "/Applications/SameName.app"'
+            ;;
+        "info --cask standard")
+            printf '%s\n' 'Standard.app (App)'
             ;;
         *)
             return 1
@@ -111,11 +118,95 @@ brew() {
 export -f brew
 
 owned=$(_detect_cask_via_brew_list "$HOME/Applications/Owned.app" "Owned.app")
-[[ "$owned" == "owned" ]]
+[[ "$owned" == "owned" ]] || exit 1
 ! _detect_cask_via_brew_list "$HOME/Applications/Other.app" "Other.app"
+! _detect_cask_via_brew_list "$HOME/Applications/SameName.app" "SameName.app"
+! get_brew_cask_name "$HOME/Applications/SameName.app"
+standard=$(_detect_cask_via_brew_list "/Applications/Standard.app" "Standard.app")
+[[ "$standard" == "standard" ]] || exit 1
 EOF
 
     [ "$status" -eq 0 ]
+}
+
+@test "Homebrew detection preserves timeout and signal probe statuses" {
+    mkdir -p "$HOME/Applications/Probe.app"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/brew.sh"
+
+brew() { printf '%s\n' probe; }
+run_with_timeout() { return "${PROBE_RC:?}"; }
+
+PROBE_RC=124
+rc=0
+is_brew_cask_installed probe || rc=$?
+[[ $rc -eq 124 ]] || exit 1
+rc=0
+_detect_cask_via_brew_list "$HOME/Applications/Probe.app" "Probe.app" || rc=$?
+[[ $rc -eq 124 ]] || exit 1
+rc=0
+get_brew_cask_name "$HOME/Applications/Probe.app" || rc=$?
+[[ $rc -eq 124 ]] || exit 1
+
+PROBE_RC=143
+rc=0
+is_brew_cask_installed probe || rc=$?
+[[ $rc -eq 143 ]] || exit 1
+rc=0
+_detect_cask_via_brew_list "$HOME/Applications/Probe.app" "Probe.app" || rc=$?
+[[ $rc -eq 143 ]] || exit 1
+rc=0
+get_brew_cask_name "$HOME/Applications/Probe.app" || rc=$?
+[[ $rc -eq 143 ]]
+EOF
+
+    [ "$status" -eq 0 ]
+}
+
+@test "brew uninstall preserves an interrupted app size probe" {
+    mkdir -p "$HOME/Applications/Probe.app"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/brew.sh"
+
+brew() { printf 'UNEXPECTED_BREW\n'; }
+get_path_size_kb() { return 124; }
+rc=0
+brew_uninstall_cask probe "$HOME/Applications/Probe.app" || rc=$?
+printf 'RC=%s\n' "$rc"
+[[ $rc -eq 124 ]]
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == *"RC=124"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_BREW"* ]]
+}
+
+@test "Caskroom symlink detection rejects a mismatched app bundle name" {
+    mkdir -p "$HOME/Applications"
+    ln -s "/opt/homebrew/Caskroom/real-cask/1.0/Real.app" "$HOME/Applications/Fake.app"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/brew.sh"
+resolve_path() { printf '%s\n' "/opt/homebrew/Caskroom/real-cask/1.0/Real.app"; }
+! _detect_cask_via_resolved_path "$HOME/Applications/Fake.app"
+! _detect_cask_via_symlink_check "$HOME/Applications/Fake.app"
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
 }
 
 @test "batch_uninstall_applications uses brew uninstall for casks (mocked)" {
@@ -123,7 +214,7 @@ EOF
     local app_bundle="$HOME/Applications/BrewApp.app"
     mkdir -p "$app_bundle"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -178,7 +269,7 @@ EOF
     # stanza, or brew deletes the survivor's prefs/caches behind the guard.
     mkdir -p "$HOME/Applications/BrewShared.app" "$HOME/Applications/BrewShared-beta.app"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -220,7 +311,7 @@ files_cleaned=0
 total_items=0
 total_size_cleaned=0
 
-printf '\n' | batch_uninstall_applications > /dev/null 2>&1
+printf '\n' | batch_uninstall_applications > "$HOME/brew_shared_output.log" 2>&1
 
 grep -q "uninstall --cask brewshared-beta" "$HOME/brew_shared_calls.log" || {
     echo "WRONG: plain cask uninstall not invoked"
@@ -230,6 +321,11 @@ grep -q "uninstall --cask brewshared-beta" "$HOME/brew_shared_calls.log" || {
 if grep -q -- "--zap" "$HOME/brew_shared_calls.log"; then
     echo "WRONG: --zap used despite surviving same-bundle sibling"
     cat "$HOME/brew_shared_calls.log"
+    exit 1
+fi
+if grep -q -- "Homebrew apps will be fully cleaned" "$HOME/brew_shared_output.log"; then
+    echo "WRONG: preview claims --zap despite surviving same-bundle sibling"
+    cat "$HOME/brew_shared_output.log"
     exit 1
 fi
 [[ -d "$HOME/Applications/BrewShared.app" ]] || {
@@ -245,7 +341,7 @@ EOF
     local app_bundle="$HOME/Applications/BrewPreAuth.app"
     mkdir -p "$app_bundle"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -295,7 +391,7 @@ EOF
     local app_bundle="$HOME/Applications/BrewTimeout.app"
     mkdir -p "$app_bundle"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -344,7 +440,7 @@ fi
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"TIMEOUT_CALL:30:brew autoremove"* ]]
+    [[ "$output" == *"TIMEOUT_CALL:30:brew autoremove"* ]] || return 1
     [[ "$output" != *"Checking brew dependencies"* ]]
 }
 
@@ -352,7 +448,7 @@ EOF
     local app_bundle="$HOME/Applications/BrewBroken.app"
     mkdir -p "$app_bundle"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -411,7 +507,7 @@ EOF
     local app_bundle="$HOME/Applications/BrewCleanup.app"
     mkdir -p "$app_bundle"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -466,8 +562,65 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "brew fallback preserves mutable-parent diagnosis after its cask record disappears" {
+    local app_bundle="$HOME/Applications/BrewManual.app"
+    local leftover="$HOME/Library/Application Support/BrewManual"
+    mkdir -p "$app_bundle" "$leftover"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+get_file_owner() { echo root; }
+get_path_size_kb() { echo "100"; }
+bytes_to_human() { echo "$1"; }
+drain_pending_input() { :; }
+print_summary_block() { printf '%s\n' "$@"; }
+force_kill_app() { return 0; }
+remove_apps_from_dock() { :; }
+stop_launch_services() { :; }
+unregister_app_bundle() { :; }
+remove_login_item() { :; }
+find_app_files() { return 0; }
+find_app_system_files() { return 0; }
+get_diagnostic_report_paths_for_app() { return 0; }
+calculate_total_size() { echo "0"; }
+has_sensitive_data() { return 1; }
+decode_file_list() { return 0; }
+remove_file_list() { printf 'LEFTOVER_DELETE\n' >> "$HOME/brew-manual-side-effects.log"; return 1; }
+run_with_timeout() { shift; "$@"; }
+ensure_sudo_session() { return 0; }
+
+get_brew_cask_name() { echo "brew-manual-cask"; return 0; }
+brew_uninstall_cask() { return 1; }
+is_brew_cask_installed() { return 1; }
+_mole_privileged_path_has_mutable_ancestor() { return 0; }
+mole_delete() { return "$MOLE_ERR_MUTABLE_PARENT"; }
+
+selected_apps=("0|$HOME/Applications/BrewManual.app|BrewManual|com.example.brewmanual|0|Never")
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+
+printf '\n' | batch_uninstall_applications
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ -d "$app_bundle" ]] || return 1
+    [[ -d "$leftover" ]] || return 1
+    [[ ! -e "$HOME/brew-manual-side-effects.log" ]] || return 1
+    [[ "$output" == *"Mole cannot safely use elevated deletion below a user-writable parent"* ]] || return 1
+    [[ "$output" == *"Move the app to Trash in Finder"* ]] || return 1
+}
+
 @test "batch_uninstall_applications skips brew sudo pre-auth in dry-run mode" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -512,7 +665,7 @@ EOF
 }
 
 @test "brew_uninstall_cask passes cask token as argv without shell evaluation" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/brew.sh"

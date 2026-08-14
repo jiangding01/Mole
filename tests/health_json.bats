@@ -9,7 +9,7 @@ setup_file() {
 }
 
 @test "get_memory_info uses vm_stat's declared page size" {
-    run env PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh" 2> /dev/null || true
 source "$PROJECT_ROOT/lib/check/health_json.sh"

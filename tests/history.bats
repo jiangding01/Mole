@@ -51,11 +51,11 @@ EOF
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Mole History"* ]]
-    [[ "$output" == *"purge"* ]]
-    [[ "$output" == *"1 items, 10KB"* ]]
-    [[ "$output" == *"clean"* ]]
-    [[ "$output" == *"removed 1, trashed 1, skipped 1, failed 1"* ]]
+    [[ "$output" == *"Mole History"* ]] || return 1
+    [[ "$output" == *"purge"* ]] || return 1
+    [[ "$output" == *"1 items, 10KB"* ]] || return 1
+    [[ "$output" == *"clean"* ]] || return 1
+    [[ "$output" == *"removed 1, trashed 1, skipped 1, failed 1"* ]] || return 1
     [[ "$output" == *"/tmp/Old App.app"* ]]
 }
 
@@ -81,6 +81,44 @@ assert data["deletions"][1]["path"] == "/tmp/Old App.app"
 '
 }
 
+@test "mo history preserves failed optimize task counts" {
+    cat > "$HOME/Library/Logs/mole/operations.log" <<'EOF'
+# ========== optimize session started at 2026-05-24 12:00:00 ==========
+[2026-05-24 12:00:01] [optimize] TASK_FAILED disk_verify (task outcome)
+[2026-05-24 12:00:02] [optimize] TASK_FAILED periodic_maintenance (task outcome)
+# ========== optimize session ended at 2026-05-24 12:00:05, 3 items, 0B ==========
+EOF
+
+    run env HOME="$HOME" "$PROJECT_ROOT/mole" history
+    [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"2 optimize tasks failed"* ]] || return 1
+
+    run env HOME="$HOME" "$PROJECT_ROOT/mole" history --json
+    [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+    printf '%s\n' "$output" | python3 -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+assert data["sessions"][0]["command"] == "optimize"
+assert data["sessions"][0]["items"] == 3
+assert data["sessions"][0]["failed_tasks"] == 2
+'
+}
+
+@test "operation logging writes the canonical failed task action" {
+    local log_file="$HOME/Library/Logs/mole/task-outcome.log"
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" OPERATIONS_LOG_FILE="$log_file" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+log_operation optimize TASK_FAILED disk_verify "task outcome"
+cat "$OPERATIONS_LOG_FILE"
+EOF
+
+    [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"[optimize] TASK_FAILED disk_verify (task outcome)"* ]] || return 1
+}
+
 @test "mo history --json escapes unusual path characters" {
     : > "$HOME/Library/Logs/mole/operations.log"
     weird_path=$'/tmp/unicode-\xe9\x9b\xaa-quote"slash\\tab\tbackspace\bformfeed\fend'
@@ -103,9 +141,9 @@ assert data["deletions"][0]["path"] == "/tmp/unicode-\u96ea-quote\"slash\\tab\tb
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history --limit 1
     [ "$status" -eq 0 ]
-    [[ "$output" == *"purge"* ]]
-    [[ "$output" != *"clean      2026-05-24 10:00:00"* ]]
-    [[ "$output" == *"/tmp/build"* ]]
+    [[ "$output" == *"purge"* ]] || return 1
+    [[ "$output" != *"clean      2026-05-24 10:00:00"* ]] || return 1
+    [[ "$output" == *"/tmp/build"* ]] || return 1
     [[ "$output" != *"/tmp/Old App.app"* ]]
 }
 
@@ -114,8 +152,8 @@ assert data["deletions"][0]["path"] == "/tmp/unicode-\u96ea-quote\"slash\\tab\tb
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history --limit 0001
     [ "$status" -eq 0 ]
-    [[ "$output" == *"purge"* ]]
-    [[ "$output" != *"clean      2026-05-24 10:00:00"* ]]
+    [[ "$output" == *"purge"* ]] || return 1
+    [[ "$output" != *"clean      2026-05-24 10:00:00"* ]] || return 1
     [[ "$output" != *"value too great for base"* ]]
 }
 
@@ -124,7 +162,7 @@ assert data["deletions"][0]["path"] == "/tmp/unicode-\u96ea-quote\"slash\\tab\tb
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history
     [ "$status" -eq 0 ]
-    [[ "$output" == *"No operation history yet"* ]]
+    [[ "$output" == *"No operation history yet"* ]] || return 1
     [[ "$output" == *"No deletion audit entries yet"* ]]
 }
 
@@ -137,8 +175,8 @@ EOF
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history
     [ "$status" -eq 0 ]
-    [[ "$output" == *"clean      2026-05-24 10:00:00, 0 items, 0B"* ]]
-    [[ "$output" == *"removed 1, ended malformed summary"* ]]
+    [[ "$output" == *"clean      2026-05-24 10:00:00, 0 items, 0B"* ]] || return 1
+    [[ "$output" == *"removed 1, ended malformed summary"* ]] || return 1
     [[ "$output" != *"malformed summary items"* ]]
 }
 
@@ -147,14 +185,14 @@ EOF
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history
     [ "$status" -eq 0 ]
-    [[ "$output" == *"No operation history yet"* ]]
+    [[ "$output" == *"No operation history yet"* ]] || return 1
     [ ! -e "$HOME/Library/Logs/mole/operations.log" ]
     [ ! -e "$HOME/Library/Logs/mole/mole.log" ]
 }
 
 @test "mo history early dispatch respects source guard" {
     # shellcheck disable=SC2016
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc -c '
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc -c '
 set -euo pipefail
 set -- history
 MOLE_TEST_MODE=1
@@ -163,19 +201,19 @@ source "$PROJECT_ROOT/mole"
 echo sourced
 '
     [ "$status" -eq 0 ]
-    [[ "$output" == *"sourced"* ]]
+    [[ "$output" == *"sourced"* ]] || return 1
     [[ "$output" != *"Mole History"* ]]
 }
 
 @test "mo history early dispatch keeps global debug flag behavior" {
     run env HOME="$HOME" "$PROJECT_ROOT/mole" --debug history --limit 0001
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Mole History"* ]]
-    [[ "$output" != *"Unknown option"* ]]
+    [[ "$output" == *"Mole History"* ]] || return 1
+    [[ "$output" != *"Unknown option"* ]] || return 1
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history --debug --limit 0001
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Mole History"* ]]
+    [[ "$output" == *"Mole History"* ]] || return 1
     [[ "$output" != *"Unknown option"* ]]
 }
 
@@ -188,14 +226,14 @@ echo sourced
 @test "mo history rejects invalid limit values" {
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history --limit nope
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Invalid value for --limit"* ]]
+    [[ "$output" == *"Invalid value for --limit"* ]] || return 1
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history --limit 500
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Invalid value for --limit"* ]]
+    [[ "$output" == *"Invalid value for --limit"* ]] || return 1
 
     run env HOME="$HOME" "$PROJECT_ROOT/mole" history --limit 999999999999999999999999
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Invalid value for --limit"* ]]
+    [[ "$output" == *"Invalid value for --limit"* ]] || return 1
     [[ "$output" != *"value too great for base"* ]]
 }

@@ -17,6 +17,7 @@ trap cleanup_temp_files EXIT INT TERM
 source "$SCRIPT_DIR/lib/core/sudo.sh"
 source "$SCRIPT_DIR/lib/optimize/diagnostics.sh"
 source "$SCRIPT_DIR/lib/optimize/maintenance.sh"
+source "$SCRIPT_DIR/lib/optimize/catalog.sh"
 source "$SCRIPT_DIR/lib/optimize/tasks.sh"
 source "$SCRIPT_DIR/lib/check/health_json.sh"
 source "$SCRIPT_DIR/lib/manage/whitelist.sh"
@@ -26,8 +27,7 @@ print_header() {
     echo -e "${PURPLE_BOLD}Optimize${NC}"
 }
 
-# Bash-native JSON parsing helpers (no jq dependency).
-# Extract a simple numeric value from JSON by key.
+# Extract a simple numeric value from JSON by key without a jq dependency.
 json_get_value() {
     local json="$1"
     local key="$2"
@@ -45,81 +45,55 @@ json_validate() {
         [[ "$json" == *'{'* ]] && [[ "$json" == *'}'* ]]
 }
 
-# Parse optimization items from JSON array.
-# Outputs pipe-delimited records: action|name|description|safe
-# Single awk pass instead of per-item grep+sed to avoid subprocess overhead.
-parse_optimization_items() {
-    local json="$1"
-    awk '
-    function extract(line, key,    pat, val, start, end) {
-        pat = "\"" key "\"[ \t]*:[ \t]*\""
-        if (match(line, pat)) {
-            start = RSTART + RLENGTH
-            val = substr(line, start)
-            # Find closing quote (skip escaped quotes)
-            end = 1
-            while (end <= length(val)) {
-                if (substr(val, end, 1) == "\"" && substr(val, end-1, 1) != "\\") break
-                end++
-            }
-            return substr(val, 1, end - 1)
-        }
-        return ""
-    }
-    /"optimizations".*\[/ { in_arr=1; next }
-    !in_arr { next }
-    /\]/ && !in_obj { exit }
-    /{/ { in_obj=1; action=""; name=""; desc=""; safe="" }
-    in_obj && /"action"/ { action = extract($0, "action") }
-    in_obj && /"name"/ { name = extract($0, "name") }
-    in_obj && /"description"/ { desc = extract($0, "description") }
-    in_obj && /"safe"/ {
-        val = $0; sub(/.*"safe"[[:space:]]*:[[:space:]]*/, "", val); sub(/[^a-z].*/, "", val); safe = val
-    }
-    /}/ { if (in_obj && action != "") print action "|" name "|" desc "|" safe; in_obj=0 }
-    ' <<< "$json"
-}
-
 show_optimization_summary() {
-    local safe_count="${OPTIMIZE_SAFE_COUNT:-0}"
-    if ((safe_count == 0)); then
+    local total
+    total=$(optimize_outcome_total)
+    if ((total == 0)); then
         return
     fi
 
     local summary_title
     local -a summary_details=()
-    local total_applied=$safe_count
+    local applied unchanged skipped unavailable attention failed
+    applied=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_APPLIED")
+    unchanged=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_UNCHANGED")
+    skipped=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_SKIPPED")
+    unavailable=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_UNAVAILABLE")
+    attention=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_ATTENTION")
+    failed=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_FAILED")
+
+    local -a outcome_parts=()
+    [[ $unchanged -gt 0 ]] && outcome_parts+=("$unchanged unchanged")
+    [[ $skipped -gt 0 ]] && outcome_parts+=("$skipped skipped")
+    [[ $unavailable -gt 0 ]] && outcome_parts+=("$unavailable unavailable")
+    [[ $attention -gt 0 ]] && outcome_parts+=("$attention need attention")
+    [[ $failed -gt 0 ]] && outcome_parts+=("$failed failed")
+
+    local outcome_line=""
+    if [[ ${#outcome_parts[@]} -gt 0 ]]; then
+        outcome_line="${outcome_parts[0]}"
+        local index
+        for ((index = 1; index < ${#outcome_parts[@]}; index++)); do
+            outcome_line+=" | ${outcome_parts[$index]}"
+        done
+    fi
 
     if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
         summary_title="Dry Run Complete, No Changes Made"
-        summary_details+=("Would apply ${YELLOW}${total_applied:-0}${NC} optimizations")
+        summary_details+=("Would apply ${YELLOW}${applied}${NC} optimizations")
+        [[ -n "$outcome_line" ]] && summary_details+=("$outcome_line")
         summary_details+=("Run without ${YELLOW}--dry-run${NC} to apply these changes")
     else
         summary_title="Optimization Complete"
 
-        # Build statistics summary
-        local -a stats=()
         local cache_kb="${OPTIMIZE_CACHE_CLEANED_KB:-0}"
         local db_count="${OPTIMIZE_DATABASES_COUNT:-0}"
         local config_count="${OPTIMIZE_CONFIGS_REPAIRED:-0}"
 
-        if [[ "$cache_kb" =~ ^[0-9]+$ ]] && [[ "$cache_kb" -gt 0 ]]; then
-            local cache_human=$(bytes_to_human "$((cache_kb * 1024))")
-            stats+=("${cache_human} cache cleaned")
-        fi
-
-        if [[ "$db_count" =~ ^[0-9]+$ ]] && [[ "$db_count" -gt 0 ]]; then
-            stats+=("${db_count} databases optimized")
-        fi
-
-        if [[ "$config_count" =~ ^[0-9]+$ ]] && [[ "$config_count" -gt 0 ]]; then
-            stats+=("${config_count} configs repaired")
-        fi
-
-        # Build first summary line with most important stat only
         local key_stat=""
         if [[ "$cache_kb" =~ ^[0-9]+$ ]] && [[ "$cache_kb" -gt 0 ]]; then
-            local cache_human=$(bytes_to_human "$((cache_kb * 1024))")
+            local cache_human
+            cache_human=$(bytes_to_human "$((cache_kb * 1024))")
             key_stat="${cache_human} cache cleaned"
         elif [[ "$db_count" =~ ^[0-9]+$ ]] && [[ "$db_count" -gt 0 ]]; then
             key_stat="${db_count} databases optimized"
@@ -128,12 +102,17 @@ show_optimization_summary() {
         fi
 
         if [[ -n "$key_stat" ]]; then
-            summary_details+=("Applied ${GREEN}${total_applied:-0}${NC} optimizations, ${key_stat}")
+            summary_details+=("Applied ${GREEN}${applied}${NC} optimizations, ${key_stat}")
         else
-            summary_details+=("Applied ${GREEN}${total_applied:-0}${NC} optimizations, all services tuned")
+            summary_details+=("Applied ${GREEN}${applied}${NC} optimizations")
         fi
 
-        summary_details+=("System fully optimized")
+        [[ -n "$outcome_line" ]] && summary_details+=("$outcome_line")
+        if [[ $attention -gt 0 || $failed -gt 0 ]]; then
+            summary_details+=("Review the warnings above")
+        else
+            summary_details+=("Optimization pass complete")
+        fi
     fi
 
     print_summary_block "$summary_title" "${summary_details[@]}"
@@ -156,14 +135,20 @@ show_system_health() {
     disk_percent=${disk_percent:-0}
     uptime=${uptime:-0}
 
-    printf "${ICON_ADMIN} System  %.0f/%.0f GB RAM | %.0f/%.0f GB Disk | Uptime %.0fd\n" \
+    # printf parses float arguments with the locale's decimal separator, so
+    # comma-decimal locales reject dot values like "5.70" (#1220). Round in
+    # C-locale awk and print plain strings to avoid float parsing entirely.
+    local rounded
+    rounded=$(LC_ALL=C awk -v mu="$mem_used" -v mt="$mem_total" -v du="$disk_used" -v dt="$disk_total" -v ut="$uptime" \
+        'BEGIN { printf "%.0f %.0f %.0f %.0f %.0f", mu, mt, du, dt, ut }' 2> /dev/null || echo "0 0 0 0 0")
+    read -r mem_used mem_total disk_used disk_total uptime <<< "$rounded"
+
+    printf "${ICON_ADMIN} System  %s/%s GB RAM | %s/%s GB Disk | Uptime %sd\n" \
         "$mem_used" "$mem_total" "$disk_used" "$disk_total" "$uptime"
 }
 
 announce_action() {
     local name="$1"
-    local desc="$2"
-    local kind="$3"
 
     if [[ "${FIRST_ACTION:-true}" == "true" ]]; then
         export FIRST_ACTION=false
@@ -174,15 +159,33 @@ announce_action() {
 }
 
 cleanup_all() {
+    local exit_status="${1:-0}"
     stop_inline_spinner 2> /dev/null || true
     stop_sudo_session
     cleanup_temp_files
     # Log session end
-    log_operation_session_end "optimize" "${OPTIMIZE_SAFE_COUNT:-0}" "0"
+    local applied=0
+    local failed=0
+    if declare -F optimize_outcome_count > /dev/null; then
+        applied=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_APPLIED")
+        failed=$(optimize_outcome_count "$MOLE_OPTIMIZE_OUTCOME_FAILED")
+        local failed_action
+        while IFS= read -r failed_action; do
+            [[ -n "$failed_action" ]] || continue
+            log_operation "optimize" "TASK_FAILED" "$failed_action" "task outcome"
+        done < <(optimize_failed_actions)
+    fi
+    if [[ "$exit_status" -ne 0 && "$failed" -eq 0 ]]; then
+        local failure_action="session"
+        [[ "$exit_status" -eq 130 ]] && failure_action="interrupted"
+        log_operation "optimize" "TASK_FAILED" "$failure_action" "exit status $exit_status"
+    fi
+    log_operation_session_end "optimize" "$applied" "0"
 }
 
 handle_interrupt() {
-    cleanup_all
+    trap - EXIT
+    cleanup_all 130
     exit 130
 }
 
@@ -217,7 +220,7 @@ main() {
 
     log_operation_session_start "optimize"
 
-    trap cleanup_all EXIT
+    trap 'cleanup_all "$?"' EXIT
     trap handle_interrupt INT TERM
 
     if [[ -t 1 ]]; then
@@ -279,16 +282,6 @@ main() {
 
     run_optimize_diagnostics
 
-    local -a items=()
-    local opts_file
-    opts_file=$(mktemp_file)
-    parse_optimization_items "$health_json" > "$opts_file"
-
-    while IFS='|' read -r action name desc safe; do
-        [[ -z "$action" ]] && continue
-        items+=("${name}|${desc}|${action}|")
-    done < "$opts_file"
-
     echo ""
     # Track sudo availability so individual tasks can skip cleanly when admin
     # access was denied. Without this, every sudo task re-prompts for the
@@ -304,24 +297,24 @@ main() {
     fi
 
     export FIRST_ACTION=true
-    for item in "${items[@]}"; do
-        IFS='|' read -r name desc action path <<< "$item"
-        if command -v is_whitelisted > /dev/null && is_whitelisted "$action"; then
-            opt_msg "Skipped (whitelisted): $name"
-            continue
-        fi
-        announce_action "$name" "$desc" "safe"
-        execute_optimization "$action" "$path"
+    optimize_outcomes_reset
+    local index action health_name
+    for ((index = 0; index < ${#MOLE_OPTIMIZE_ACTIONS[@]}; index++)); do
+        action=${MOLE_OPTIMIZE_ACTIONS[$index]}
+        health_name=${MOLE_OPTIMIZE_HEALTH_NAMES[$index]}
+        announce_action "$health_name"
+        execute_optimization "$action"
     done
 
-    local safe_count=${#items[@]}
-
-    export OPTIMIZE_SAFE_COUNT=$safe_count
-    export OPTIMIZE_CONFIRM_COUNT=0
+    if [[ "$(optimize_outcome_total)" -ne ${#MOLE_OPTIMIZE_ACTIONS[@]} ]]; then
+        log_error "Optimize task outcomes are incomplete"
+        return 1
+    fi
 
     show_optimization_summary
 
     printf '\n'
+    optimize_outcomes_succeeded
 }
 
 main "$@"

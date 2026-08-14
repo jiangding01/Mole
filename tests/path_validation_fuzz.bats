@@ -54,7 +54,7 @@ setup() {
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ -z "$line" ]] && continue
 
-        run bash --noprofile --norc -s -- "$line" <<'EOF'
+        run /bin/bash --noprofile --norc -s -- "$line" <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 validate_path_for_deletion "$1"
@@ -76,19 +76,53 @@ EOF
 }
 
 @test "generated control-character paths are rejected" {
-    run bash --noprofile --norc <<'EOF'
+    run /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 validate_path_for_deletion $'/Users/me/with\nnewline'
 EOF
     [ "$status" -eq 1 ]
 
-    run bash --noprofile --norc <<'EOF'
+    run /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 validate_path_for_deletion $'/Users/me/with\tab'
 EOF
     [ "$status" -eq 1 ]
+}
+
+@test "property: an ancestor symlink into any critical root is always rejected" {
+    # The string corpus cannot express this class: the path text is innocuous
+    # and only the filesystem state makes it dangerous. Generate one case per
+    # critical root instead, so a future refactor of the ancestor guard cannot
+    # silently narrow it to a single hardcoded root.
+    local sandbox
+    sandbox="$(mktemp -d "${BATS_TEST_DIRNAME}/tmp-ancestor.XXXXXX")"
+
+    # Only roots whose DESCENDANTS the policy denies. /var is deliberately not
+    # here: /var/folders and friends are cleanable temp trees, so /var/x/y is
+    # accepted literally too, and the symlinked form must stay consistent with
+    # that (the guard is deny-only, it never invents a stricter policy).
+    local root
+    for root in /System /usr /bin /etc; do
+        local link="$sandbox/link-${root//\//_}"
+        ln -s "$root" "$link"
+        # Victim sits directly under the redirected dir, so its parent (the
+        # symlink) really resolves: this is the shape a hijacked cache root
+        # takes, and the shape the guard must catch.
+        run /bin/bash --noprofile --norc <<EOF
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+validate_path_for_deletion "$link/victim"
+EOF
+        if [ "$status" -eq 0 ]; then
+            rm -rf "$sandbox"
+            echo "ancestor symlink into $root was accepted"
+            return 1
+        fi
+    done
+
+    rm -rf "$sandbox"
 }
 
 @test "corpus has minimum coverage" {

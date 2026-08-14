@@ -2,6 +2,12 @@
 # Clean Homebrew caches and report orphaned dependencies
 # Env: DRY_RUN
 # Skips if run within 7 days, runs cleanup with package-manager timeouts
+BREW_ACTIVE_LINK_PATHS=()
+BREW_ACTIVE_LINK_TARGETS=()
+BREW_ACTIVE_RESOLVED_TARGETS=()
+BREW_ACTIVE_PREFIX=""
+BREW_ACTIVE_CELLAR=""
+
 brew_autoremove_preview_has_items() {
     local preview_file="$1"
     [[ -s "$preview_file" ]] || return 1
@@ -20,6 +26,176 @@ run_brew_autoremove_preview() {
 
     HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_COLOR=1 NONINTERACTIVE=1 \
         run_with_timeout "$timeout_seconds" brew autoremove --dry-run > "$preview_file" 2>&1
+}
+
+# Resolve an existing path through any symlink chain without requiring GNU
+# readlink -f (unavailable on the macOS versions Mole supports).
+brew_cleanup_resolve_existing_path() {
+    local path="$1"
+    local target=""
+    local hops=0
+
+    [[ "$path" == /* ]] || return 1
+    while [[ -L "$path" ]]; do
+        target=$(readlink "$path" 2> /dev/null) || return 1
+        if [[ "$target" == /* ]]; then
+            path="$target"
+        else
+            path="${path%/*}/$target"
+        fi
+        hops=$((hops + 1))
+        [[ $hops -le 32 ]] || return 1
+    done
+
+    [[ -e "$path" ]] || return 1
+    local parent
+    parent=$(cd "${path%/*}" 2> /dev/null && pwd -P) || return 1
+    printf '%s/%s\n' "$parent" "${path##*/}"
+}
+
+run_homebrew_link_restore_as_invoking_user() {
+    /usr/bin/sudo -u "$SUDO_USER" -- "$@"
+}
+
+restore_homebrew_link() {
+    local link_target="$1"
+    local link_path="$2"
+
+    if is_root_user; then
+        [[ -n "${SUDO_USER:-}" && "${SUDO_USER:-}" != "root" ]] || return 1
+        # Homebrew's bin directories belong to the invoking user. Dropping
+        # privileges for the actual write closes the parent-directory TOCTOU:
+        # even if that user swaps bin after validation, root never follows it.
+        run_homebrew_link_restore_as_invoking_user /bin/ln -s "$link_target" "$link_path"
+        return $?
+    fi
+
+    /bin/ln -s "$link_target" "$link_path"
+}
+
+# Record active Homebrew executable links in memory before delegating to
+# `brew cleanup`. A file in the invoking user's temp tree cannot safely
+# authorize later link creation when the whole command is running as root.
+snapshot_homebrew_active_links() {
+    BREW_ACTIVE_LINK_PATHS=()
+    BREW_ACTIVE_LINK_TARGETS=()
+    BREW_ACTIVE_RESOLVED_TARGETS=()
+    BREW_ACTIVE_PREFIX=""
+    BREW_ACTIVE_CELLAR=""
+
+    local prefix cellar
+    prefix=$(HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+        run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" brew --prefix 2> /dev/null) || return 0
+    cellar=$(HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+        run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" brew --cellar 2> /dev/null) || return 0
+    [[ "$prefix" == /* && "$cellar" == /* && -d "$prefix" && -d "$cellar" ]] || return 0
+    prefix=$(cd "$prefix" 2> /dev/null && pwd -P) || return 0
+    cellar=$(cd "$cellar" 2> /dev/null && pwd -P) || return 0
+    BREW_ACTIVE_PREFIX="$prefix"
+    BREW_ACTIVE_CELLAR="$cellar"
+
+    local link_dir link_path link_target resolved_target
+    for link_dir in "$prefix/bin" "$prefix/sbin"; do
+        [[ -d "$link_dir" ]] || continue
+        while IFS= read -r -d '' link_path; do
+            link_target=$(readlink "$link_path" 2> /dev/null) || continue
+            case "$link_target" in
+                "$cellar"/*)
+                    [[ "$link_target" != *"/../"* && "$link_target" != */.. ]] || continue
+                    resolved_target="$link_target"
+                    ;;
+                ../Cellar/*)
+                    [[ "$cellar" == "$prefix/Cellar" ]] || continue
+                    local cellar_relative="${link_target#../Cellar/}"
+                    [[ -n "$cellar_relative" && "$cellar_relative" != ../* && "$cellar_relative" != *"/../"* && "$cellar_relative" != */.. ]] || continue
+                    resolved_target="$cellar/$cellar_relative"
+                    ;;
+                *) continue ;;
+            esac
+            [[ -e "$resolved_target" ]] || continue
+            case "$resolved_target" in
+                "$cellar"/*)
+                    BREW_ACTIVE_LINK_PATHS+=("$link_path")
+                    BREW_ACTIVE_LINK_TARGETS+=("$link_target")
+                    BREW_ACTIVE_RESOLVED_TARGETS+=("$resolved_target")
+                    ;;
+            esac
+        done < <(command find "$link_dir" -mindepth 1 -maxdepth 1 -type l -print0 2> /dev/null)
+    done
+}
+
+# Restore only links that disappeared while their exact pre-cleanup Cellar
+# target still exists. Never overwrite a replacement or revive a removed keg.
+restore_homebrew_active_links() {
+    [[ ${#BREW_ACTIVE_LINK_PATHS[@]} -gt 0 ]] || return 0
+
+    local prefix cellar
+    prefix=$(HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+        run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" brew --prefix 2> /dev/null) || return 0
+    cellar=$(HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 \
+        run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" brew --cellar 2> /dev/null) || return 0
+    [[ "$prefix" == /* && "$cellar" == /* && -d "$prefix" && -d "$cellar" ]] || return 0
+    prefix=$(cd "$prefix" 2> /dev/null && pwd -P) || return 0
+    cellar=$(cd "$cellar" 2> /dev/null && pwd -P) || return 0
+    [[ "$prefix" == "$BREW_ACTIVE_PREFIX" && "$cellar" == "$BREW_ACTIVE_CELLAR" ]] || return 0
+
+    local restored=0
+    local failed=0
+    local link_path link_target resolved_target expected_target relative_path
+    local current_target current_parent
+    local index
+    for ((index = 0; index < ${#BREW_ACTIVE_LINK_PATHS[@]}; index++)); do
+        link_path="${BREW_ACTIVE_LINK_PATHS[$index]}"
+        link_target="${BREW_ACTIVE_LINK_TARGETS[$index]}"
+        resolved_target="${BREW_ACTIVE_RESOLVED_TARGETS[$index]}"
+
+        # Restore only direct children of the real Homebrew bin/sbin roots.
+        case "$link_path" in
+            "$prefix/bin/"*) relative_path="${link_path#"$prefix/bin/"}" ;;
+            "$prefix/sbin/"*) relative_path="${link_path#"$prefix/sbin/"}" ;;
+            *) continue ;;
+        esac
+        [[ -n "$relative_path" && "$relative_path" != */* ]] || continue
+        [[ ! -e "$link_path" && ! -L "$link_path" ]] || continue
+
+        case "$link_target" in
+            "$cellar"/*)
+                [[ "$link_target" != *"/../"* && "$link_target" != */.. ]] || continue
+                expected_target="$link_target"
+                ;;
+            ../Cellar/*)
+                [[ "$cellar" == "$prefix/Cellar" ]] || continue
+                relative_path="${link_target#../Cellar/}"
+                [[ -n "$relative_path" && "$relative_path" != ../* && "$relative_path" != *"/../"* && "$relative_path" != */.. ]] || continue
+                expected_target="$cellar/$relative_path"
+                ;;
+            *) continue ;;
+        esac
+        [[ "$resolved_target" == "$expected_target" ]] || continue
+
+        current_target=$(brew_cleanup_resolve_existing_path "$resolved_target") || continue
+        case "$current_target" in
+            "$cellar"/*) ;;
+            *) continue ;;
+        esac
+
+        current_parent=$(cd "${link_path%/*}" 2> /dev/null && pwd -P) || continue
+        [[ "$current_parent" == "${link_path%/*}" ]] || continue
+        if restore_homebrew_link "$link_target" "$link_path" 2> /dev/null; then
+            restored=$((restored + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+    if [[ $restored -gt 0 ]]; then
+        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Homebrew links · restored ${restored} active executable(s)"
+        note_activity
+    fi
+    if [[ $failed -gt 0 ]]; then
+        echo -e "  ${GRAY}${ICON_WARNING}${NC} Homebrew links · ${failed} could not be restored, run ${GRAY}brew link <formula>${NC}"
+        note_activity
+    fi
 }
 
 clean_homebrew() {
@@ -67,8 +243,7 @@ clean_homebrew() {
             should_skip=true
             local cleaned_when="cleaned ${days_diff}d ago"
             [[ $days_diff -eq 0 ]] && cleaned_when="cleaned today"
-            echo -e "  ${GRAY}${ICON_WARNING}${NC} Homebrew · skipped (${cleaned_when})"
-            note_activity
+            debug_log "Homebrew cleanup skipped: ${cleaned_when}"
         fi
     fi
     [[ "$should_skip" == "true" ]] && return 0
@@ -86,10 +261,12 @@ clean_homebrew() {
     local brew_exit=0
     if [[ "$skip_cleanup" == "false" ]]; then
         brew_tmp_file=$(create_temp_file)
+        snapshot_homebrew_active_links || true
         if [[ -t 1 ]]; then MOLE_SPINNER_PREFIX="  " start_inline_spinner "Homebrew cleanup..."; fi
         HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_AUTOREMOVE=1 NONINTERACTIVE=1 \
             run_with_timeout "$cleanup_timeout" brew cleanup --prune=30 > "$brew_tmp_file" 2>&1 || brew_exit=$?
         if [[ -t 1 ]]; then stop_inline_spinner; fi
+        restore_homebrew_active_links
     fi
 
     local brew_success=false
@@ -100,10 +277,7 @@ clean_homebrew() {
     # Process cleanup output and extract metrics
     # Summarize cleanup results.
     if [[ "$skip_cleanup" == "true" ]]; then
-        # Cleanup was skipped due to small cache size
-        local size_mb=$((brew_cache_size / 1024))
-        echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Homebrew cleanup · cache ${size_mb}MB, skipped"
-        note_activity
+        debug_log "Homebrew cleanup skipped: cache below threshold (${brew_cache_size}KB)"
     elif [[ "$brew_success" == "true" && -f "$brew_tmp_file" ]]; then
         local brew_output
         brew_output=$(cat "$brew_tmp_file" 2> /dev/null || echo "")

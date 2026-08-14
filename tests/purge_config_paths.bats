@@ -33,12 +33,12 @@ setup() {
 }
 
 @test "load_purge_config loads default paths when config file is missing" {
-    run env HOME="$HOME" bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
     
     [ "$status" -eq 0 ]
     
-    [[ "$output" == *"$HOME/Projects"* ]]
-    [[ "$output" == *"$HOME/GitHub"* ]]
+    [[ "$output" == *"$HOME/Projects"* ]] || return 1
+    [[ "$output" == *"$HOME/GitHub"* ]] || return 1
     [[ "$output" == *"$HOME/dev"* ]]
 }
 
@@ -50,13 +50,28 @@ $HOME/custom/projects
 $HOME/work
 EOF
 
-    run env HOME="$HOME" bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
     
     [ "$status" -eq 0 ]
     
-    [[ "$output" == *"$HOME/custom/projects"* ]]
-    [[ "$output" == *"$HOME/work"* ]]
+    [[ "$output" == *"$HOME/custom/projects"* ]] || return 1
+    [[ "$output" == *"$HOME/work"* ]] || return 1
     [[ "$output" != *"$HOME/GitHub"* ]]
+}
+
+@test "load_purge_config can exclude default cloud storage roots" {
+    local config_file="$HOME/.config/mole/purge_paths"
+
+    cat > "$config_file" << EOF
+$HOME/custom/projects
+EOF
+
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; printf '%s\n' \"\${PURGE_SEARCH_PATHS[@]}\""
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == "$HOME/custom/projects" ]] || return 1
+    [[ "$output" != *"$HOME/Library/CloudStorage"* ]] || return 1
+    [[ "$output" != *"$HOME/Library/Mobile Documents"* ]] || return 1
 }
 
 @test "load_purge_config expands tilde in paths" {
@@ -67,12 +82,12 @@ EOF
 ~/another/one
 EOF
 
-    run env HOME="$HOME" bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
     
     [ "$status" -eq 0 ]
     
-    [[ "$output" == *"$HOME/tilde/expanded"* ]]
-    [[ "$output" == *"$HOME/another/one"* ]]
+    [[ "$output" == *"$HOME/tilde/expanded"* ]] || return 1
+    [[ "$output" == *"$HOME/another/one"* ]] || return 1
     [[ "$output" != *"~"* ]]
 }
 
@@ -86,7 +101,7 @@ $HOME/valid/path
 $HOME/another/path
 EOF
 
-    run env HOME="$HOME" bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${#PURGE_SEARCH_PATHS[@]}\"; echo \"\${PURGE_SEARCH_PATHS[*]}\""
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${#PURGE_SEARCH_PATHS[@]}\"; echo \"\${PURGE_SEARCH_PATHS[*]}\""
     
     [ "$status" -eq 0 ]
     
@@ -95,7 +110,7 @@ EOF
     local count="${lines[0]}"
     
     [ "$count" -eq 2 ]
-    [[ "$output" == *"$HOME/valid/path"* ]]
+    [[ "$output" == *"$HOME/valid/path"* ]] || return 1
     [[ "$output" == *"$HOME/another/path"* ]]
 }
 
@@ -103,7 +118,7 @@ EOF
     local config_file="$HOME/.config/mole/purge_paths"
     touch "$config_file"
 
-    run env HOME="$HOME" bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
     
     [ "$status" -eq 0 ]
     
@@ -114,7 +129,7 @@ EOF
     local config_file="$HOME/.config/mole/purge_paths"
     echo "# Just a comment" > "$config_file"
 
-    run env HOME="$HOME" bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${PURGE_SEARCH_PATHS[*]}\""
 
     [ "$status" -eq 0 ]
 
@@ -131,13 +146,13 @@ $HOME/code
 $HOME/Code
 EOF
 
-    run env HOME="$HOME" bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${#PURGE_SEARCH_PATHS[@]}\""
+    run env HOME="$HOME" /bin/bash -c "source '$PROJECT_ROOT/lib/clean/project.sh'; echo \"\${#PURGE_SEARCH_PATHS[@]}\""
 
     [ "$status" -eq 0 ]
 
     # On case-insensitive FS (macOS default) both resolve to the same path,
     # so count should be 1. On case-sensitive FS, Code doesn't exist, so
-    # resolve_path_case returns it unchanged — count may be 2 which is correct
+    # resolve_path_case returns it unchanged, count may be 2 which is correct
     # since they really are different directories.
     if [[ -d "$HOME/Code" && "$(cd "$HOME/Code" && pwd -P)" == "$(cd "$HOME/code" && pwd -P)" ]]; then
         [ "$output" = "1" ]
@@ -149,8 +164,8 @@ EOF
     mkdir -p "$HOME/code/myproject"
     touch "$HOME/code/myproject/package.json"
 
-    # No config file — triggers discovery
-    run env HOME="$HOME" bash -c "
+    # No config file, triggers discovery
+    run env HOME="$HOME" /bin/bash -c "
         source '$PROJECT_ROOT/lib/clean/project.sh'
         discover_project_dirs
     "

@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
 )
@@ -98,6 +103,149 @@ func TestExtractPlistUint(t *testing.T) {
 	})
 }
 
+func TestParseDiskMetadataSMARTStatuses(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "verified", raw: "Verified", want: smartStatusVerified},
+		{name: "failing", raw: "Failing", want: smartStatusFailing},
+		{name: "unsupported", raw: "Not Supported", want: smartStatusUnsupported},
+		{name: "unknown value", raw: "Unavailable", want: smartStatusUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata, err := parseDiskMetadata("Internal: Yes\nSMART Status: " + tt.raw + "\n")
+			if err != nil {
+				t.Fatalf("parseDiskMetadata() error = %v", err)
+			}
+			if metadata.SmartStatus != tt.want {
+				t.Fatalf("parseDiskMetadata() smart status = %q, want %q", metadata.SmartStatus, tt.want)
+			}
+			if metadata.External {
+				t.Fatal("parseDiskMetadata() internal disk marked external")
+			}
+		})
+	}
+}
+
+func TestParseDiskMetadataUsesDeviceLocationAndUnknownForMissingSMART(t *testing.T) {
+	metadata, err := parseDiskMetadata("Device Location: External\n")
+	if err != nil {
+		t.Fatalf("parseDiskMetadata() error = %v", err)
+	}
+	if !metadata.External {
+		t.Fatal("parseDiskMetadata() external location was not detected")
+	}
+	if metadata.SmartStatus != smartStatusUnknown {
+		t.Fatalf("parseDiskMetadata() missing SMART = %q, want unknown", metadata.SmartStatus)
+	}
+}
+
+func TestAnnotateDiskMetadataCachesDiskutilResult(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("diskutil metadata is macOS-only")
+	}
+
+	origRunCmd := runCmd
+	origCommandExists := commandExists
+	origCache := diskMetadataCache
+	origCacheAt := lastDiskCacheAt
+	t.Cleanup(func() {
+		runCmd = origRunCmd
+		commandExists = origCommandExists
+		diskMetadataCache = origCache
+		lastDiskCacheAt = origCacheAt
+	})
+
+	diskMetadataCache = make(map[string]diskMetadata)
+	lastDiskCacheAt = time.Time{}
+	commandExists = func(name string) bool { return name == "diskutil" }
+	calls := 0
+	runCmd = func(ctx context.Context, name string, args ...string) (string, error) {
+		calls++
+		return "Internal: No\nSMART Status: Verified\n", nil
+	}
+
+	first := []DiskStatus{{Device: "/dev/disk9s2", Mount: "/Volumes/Fast", SmartStatus: smartStatusUnknown}}
+	second := []DiskStatus{{Device: "/dev/disk9s3", Mount: "/Volumes/Fast", SmartStatus: smartStatusUnknown}}
+	annotateDiskMetadata(first)
+	annotateDiskMetadata(second)
+
+	if calls != 1 {
+		t.Fatalf("diskutil calls = %d, want 1 cache miss", calls)
+	}
+	for _, disks := range [][]DiskStatus{first, second} {
+		if !disks[0].External || disks[0].SmartStatus != smartStatusVerified {
+			t.Fatalf("cached disk metadata = %#v", disks[0])
+		}
+	}
+}
+
+func TestAnnotateDiskMetadataKeepsUnknownWhenDiskutilFails(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("diskutil metadata is macOS-only")
+	}
+
+	origRunCmd := runCmd
+	origCommandExists := commandExists
+	origCache := diskMetadataCache
+	origCacheAt := lastDiskCacheAt
+	t.Cleanup(func() {
+		runCmd = origRunCmd
+		commandExists = origCommandExists
+		diskMetadataCache = origCache
+		lastDiskCacheAt = origCacheAt
+	})
+
+	diskMetadataCache = make(map[string]diskMetadata)
+	lastDiskCacheAt = time.Time{}
+	commandExists = func(name string) bool { return name == "diskutil" }
+	runCmd = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "", errors.New("diskutil failed")
+	}
+
+	disks := []DiskStatus{{Device: "/dev/disk8s1", Mount: "/Volumes/Backup", SmartStatus: smartStatusUnknown}}
+	annotateDiskMetadata(disks)
+	if !disks[0].External {
+		t.Fatal("failed diskutil query should keep the mount-based external fallback")
+	}
+	if disks[0].SmartStatus != smartStatusUnknown {
+		t.Fatalf("failed diskutil query smart status = %q, want unknown", disks[0].SmartStatus)
+	}
+}
+
+func TestDiskStatusJSONAndNDJSONAlwaysIncludeSMARTStatus(t *testing.T) {
+	snapshot := MetricsSnapshot{
+		Disks: []DiskStatus{{Mount: "/", SmartStatus: smartStatusUnsupported}},
+	}
+
+	oneShot, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(oneShot), `"smart_status":"unsupported"`) {
+		t.Fatalf("JSON missing smart_status: %s", oneShot)
+	}
+
+	var stream bytes.Buffer
+	encoder := json.NewEncoder(&stream)
+	if err := encoder.Encode(snapshot); err != nil {
+		t.Fatalf("first NDJSON encode error = %v", err)
+	}
+	snapshot.Disks[0].SmartStatus = smartStatusUnknown
+	if err := encoder.Encode(snapshot); err != nil {
+		t.Fatalf("second NDJSON encode error = %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stream.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"smart_status":"unsupported"`) ||
+		!strings.Contains(lines[1], `"smart_status":"unknown"`) {
+		t.Fatalf("NDJSON smart_status lines = %q", lines)
+	}
+}
+
 func TestCollectDisksFastSkipsSlowCorrections(t *testing.T) {
 	origPartitions := diskPartitionsFunc
 	origUsage := diskUsageFunc
@@ -150,6 +298,9 @@ func TestCollectDisksFastSkipsSlowCorrections(t *testing.T) {
 	}
 	if got[0].Total != rawTotal || got[0].Used != rawUsed || got[0].UsedPercent != 50 {
 		t.Fatalf("collectDisksFast() should keep raw usage, got %#v", got[0])
+	}
+	if got[0].SmartStatus != smartStatusUnknown {
+		t.Fatalf("collectDisksFast() smart status = %q, want unknown", got[0].SmartStatus)
 	}
 }
 
@@ -210,5 +361,96 @@ func TestCounterDeltaClampsCounterReset(t *testing.T) {
 	}
 	if got := counterDelta(10, 100); got != 0 {
 		t.Fatalf("counterDelta reset = %d, want 0", got)
+	}
+}
+
+func TestCorrectAPFSDiskUsageReportsFinderPurgeable(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("APFS Finder corrections are macOS-only")
+	}
+
+	origRunCmd := runCmd
+	origCommandExists := commandExists
+	origCachedAt := finderDiskCachedAt
+	origFree := finderDiskFree
+	origTotal := finderDiskTotal
+	t.Cleanup(func() {
+		runCmd = origRunCmd
+		commandExists = origCommandExists
+		finderDiskCachedAt = origCachedAt
+		finderDiskFree = origFree
+		finderDiskTotal = origTotal
+	})
+	finderDiskCachedAt = time.Time{}
+
+	commandExists = func(name string) bool { return name == "osascript" }
+	// Finder: 663.7 GB free of 1.8897 TB, i.e. statfs free (522.7 GB) plus
+	// 141 GB purgeable, matching the #1357 scenario.
+	runCmd = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "663700000000, 1889700000000", nil
+	}
+
+	total := uint64(1889700000000)
+	rawFree := uint64(522700000000)
+	rawUsed := total - rawFree
+	used, usedPercent, purgeable := correctAPFSDiskUsage("/", total, rawUsed, rawFree)
+
+	if want := total - uint64(663700000000); used != want {
+		t.Fatalf("used = %d, want %d", used, want)
+	}
+	if usedPercent < 64.87 || usedPercent > 64.89 {
+		t.Fatalf("usedPercent = %f, want ~64.88", usedPercent)
+	}
+	if purgeable != uint64(141000000000) {
+		t.Fatalf("purgeable = %d, want %d", purgeable, uint64(141000000000))
+	}
+}
+
+func TestCorrectAPFSDiskUsageClampsPurgeableToZero(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("APFS Finder corrections are macOS-only")
+	}
+
+	origRunCmd := runCmd
+	origCommandExists := commandExists
+	origCachedAt := finderDiskCachedAt
+	origFree := finderDiskFree
+	origTotal := finderDiskTotal
+	t.Cleanup(func() {
+		runCmd = origRunCmd
+		commandExists = origCommandExists
+		finderDiskCachedAt = origCachedAt
+		finderDiskFree = origFree
+		finderDiskTotal = origTotal
+	})
+	finderDiskCachedAt = time.Time{}
+
+	commandExists = func(name string) bool { return name == "osascript" }
+	// Finder free below the statfs free means there is no purgeable space.
+	runCmd = func(ctx context.Context, name string, args ...string) (string, error) {
+		return "500000000000, 1889700000000", nil
+	}
+
+	total := uint64(1889700000000)
+	rawFree := uint64(522700000000)
+	rawUsed := total - rawFree
+	_, _, purgeable := correctAPFSDiskUsage("/", total, rawUsed, rawFree)
+	if purgeable != 0 {
+		t.Fatalf("purgeable = %d, want 0", purgeable)
+	}
+}
+
+func TestFinderPurgeableBytesIgnoresCorrectedTotal(t *testing.T) {
+	// The regression this pins: purgeable was once derived from the
+	// diskutil-corrected total minus statfs used, so the correction itself
+	// showed up as purgeable space. The statfs free figure is the only
+	// valid baseline.
+	rawFree := uint64(500 << 30)
+	finderFree := uint64(520 << 30)
+	if got, want := finderPurgeableBytes(rawFree, finderFree), uint64(20<<30); got != want {
+		t.Fatalf("purgeable = %d, want %d", got, want)
+	}
+	if got := finderPurgeableBytes(finderFree, rawFree); got != 0 {
+		t.Fatalf("purgeable when finder below statfs = %d, want 0", got)
 	}
 }

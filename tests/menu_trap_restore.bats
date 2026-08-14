@@ -9,7 +9,7 @@ setup_file() {
 }
 
 @test "paginated_multi_select preserves the caller's EXIT trap" {
-    run env PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/ui/menu_paginated.sh"
@@ -43,7 +43,7 @@ EOF
 }
 
 @test "paginated_multi_select restores a caller that had no EXIT trap" {
-    run env PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/ui/menu_paginated.sh"
@@ -66,4 +66,33 @@ current_exit_trap=$(trap -p EXIT)
 EOF
 
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "paginated_multi_select does not replace the caller cleanup function" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/ui/menu_paginated.sh"
+
+enter_alt_screen() { :; }
+leave_alt_screen() { :; }
+stty() { :; }
+tput() { :; }
+export MOLE_MANAGED_ALT_SCREEN=1
+
+cleanup() { echo OUTER_CLEANUP_MARKER; }
+trap cleanup EXIT
+original_cleanup=$(declare -f cleanup)
+
+paginated_multi_select "Pick" "alpha" "beta" < <(printf 'q') > /dev/null 2>&1 || true
+
+current_cleanup=$(declare -f cleanup)
+[[ "$current_cleanup" == "$original_cleanup" ]] || {
+    printf 'caller cleanup function was replaced:\n%s\n' "$current_cleanup" >&2
+    exit 1
+}
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *OUTER_CLEANUP_MARKER* ]] || return 1
 }

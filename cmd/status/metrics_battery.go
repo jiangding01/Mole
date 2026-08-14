@@ -149,7 +149,9 @@ func mergeBatteryHealthData(health string, cycles int, capacity int, ioregCycles
 	if ioregCycles > 0 {
 		cycles = ioregCycles
 	}
-	if ioregCapacity > 0 {
+	// system_profiler publishes the same Maximum Capacity value users see in
+	// macOS. IORegistry ratios are estimates and only fill a missing value.
+	if capacity <= 0 && ioregCapacity > 0 {
 		capacity = ioregCapacity
 	}
 	return health, cycles, capacity
@@ -265,17 +267,18 @@ func parseAppleSmartBatteryHealth(out string) (cycles int, capacity int) {
 	return cycles, batteryHealthPercent(design, nominal, rawMax)
 }
 
-// batteryHealthPercent mirrors the algorithm used by the Mole Mac app
-// (SystemMetricsCollector.batteryHealthPercent): NominalChargeCapacity is
-// preferred over AppleRawMaxCapacity, the ratio is rounded half-away-from-zero,
-// and the result is clamped to [0, 100].
+// batteryHealthPercent estimates health only when system_profiler does not
+// publish Maximum Capacity. AppleRawMaxCapacity is preferred because
+// NominalChargeCapacity includes a buffer and can read high. MaxCapacity is
+// intentionally ignored: on Apple Silicon it is the denominator of the current
+// charge percentage and is normally 100, not a battery-health measurement.
 func batteryHealthPercent(design, nominal, rawMax int) int {
 	if design <= 0 {
 		return 0
 	}
-	capacity := nominal
+	capacity := rawMax
 	if capacity == 0 {
-		capacity = rawMax
+		capacity = nominal
 	}
 	if capacity <= 0 {
 		return 0

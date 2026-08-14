@@ -287,12 +287,14 @@ opt_diag_detach_candidates() {
 
     while IFS=$'\t' read -r image_path mount_path; do
         [[ -z "$mount_path" ]] && continue
+        local safe_mount_path
+        safe_mount_path=$(mole_terminal_safe_text "$mount_path")
         if run_with_timeout 15 hdiutil detach "$mount_path" > /dev/null 2>&1; then # 15s: hdiutil detach, see lib/core/timeouts.sh
             detached=$((detached + 1))
-            echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Detached ${mount_path}"
+            printf '  %b Detached %s\n' "${GREEN}${ICON_SUCCESS}${NC}" "$safe_mount_path"
         else
             failed=$((failed + 1))
-            echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to detach ${mount_path}"
+            printf '  %b Failed to detach %s\n' "${YELLOW}${ICON_WARNING}${NC}" "$safe_mount_path"
         fi
     done <<< "$candidates"
 
@@ -322,7 +324,10 @@ opt_diag_offer_detach_candidates() {
     fi
     while IFS=$'\t' read -r image_path mount_path; do
         [[ -z "$mount_path" ]] && continue
-        echo -e "    ${image_path##*/} ${GRAY}→${NC} ${mount_path}"
+        local safe_image_path safe_mount_path
+        safe_image_path=$(mole_terminal_safe_text "${image_path##*/}")
+        safe_mount_path=$(mole_terminal_safe_text "$mount_path")
+        printf '    %s %b→%b %s\n' "$safe_image_path" "$GRAY" "$NC" "$safe_mount_path"
     done <<< "$candidates"
 
     if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then

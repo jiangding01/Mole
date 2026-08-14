@@ -35,7 +35,7 @@ setup() {
 
 @test "patterns_equivalent treats paths with tilde expansion as equal" {
     local status
-    if HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; patterns_equivalent '~/.cache/test' \"\$HOME/.cache/test\""; then
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; patterns_equivalent '~/.cache/test' \"\$HOME/.cache/test\""; then
         status=0
     else
         status=$?
@@ -45,7 +45,7 @@ setup() {
 
 @test "patterns_equivalent distinguishes different paths" {
     local status
-    if HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; patterns_equivalent '~/.cache/test' \"\$HOME/.cache/other\""; then
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; patterns_equivalent '~/.cache/test' \"\$HOME/.cache/other\""; then
         status=0
     else
         status=$?
@@ -54,9 +54,9 @@ setup() {
 }
 
 @test "save_whitelist_patterns keeps unique entries and preserves header" {
-    HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; save_whitelist_patterns \"\$HOME/.cache/foo\" \"\$HOME/.cache/foo\" \"\$HOME/.cache/bar\""
+    HOME="$HOME" /bin/bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; save_whitelist_patterns \"\$HOME/.cache/foo\" \"\$HOME/.cache/foo\" \"\$HOME/.cache/bar\""
 
-    [[ -f "$WHITELIST_PATH" ]]
+    [[ -f "$WHITELIST_PATH" ]] || return 1
 
     lines=()
     while IFS= read -r line; do
@@ -69,8 +69,8 @@ setup() {
 
 @test "load_whitelist falls back to defaults when config missing" {
     rm -f "$WHITELIST_PATH"
-    HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; rm -f \"\$HOME/.config/mole/whitelist\"; load_whitelist; printf '%s\n' \"\${CURRENT_WHITELIST_PATTERNS[@]}\"" > "$HOME/current_whitelist.txt"
-    HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; printf '%s\n' \"\${DEFAULT_WHITELIST_PATTERNS[@]}\"" > "$HOME/default_whitelist.txt"
+    HOME="$HOME" /bin/bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; rm -f \"\$HOME/.config/mole/whitelist\"; load_whitelist; printf '%s\n' \"\${CURRENT_WHITELIST_PATTERNS[@]}\"" > "$HOME/current_whitelist.txt"
+    HOME="$HOME" /bin/bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; printf '%s\n' \"\${DEFAULT_WHITELIST_PATTERNS[@]}\"" > "$HOME/default_whitelist.txt"
 
     current=()
     while IFS= read -r line; do
@@ -88,14 +88,14 @@ setup() {
 
 @test "is_whitelisted matches saved patterns exactly" {
     local status
-    if HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; save_whitelist_patterns \"\$HOME/.cache/unique-pattern\"; load_whitelist; is_whitelisted \"\$HOME/.cache/unique-pattern\""; then
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; save_whitelist_patterns \"\$HOME/.cache/unique-pattern\"; load_whitelist; is_whitelisted \"\$HOME/.cache/unique-pattern\""; then
         status=0
     else
         status=$?
     fi
     [ "$status" -eq 0 ]
 
-    if HOME="$HOME" bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; save_whitelist_patterns \"\$HOME/.cache/unique-pattern\"; load_whitelist; is_whitelisted \"\$HOME/.cache/other-pattern\""; then
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "source '$PROJECT_ROOT/lib/manage/whitelist.sh'; save_whitelist_patterns \"\$HOME/.cache/unique-pattern\"; load_whitelist; is_whitelisted \"\$HOME/.cache/other-pattern\""; then
         status=0
     else
         status=$?
@@ -103,21 +103,159 @@ setup() {
     [ "$status" -ne 0 ]
 }
 
+@test "optimize whitelist ignores and does not resave removed task ids" {
+    local optimize_path="$HOME/.config/mole/whitelist_optimize"
+    mkdir -p "$(dirname "$optimize_path")"
+    printf 'dock_refresh\nmemory_pressure_relief\ncache_refresh\n' > "$optimize_path"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+load_whitelist optimize
+printf 'loaded:%s\n' "${CURRENT_WHITELIST_PATTERNS[@]}"
+save_whitelist_patterns optimize dock_refresh memory_pressure_relief cache_refresh
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"loaded:cache_refresh"* ]] || return 1
+    [[ "$output" != *"loaded:dock_refresh"* ]] || return 1
+    [[ "$output" != *"loaded:memory_pressure_relief"* ]] || return 1
+    grep -qFx 'cache_refresh' "$optimize_path"
+    run grep -qFx 'dock_refresh' "$optimize_path"
+    [ "$status" -eq 1 ]
+    run grep -qFx 'memory_pressure_relief' "$optimize_path"
+    [ "$status" -eq 1 ]
+}
+
+@test "load_whitelist merges FINDER_METADATA into an existing custom file (#1396)" {
+    mkdir -p "$(dirname "$WHITELIST_PATH")"
+    printf '%s\n' "$HOME/.cache/custom-keep/*" > "$WHITELIST_PATH"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+load_whitelist
+has_sentinel=false
+has_custom=false
+for p in "${CURRENT_WHITELIST_PATTERNS[@]}"; do
+    [[ "$p" == "$FINDER_METADATA_SENTINEL" ]] && has_sentinel=true
+    [[ "$p" == "$HOME/.cache/custom-keep/*" ]] && has_custom=true
+done
+printf 'sentinel=%s custom=%s count=%s\n' "$has_sentinel" "$has_custom" "${#CURRENT_WHITELIST_PATTERNS[@]}"
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"sentinel=true"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"custom=true"* ]] || { echo "$output"; return 1; }
+}
+
+@test "ensure_safety_whitelist_patterns is idempotent and preserves custom entries" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+declare -a WHITELIST_PATTERNS=("$HOME/.cache/custom-keep/*" "$FINDER_METADATA_SENTINEL")
+declare -a CURRENT_WHITELIST_PATTERNS=("${WHITELIST_PATTERNS[@]}")
+ensure_safety_whitelist_patterns
+ensure_safety_whitelist_patterns
+sentinel_count=0
+custom_count=0
+for p in "${WHITELIST_PATTERNS[@]}"; do
+    [[ "$p" == "$FINDER_METADATA_SENTINEL" ]] && sentinel_count=$((sentinel_count + 1))
+    [[ "$p" == "$HOME/.cache/custom-keep/*" ]] && custom_count=$((custom_count + 1))
+done
+printf 'sentinel=%s custom=%s total=%s\n' "$sentinel_count" "$custom_count" "${#WHITELIST_PATTERNS[@]}"
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"sentinel=1"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"custom=1"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"total=2"* ]] || { echo "$output"; return 1; }
+}
+
+@test "legacy optimize whitelist with only removed task ids migrates safely on Bash 3.2" {
+    local legacy_path="$HOME/.config/mole/whitelist_checks"
+    local optimize_path="$HOME/.config/mole/whitelist_optimize"
+    mkdir -p "$(dirname "$legacy_path")"
+    printf 'dock_refresh\nmemory_pressure_relief\n' > "$legacy_path"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+load_whitelist optimize
+[[ ${#CURRENT_WHITELIST_PATTERNS[@]} -eq 0 ]]
+printf 'survived\n'
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"survived"* ]] || return 1
+    [[ -f "$optimize_path" ]] || return 1
+    run grep -qFx 'dock_refresh' "$optimize_path"
+    [ "$status" -eq 1 ]
+}
+
+@test "whitelist inventory exposes LM Studio app cache" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+get_all_cache_items
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"LM Studio app cache|\$HOME/Library/Caches/com.lmstudio.lmstudio/*|ai_ml_cache"* ]] || return 1
+    [[ "$output" != *".cache/lm-studio"* ]]
+}
+
+@test "whitelist inventory exposes Codex staging and Tart caches" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+get_all_cache_items
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Codex Desktop update staging|\$HOME/Library/Caches/com.openai.codex/org.sparkle-project.Sparkle/Installation|ai_ml_cache"* ]] || return 1
+    [[ "$output" == *"Tart OCI/IPSW cache|\$HOME/.tart/cache|container_cache"* ]] || return 1
+}
+
+@test "whitelist inventory exposes Rust Cargo extracted sources" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+get_all_cache_items
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"Rust Cargo extracted sources|\$HOME/.cargo/registry/src/*|compiler_cache"* ]]
+}
+
+@test "whitelist inventory exposes Chrome AI model stores" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/whitelist.sh"
+get_all_cache_items
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"Chrome on-device AI models|\$HOME/Library/Application Support/Google/Chrome/OptGuideOnDevice*/*|ai_ml_cache"* ]] || return 1
+    [[ "$output" == *"Chrome optimization guide models|\$HOME/Library/Application Support/Google/Chrome/optimization_guide_model_store/*|ai_ml_cache"* ]] || return 1
+    [[ "$output" == *"Chrome browser cache|\$HOME/Library/Caches/Google/Chrome/*|browser_cache"* ]] || return 1
+}
+
 @test "mo clean --whitelist persists selections" {
     whitelist_file="$HOME/.config/mole/whitelist"
     mkdir -p "$(dirname "$whitelist_file")"
 
-    run bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$'\\n' | HOME='$HOME' ./mo clean --whitelist"
+    run /bin/bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$'\\n' | HOME='$HOME' ./mo clean --whitelist"
     [ "$status" -eq 0 ]
     first_pattern=$(grep -v '^[[:space:]]*#' "$whitelist_file" | grep -v '^[[:space:]]*$' | head -n 1)
     [ -n "$first_pattern" ]
 
-    run bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$' \\n' | HOME='$HOME' ./mo clean --whitelist"
+    run /bin/bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$' \\n' | HOME='$HOME' ./mo clean --whitelist"
     [ "$status" -eq 0 ]
     run grep -Fxq "$first_pattern" "$whitelist_file"
     [ "$status" -eq 1 ]
 
-    run bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$'\\n' | HOME='$HOME' ./mo clean --whitelist"
+    run /bin/bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$'\\n' | HOME='$HOME' ./mo clean --whitelist"
     [ "$status" -eq 0 ]
     run grep -Fxq "$first_pattern" "$whitelist_file"
     [ "$status" -eq 1 ]
@@ -127,21 +265,21 @@ setup() {
     whitelist_file="$HOME/.config/mole/whitelist"
     mkdir -p "$(dirname "$whitelist_file")"
 
-    run bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$'\\n' | HOME='$HOME' ./mo clean --whitelist"
+    run /bin/bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf \$'\\n' | HOME='$HOME' ./mo clean --whitelist"
     [ "$status" -eq 0 ]
-    [[ -f "$whitelist_file" ]]
+    [[ -f "$whitelist_file" ]] || return 1
     before_hash=$(shasum "$whitelist_file" | awk '{print $1}')
 
-    run bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf 'q' | HOME='$HOME' ./mo clean --whitelist"
+    run /bin/bash --noprofile --norc -c "cd '$PROJECT_ROOT'; printf 'q' | HOME='$HOME' ./mo clean --whitelist"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Cancelled"* ]]
+    [[ "$output" == *"Cancelled"* ]] || return 1
     after_hash=$(shasum "$whitelist_file" | awk '{print $1}')
     [ "$before_hash" = "$after_hash" ]
 }
 
 @test "whitelist validation accepts special and non-ASCII characters (#749)" {
     # Verify the [[:cntrl:]] guard accepts valid macOS path chars and rejects control chars.
-    run bash --noprofile --norc -c "
+    run /bin/bash --noprofile --norc -c "
         accept() { [[ ! \"\$1\" =~ [[:cntrl:]] ]] && echo ACCEPT || echo REJECT; }
         accept '/Users/me/Library/Application Support/Foo & Bar'
         accept '/Users/me/Library/Caches/com.example+beta'
@@ -152,15 +290,15 @@ setup() {
         [[ \$'tab\there' =~ [[:cntrl:]] ]] && echo REJECT_TAB || echo FAIL
     "
     [ "$status" -eq 0 ]
-    [[ "$output" == *"ACCEPT"* ]]
-    [[ "$output" != *"REJECT /Users"* ]]
-    [[ "$output" == *"REJECT_NEWLINE"* ]]
+    [[ "$output" == *"ACCEPT"* ]] || return 1
+    [[ "$output" != *"REJECT /Users"* ]] || return 1
+    [[ "$output" == *"REJECT_NEWLINE"* ]] || return 1
     [[ "$output" == *"REJECT_TAB"* ]]
 }
 
 @test "is_path_whitelisted protects parent directories of whitelisted nested paths" {
     local status
-    if HOME="$HOME" bash --noprofile --norc -c "
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "
         source '$PROJECT_ROOT/lib/core/base.sh'
         source '$PROJECT_ROOT/lib/core/app_protection.sh'
         WHITELIST_PATTERNS=(\"\$HOME/Library/Caches/org.R-project.R/R/renv\")
@@ -175,7 +313,7 @@ setup() {
 
 @test "default whitelist protects tealdeer cache parent for tldr pages" {
     local status
-    if HOME="$HOME" bash --noprofile --norc -c "
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "
         source '$PROJECT_ROOT/lib/manage/whitelist.sh'
         rm -f \"\$HOME/.config/mole/whitelist\"
         load_whitelist
@@ -194,7 +332,7 @@ setup() {
 # entry always fails and Chrome MV3 service workers get wiped.
 @test "is_path_whitelisted matches entries against paths containing double slashes (#724)" {
     local status
-    if HOME="$HOME" bash --noprofile --norc -c "
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "
         source '$PROJECT_ROOT/lib/core/base.sh'
         source '$PROJECT_ROOT/lib/core/app_protection.sh'
         WHITELIST_PATTERNS=(\"\$HOME/Library/Application Support/Google/Chrome/Default/Service Worker/CacheStorage\")
@@ -220,7 +358,7 @@ setup() {
     : > "$removable_file"
     touch -t 202001010000 "$protected_file" "$removable_file"
 
-    HOME="$HOME" bash --noprofile --norc -c "
+    HOME="$HOME" /bin/bash --noprofile --norc -c "
         set -euo pipefail
         source '$PROJECT_ROOT/lib/core/base.sh'
         source '$PROJECT_ROOT/lib/core/app_protection.sh'
@@ -248,7 +386,7 @@ setup() {
     : > "$removable_file"
     touch -t 202001010000 "$protected_file" "$removable_file"
 
-    HOME="$HOME" bash --noprofile --norc -c "
+    HOME="$HOME" /bin/bash --noprofile --norc -c "
         set -euo pipefail
         source '$PROJECT_ROOT/lib/core/base.sh'
         source '$PROJECT_ROOT/lib/core/app_protection.sh'
@@ -269,7 +407,7 @@ setup() {
 
 @test "is_path_whitelisted collapses slashes in whitelist entries too (#724)" {
     local status
-    if HOME="$HOME" bash --noprofile --norc -c "
+    if HOME="$HOME" /bin/bash --noprofile --norc -c "
         source '$PROJECT_ROOT/lib/core/base.sh'
         source '$PROJECT_ROOT/lib/core/app_protection.sh'
         WHITELIST_PATTERNS=(\"\$HOME//Library//Caches//chrome-sw\")

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -152,6 +154,10 @@ type DiskStatus struct {
 	UsedPercent float64 `json:"used_percent"`
 	Fstype      string  `json:"fstype"`
 	External    bool    `json:"external"`
+	SmartStatus string  `json:"smart_status"`
+	// Purgeable is the reclaimable purgeable bytes Finder counts as free on
+	// macOS APFS. Zero when unknown.
+	Purgeable uint64 `json:"purgeable,omitempty"`
 }
 
 type NetworkStatus struct {
@@ -173,6 +179,11 @@ type ProxyStatus struct {
 	Enabled bool   `json:"enabled"`
 	Type    string `json:"type"` // HTTP, HTTPS, SOCKS, PAC, WPAD, TUN
 	Host    string `json:"host"`
+	// True when the only evidence is an active tunnel interface rather than a
+	// configured proxy. A `utun` is equally iCloud Private Relay, a corporate
+	// VPN, or a TUN-mode proxy client, and nothing at this layer can tell them
+	// apart, so the reading must not be presented as "you have a proxy".
+	IsTunnel bool `json:"-"`
 }
 
 type BatteryStatus struct {
@@ -377,9 +388,16 @@ func (c *Collector) collectFull() (MetricsSnapshot, error) {
 	hostInfo := collectHostInfo()
 	var collected collectedMetrics
 
+	// Sample CPU first, before the concurrent collectors below spawn their
+	// subprocesses (system_profiler, df, ps, ...). The usage window is only
+	// 100ms, so measuring while our own collection burst runs inflates the
+	// reading with Mole's own load (#1237).
+	var cpuErr error
+	collected.cpuStats, cpuErr = collectCPU()
+
 	// Launch independent collection tasks.
 	tasks := []func() error{
-		func() (err error) { collected.cpuStats, err = collectCPU(); return },
+		func() error { return cpuErr },
 		func() (err error) { collected.memStats, err = collectMemory(); return },
 		func() (err error) { collected.diskStats, err = collectDisks(); return },
 		func() (err error) { collected.trashSize, collected.trashApprox = collectTrashSize(); return nil },
@@ -567,11 +585,29 @@ func (e snapshotEnrichment) apply(snapshot *MetricsSnapshot, preserveLiveProcess
 
 var runCmd = func(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = cLocaleEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 	return string(output), nil
+}
+
+// cLocaleEnv forces the C locale on every metric subprocess. ps and uptime
+// localize their decimal separator, so under ru_RU.UTF-8 they emit "8,0" and
+// every strconv.ParseFloat in the collectors fails (#1267). The shell commands
+// in bin/ already export LC_ALL=C; status-go is exec'd directly and did not.
+func cLocaleEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		key, _, found := strings.Cut(kv, "=")
+		if found && (key == "LC_ALL" || key == "LANG" || strings.HasPrefix(key, "LC_")) {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	return append(filtered, "LC_ALL=C")
 }
 
 var commandExists = func(name string) bool {

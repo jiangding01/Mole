@@ -81,7 +81,10 @@ mo optimize --whitelist      # Manage protected optimization rules
 mo clean --whitelist         # Manage protected caches
 mo purge --paths             # Configure project scan directories
 mo analyze /Volumes          # Analyze external drives only
+mo analyze /private/tmp      # Review user-owned temporary directories
 ```
+
+Selections made with `mo clean --whitelist` persist in `~/.config/mole/whitelist`.
 
 ## Security & Safety Design
 
@@ -142,8 +145,6 @@ Uninstalling: Photoshop 2024
     - Logs, WebKit storage, Cookies
     - Extensions, Plugins, Launch daemons
 
-Note: On macOS 15 and later, Local Network permission entries can outlive app removal. Mole warns when an uninstalled app declares Local Network usage, but it does not auto-reset `/Volumes/Data/Library/Preferences/com.apple.networkextension*.plist` because that reset is global and requires Recovery mode.
-
 ====================================================================
 Space freed: 12.8GB
 ====================================================================
@@ -156,36 +157,41 @@ $ mo optimize
 
 System: 5/32 GB RAM | 333/460 GB Disk (72%) | Uptime 6d
 
-  ✓ Rebuild system databases and clear caches
-  ✓ Reset network services
-  ✓ Refresh Finder and Dock
-  ✓ Clean diagnostic and crash logs
-  ✓ Remove swap files and restart dynamic pager
-  ✓ Rebuild launch services and spotlight index
+  ✓ Inspect and repair supported system maintenance items
+  ✓ Refresh eligible Finder, network, and database state
+  ✓ Skip tasks that are unnecessary, unsafe now, or unavailable
 
 ====================================================================
-System optimization completed
+Optimization Complete
 ====================================================================
+Applied 8 optimizations
+9 unchanged | 4 skipped | 2 unavailable
+Optimization pass complete
+```
 
 Use `mo optimize --whitelist` to exclude specific optimizations. Path patterns work too, so you can keep a long-lived mounted disk image around (for example `/Volumes/mail`) without it showing up as a detach candidate.
-```
+
+Optimize results depend on the Mac's current state and available system tools, so the counts above are illustrative rather than fixed.
 
 ### Disk Space Analyzer
 
 > Note: By default, Mole skips external drives under `/Volumes` for faster startup. To inspect them, run `mo analyze /Volumes` or a specific mount path.
 
+Developer tools may leave large temporary directories under `/private/tmp`. Review user-owned entries with `mo analyze /private/tmp`; selected entries move to Trash only after confirmation. Mole does not automatically delete third-party temporary directories because build markers and age alone cannot prove that a checkout or worktree is disposable.
+
 ```bash
 $ mo analyze
 
-Analyze Disk  ~/Documents  |  Total: 156.8GB
+Analyze Disk  (302.1GB free)
+Select a location to explore:
 
- ▶  1. ███████████████████  48.2%  |  📁 Library                     75.4GB  >6mo
-    2. ██████████░░░░░░░░░  22.1%  |  📁 Downloads                   34.6GB
-    3. ████░░░░░░░░░░░░░░░  14.3%  |  📁 Movies                      22.4GB
-    4. ███░░░░░░░░░░░░░░░░  10.8%  |  📁 Documents                   16.9GB
-    5. ██░░░░░░░░░░░░░░░░░   5.2%  |  📄 backup_2023.zip              8.2GB
+ ▶  1. ████████████████████████  47.9%  |  Home                       75.4GB
+    2. ███████████               22.0%  |  User Library               34.6GB
+    3. ███████                   14.2%  |  Applications               22.4GB
+    4. █████                     10.7%  |  System Library             16.9GB
+    5. ███                        5.2%  |  Old Downloads (90d+)       8.2GB  >3mo
 
-  ↑↓←→ Navigate  |  O Open  |  F Show  |  ⌫ Delete  |  L Large files  |  Q Quit
+↑↓→ | Enter | R Refresh | O Open | P Preview | F File | Esc/Q Quit
 ```
 
 ### Live System Status
@@ -217,7 +223,7 @@ Proxy   HTTP · 192.168.1.100             Terminal   ▮▯▯▯▯  12.5%
 
 Health score is based on CPU, memory, disk, temperature, and I/O load, with color-coded ranges.
 
-Shortcuts: In `mo status`, press `k` to toggle the cat and save the preference, and `q` to quit.
+Shortcuts: In `mo status`, press `k` to toggle the cat, `c` to cycle how many CPU cores the card lists (2, 4, 8, all), and `q` to quit. Both preferences are saved.
 
 When enabled, `mo status` shows a read-only alert banner for processes that stay above the configured CPU threshold for a sustained window. Use `--proc-cpu-threshold`, `--proc-cpu-window`, or `--proc-cpu-alerts=false` to tune or disable it.
 

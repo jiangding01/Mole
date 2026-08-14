@@ -40,6 +40,10 @@ const (
 	metricLabelWidth    = 6
 	processMemoryWidth  = 7
 	processWideMinWidth = 46
+
+	// Stands in for a value that has not been measured yet, so a card keeps its
+	// shape from the first frame instead of growing when the data lands.
+	placeholderValue = "--"
 )
 
 // Mole body frames (facing right).
@@ -313,7 +317,7 @@ func renderBanner(style lipgloss.Style, text string, width int) string {
 	return style.Render(text)
 }
 
-func renderCPUCard(cpu CPUStatus, thermal ThermalStatus) cardData {
+func renderCPUCard(cpu CPUStatus, thermal ThermalStatus, cpuCores int) cardData {
 	var lines []string
 
 	// Line 1: Usage + Temp (Format: 15% @ 30.4°C)
@@ -339,7 +343,12 @@ func renderCPUCard(cpu CPUStatus, thermal ThermalStatus) cardData {
 		}
 		sort.Slice(cores, func(i, j int) bool { return cores[i].val > cores[j].val })
 
-		maxCores := min(len(cores), 2)
+		// cpuCores selects how many of the busiest cores to list; 0 (or any
+		// value >= the core count) means "all". Set via the 'c' key, persisted.
+		maxCores := len(cores)
+		if cpuCores > 0 {
+			maxCores = min(len(cores), cpuCores)
+		}
 		for i := range maxCores {
 			c := cores[i]
 			lines = append(lines, fmt.Sprintf("Core%-2d %s  %5.1f%%", c.idx+1, progressBar(c.val), c.val))
@@ -450,6 +459,9 @@ func renderDiskCard(disks []DiskStatus, io DiskIOStatus, _ uint64, _ bool) cardD
 		} else if len(disks) == 1 {
 			lines = append(lines, formatDiskMetaLine(disks[0]))
 		}
+		if smartLine := formatDiskSMARTLine(disks); smartLine != "" {
+			lines = append(lines, smartLine)
+		}
 	}
 	lines = append(lines, formatDiskIOLine(io))
 	return cardData{icon: iconDisk, title: "Disk", lines: lines}
@@ -491,7 +503,45 @@ func formatDiskMetaLine(d DiskStatus) string {
 	if d.Fstype != "" {
 		parts = append(parts, strings.ToUpper(d.Fstype))
 	}
+	if d.Purgeable > 0 {
+		parts = append(parts, humanBytesShort(d.Purgeable)+" purgeable")
+	}
 	return fmt.Sprintf("Total  %s", strings.Join(parts, " · "))
+}
+
+// formatDiskSMARTLine returns "" unless a disk is actually failing.
+//
+// SMART has one actionable state. "Verified" asks nothing of the user, and
+// external enclosures usually do not pass SMART through at all, so a Mac with
+// two USB disks rendered "SMART  INTR OK · EXTR1 N/A · EXTR2 N/A": a row whose
+// length grew with disk count, carrying no information, and the only row in the
+// card wide enough to break the alignment of the ones above it. A failing disk
+// still gets a full-width red line, and the health score already counts SMART
+// failures either way.
+func formatDiskSMARTLine(disks []DiskStatus) string {
+	failingLabels := make([]string, 0, len(disks))
+	internal, external := splitDisks(disks)
+	collectFailing := func(prefix string, list []DiskStatus) {
+		for index, disk := range list {
+			if disk.SmartStatus != smartStatusFailing {
+				continue
+			}
+			if len(disks) == 1 {
+				failingLabels = append(failingLabels, dangerStyle.Render("Failing"))
+				continue
+			}
+			failingLabels = append(failingLabels,
+				diskLabel(prefix, index, len(list))+" "+dangerStyle.Render("FAIL"))
+		}
+	}
+	collectFailing("INTR", internal)
+	collectFailing("EXTR", external)
+	if len(failingLabels) == 0 {
+		return ""
+	}
+
+	failingLabels = append(failingLabels, dangerStyle.Render("Back up now"))
+	return fmt.Sprintf("%-*s %s", metricLabelWidth, "SMART", strings.Join(failingLabels, " · "))
 }
 
 func formatDiskIOLine(io DiskIOStatus) string {
@@ -562,12 +612,15 @@ func processMemoryText(p ProcessInfo) string {
 	return ""
 }
 
-func buildCards(m MetricsSnapshot, width int) []cardData {
+// buildCards renders every card. batteryProbed says whether a full collection
+// has completed at least once; until it has, an empty battery list means "not
+// measured yet", not "this Mac has no battery".
+func buildCards(m MetricsSnapshot, width int, cpuCores int, batteryProbed bool) []cardData {
 	cards := []cardData{
-		renderCPUCard(m.CPU, m.Thermal),
+		renderCPUCard(m.CPU, m.Thermal, cpuCores),
 		renderMemoryCard(m.Memory, width),
 		renderDiskCard(m.Disks, m.DiskIO, m.TrashSize, m.TrashApprox),
-		renderBatteryCard(m.Batteries, m.Thermal),
+		renderBatteryCard(m.Batteries, m.Thermal, batteryProbed),
 		renderProcessCard(m.TopProcesses, width),
 		renderNetworkCard(m.Network, m.NetworkHistory, m.Proxy, width),
 	}
@@ -613,7 +666,11 @@ func renderNetworkCard(netStats []NetworkStatus, history NetworkHistory, proxy P
 		// Show proxy and IP on one line.
 		var infoParts []string
 		if proxy.Enabled {
-			infoParts = append(infoParts, "Proxy "+proxy.Type)
+			if proxy.IsTunnel {
+				infoParts = append(infoParts, "Tunnel")
+			} else {
+				infoParts = append(infoParts, "Proxy "+proxy.Type)
+			}
 		}
 		if primaryIP != "" {
 			infoParts = append(infoParts, primaryIP)
@@ -672,9 +729,20 @@ func sparkline(history []float64, current float64, width int) string {
 	return okStyle.Render(result)
 }
 
-func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus) cardData {
+func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus, probed bool) cardData {
 	var lines []string
-	if len(batts) == 0 {
+	if len(batts) == 0 && !probed {
+		// The first collection is the fast one, and it does not read batteries.
+		// Saying "No battery" here told every laptop it had none for the couple
+		// of seconds before the first full collection landed. Hold the card's
+		// shape with placeholders instead, so the real values replace them
+		// without the layout jumping.
+		lines = append(lines,
+			fmt.Sprintf("Level  %s  %6s", batteryProgressBar(0), placeholderValue),
+			fmt.Sprintf("Health %s  %6s", batteryProgressBar(0), placeholderValue),
+			subtleStyle.Render(placeholderValue),
+		)
+	} else if len(batts) == 0 {
 		lines = append(lines, subtleStyle.Render("No battery"))
 	} else {
 		b := batts[0]
@@ -784,7 +852,7 @@ func formatBatteryStatus(status string) string {
 	return strings.ToUpper(status[:1]) + strings.ToLower(status[1:])
 }
 
-func renderCard(data cardData, width int, height int) string {
+func renderCard(data cardData, width int) string {
 	if width <= 0 {
 		width = colWidth
 	}
@@ -802,9 +870,6 @@ func renderCard(data cardData, width int, height int) string {
 		lines = append(lines, wrapToWidth(line, width)...)
 	}
 
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
 	return strings.Join(lines, "\n")
 }
 
@@ -944,6 +1009,47 @@ func remainingLineWidth(width int, prefix string) int {
 	return max(width-lipgloss.Width(prefix)-1, 0)
 }
 
+// columnRow is one row of the two-column layout: a left cell and a right cell,
+// each a vertical stack of one or more cards.
+type columnRow struct {
+	left  []cardData
+	right []cardData
+}
+
+// layoutColumnRows groups cards into rows so section titles stay aligned across
+// the two columns. Each row seeds its left cell with one card, then stacks cards
+// into the right cell until it is at least as tall as the left, so a tall card
+// (e.g. CPU listing many cores) is matched by several short cards (GPU, Memory,
+// ...) beside it instead of leaving a gap. The shorter cell is padded to the row
+// height at render time, which keeps the next row's titles aligned. Heights are
+// measured at column width cw, so the grouping adapts live as cards grow/shrink.
+func layoutColumnRows(cards []cardData, cw int) []columnRow {
+	stackHeight := func(cs []cardData) int {
+		h := 0
+		for i, c := range cs {
+			if i > 0 {
+				h++ // blank separator between stacked cards
+			}
+			h += lipgloss.Height(renderCard(c, cw))
+		}
+		return h
+	}
+
+	var rows []columnRow
+	i := 0
+	for i < len(cards) {
+		row := columnRow{left: []cardData{cards[i]}}
+		i++
+		leftH := stackHeight(row.left)
+		for i < len(cards) && stackHeight(row.right) < leftH {
+			row.right = append(row.right, cards[i])
+			i++
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
 func renderTwoColumns(cards []cardData, width int) string {
 	if len(cards) == 0 {
 		return ""
@@ -952,29 +1058,58 @@ func renderTwoColumns(cards []cardData, width int) string {
 	if width > 0 && width/2-2 > cw {
 		cw = width/2 - 2
 	}
-	var rows []string
-	for i := 0; i < len(cards); i += 2 {
-		left := renderCard(cards[i], cw, 0)
-		right := ""
-		if i+1 < len(cards) {
-			right = renderCard(cards[i+1], cw, 0)
+
+	renderCell := func(cs []cardData) string {
+		var parts []string
+		for i, c := range cs {
+			if i > 0 {
+				parts = append(parts, "")
+			}
+			parts = append(parts, renderCard(c, cw))
 		}
-		targetHeight := max(lipgloss.Height(left), lipgloss.Height(right))
-		left = renderCard(cards[i], cw, targetHeight)
-		if right != "" {
-			right = renderCard(cards[i+1], cw, targetHeight)
-			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right))
-		} else {
-			rows = append(rows, left)
-		}
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
 
-	var spacedRows []string
-	for i, r := range rows {
-		if i > 0 {
-			spacedRows = append(spacedRows, "")
+	renderRows := func(layout []columnRow) string {
+		var rows []string
+		for _, row := range layout {
+			left := renderCell(row.left)
+			if len(row.right) == 0 {
+				rows = append(rows, left)
+				continue
+			}
+			right := renderCell(row.right)
+			// JoinHorizontal (Top) pads the shorter cell to the taller, so the next
+			// row's titles line up in both columns.
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right))
 		}
-		spacedRows = append(spacedRows, r)
+
+		var spaced []string
+		for i, row := range rows {
+			if i > 0 {
+				spaced = append(spaced, "")
+			}
+			spaced = append(spaced, row)
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, spaced...)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, spacedRows...)
+
+	var fixedLayout []columnRow
+	for i := 0; i < len(cards); i += 2 {
+		row := columnRow{left: []cardData{cards[i]}}
+		if i+1 < len(cards) {
+			row.right = []cardData{cards[i+1]}
+		}
+		fixedLayout = append(fixedLayout, row)
+	}
+
+	fixed := renderRows(fixedLayout)
+	stacked := renderRows(layoutColumnRows(cards, cw))
+	// Dynamic stacking is useful for a tall CPU card, but a greedy stack can
+	// overshoot a shorter row and grow the whole dashboard. Keep the stable
+	// pair layout unless stacking saves vertical space.
+	if lipgloss.Height(stacked) < lipgloss.Height(fixed) {
+		return stacked
+	}
+	return fixed
 }

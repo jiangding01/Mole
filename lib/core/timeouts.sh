@@ -65,3 +65,36 @@ readonly MOLE_TIMEOUT_PKG_LIST_SEC="${MOLE_TIMEOUT_PKG_LIST_SEC:-10}"
 readonly MOLE_TIMEOUT_PKG_CLEANUP_SEC="${MOLE_TIMEOUT_PKG_CLEANUP_SEC:-20}"
 readonly MOLE_TIMEOUT_DISK_VERIFY_SEC="${MOLE_TIMEOUT_DISK_VERIFY_SEC:-30}"
 readonly MOLE_TIMEOUT_HINT_SCAN_SEC="${MOLE_TIMEOUT_HINT_SCAN_SEC:-15}"
+
+# Clamp a per-command timeout to an overall wall-clock deadline. Kept beside
+# the timeout policy constants because cleanup, uninstall, and file operations
+# all need the same cumulative-budget behavior, including when those modules
+# are sourced independently in tests or integrations.
+#
+# Deadlines are counted in SECONDS, which advances in whole seconds. A caller
+# that builds one as `SECONDS + 1` is really asking for "until the next second
+# boundary", so the budget can collapse to almost nothing and this returns 124
+# before the command ever runs. Every constant above is >= 2 for that reason;
+# keep new budgets there too, and never assert on a one-second bound in tests.
+_mole_timeout_with_deadline() {
+    local requested="$1"
+    local deadline="${2:-}"
+    if [[ -z "$deadline" ]]; then
+        printf '%s\n' "$requested"
+        return 0
+    fi
+
+    local remaining=$((deadline - SECONDS))
+    [[ $remaining -gt 0 ]] || return 124
+    if [[ ! "$requested" =~ ^[0-9]+(\.[0-9]+)?$ || "$requested" =~ ^0+(\.0+)?$ ]]; then
+        printf '%s\n' "$remaining"
+        return 0
+    fi
+    local requested_whole="${requested%%.*}"
+    local requested_whole_decimal=$((10#$requested_whole))
+    if [[ $requested_whole_decimal -ge $remaining ]]; then
+        printf '%s\n' "$remaining"
+    else
+        printf '%s\n' "$requested"
+    fi
+}

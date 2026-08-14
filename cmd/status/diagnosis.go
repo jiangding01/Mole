@@ -6,6 +6,11 @@ import (
 )
 
 func statusDiagnosisLine(m MetricsSnapshot) string {
+	for _, disk := range m.Disks {
+		if disk.SmartStatus == smartStatusFailing {
+			return "SMART failing, back up now"
+		}
+	}
 	if m.CPU.Usage > cpuHighThreshold {
 		if proc, ok := leadingCPUProcess(m.TopProcesses, 50); ok {
 			return fmt.Sprintf("%s high CPU", shorten(proc.Name, 18))

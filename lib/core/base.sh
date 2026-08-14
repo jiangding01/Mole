@@ -10,6 +10,13 @@ if [[ -n "${MOLE_BASE_LOADED:-}" ]]; then
 fi
 readonly MOLE_BASE_LOADED=1
 
+# Cleanup libraries read "$DRY_RUN" in 70+ places without a default, and only the
+# command entry points (bin/clean.sh and friends) assign it. Anything that sources
+# a lib directly then calls into it therefore aborts on "unbound variable" under
+# set -u, in branches that are only reached with specific fixtures. Default it
+# once here rather than at each read site; entry points still assign over it.
+: "${DRY_RUN:=false}"
+
 # ============================================================================
 # Color Definitions
 # Honor https://no-color.org: any non-empty NO_COLOR disables ANSI escapes.
@@ -34,9 +41,38 @@ else
     readonly PURPLE="${ESC}[0;35m"
     readonly PURPLE_BOLD="${ESC}[1;35m"
     readonly RED="${ESC}[0;31m"
-    readonly GRAY="${ESC}[0;90m"
+    readonly GRAY="${ESC}[0;38;5;244m"
     readonly NC="${ESC}[0m"
 fi
+
+# Probe several process patterns without collapsing pgrep errors into "not
+# running". Arguments are selector/pattern pairs, for example:
+#   mole_pgrep_any -x Xcode -f com.apple.dt.XCTest
+# Returns 0 when any pattern matches, 1 only when every probe reports no match,
+# and 2 when no pattern matches but at least one probe could not be completed.
+mole_pgrep_any() {
+    if [[ $# -eq 0 || $(($# % 2)) -ne 0 ]] || ! command -v pgrep > /dev/null 2>&1; then
+        return 2
+    fi
+
+    local aggregate_rc=1
+    local selector pattern probe_rc
+    while [[ $# -gt 0 ]]; do
+        selector="$1"
+        pattern="$2"
+        shift 2
+
+        probe_rc=0
+        if pgrep "$selector" "$pattern" > /dev/null 2>&1; then
+            return 0
+        else
+            probe_rc=$?
+        fi
+        [[ $probe_rc -eq 1 ]] || aggregate_rc=2
+    done
+
+    return "$aggregate_rc"
+}
 
 # ============================================================================
 # Icon Definitions
@@ -52,7 +88,7 @@ readonly ICON_LIST="•"
 readonly ICON_SUBLIST="↳"
 readonly ICON_ARROW="➤"
 readonly ICON_DRY_RUN="→"
-readonly ICON_REVIEW="☞"
+readonly ICON_REVIEW="⊙"
 readonly ICON_NAV_UP="↑"
 readonly ICON_NAV_DOWN="↓"
 readonly ICON_INFO="ℹ"
@@ -62,7 +98,16 @@ readonly ICON_INFO="ℹ"
 # ============================================================================
 
 # Locate the lsregister binary (path varies across macOS versions).
+# MOLE_LSREGISTER_PATH overrides the lookup when it is set, including when it
+# is set empty, which disables every lsregister-backed scan. Tests use the
+# empty form to keep a multi-second LaunchServices dump out of assertions that
+# have nothing to do with launch services.
 get_lsregister_path() {
+    if [[ -n "${MOLE_LSREGISTER_PATH+x}" ]]; then
+        echo "$MOLE_LSREGISTER_PATH"
+        return 0
+    fi
+
     local -a candidates=(
         "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
         "/System/Library/CoreServices/Frameworks/LaunchServices.framework/Support/lsregister"
@@ -129,6 +174,52 @@ declare -a DEFAULT_WHITELIST_PATTERNS=(
 
 declare -a DEFAULT_OPTIMIZE_WHITELIST_PATTERNS=(
 )
+
+# Safety patterns always merge into an existing user whitelist file.
+# Replacement semantics (V1.7.5+) treat the file as the complete set, so
+# protections added later (FINDER_METADATA in V1.9.9) never reached users who
+# already had a whitelist. Only hard safety belongs here; optional convenience
+# defaults stay in DEFAULT_WHITELIST_PATTERNS and remain fully replaceable.
+declare -a SAFETY_WHITELIST_PATTERNS=(
+    "$FINDER_METADATA_SENTINEL"
+)
+
+# Append any missing SAFETY_WHITELIST_PATTERNS to WHITELIST_PATTERNS.
+# When CURRENT_WHITELIST_PATTERNS is declared (manage UI), keep it in sync.
+ensure_safety_whitelist_patterns() {
+    local safety existing found
+    [[ ${#SAFETY_WHITELIST_PATTERNS[@]} -eq 0 ]] && return 0
+
+    for safety in "${SAFETY_WHITELIST_PATTERNS[@]}"; do
+        found=false
+        if [[ ${#WHITELIST_PATTERNS[@]} -gt 0 ]]; then
+            for existing in "${WHITELIST_PATTERNS[@]}"; do
+                if [[ "$existing" == "$safety" ]]; then
+                    found=true
+                    break
+                fi
+            done
+        fi
+        if [[ "$found" == "false" ]]; then
+            WHITELIST_PATTERNS+=("$safety")
+        fi
+
+        if declare -p CURRENT_WHITELIST_PATTERNS &> /dev/null 2>&1; then
+            found=false
+            if [[ ${#CURRENT_WHITELIST_PATTERNS[@]} -gt 0 ]]; then
+                for existing in "${CURRENT_WHITELIST_PATTERNS[@]}"; do
+                    if [[ "$existing" == "$safety" ]]; then
+                        found=true
+                        break
+                    fi
+                done
+            fi
+            if [[ "$found" == "false" ]]; then
+                CURRENT_WHITELIST_PATTERNS+=("$safety")
+            fi
+        fi
+    done
+}
 
 # ============================================================================
 # BSD Stat Compatibility
@@ -630,8 +721,107 @@ probe_temp_root() {
     printf '%s\n' "$path"
 }
 
+# Remove abandoned files only from Mole's dedicated fallback temp directory.
+# Persistent cache files live one level above this directory and are never
+# included. A one-day grace period avoids racing with concurrent long-running
+# Mole processes while bounding leftovers from interrupted runs.
+prune_stale_mole_temp_files() {
+    local root="${1:-}"
+    local invoking_home=""
+    local max_age_minutes="${MOLE_TEMP_STALE_MINUTES:-1440}"
+
+    [[ "$max_age_minutes" =~ ^[0-9]+$ ]] || max_age_minutes=1440
+    [[ -n "$root" && -d "$root" && ! -L "$root" ]] || return 0
+
+    if is_root_user; then
+        [[ "$root" == "/private/var/root/.cache/mole/tmp" ]] || return 0
+    else
+        invoking_home=$(get_invoking_home)
+        [[ -n "$invoking_home" ]] || return 0
+        [[ "$root" == "${invoking_home%/}/.cache/mole/tmp" ]] || return 0
+    fi
+
+    find "$root" -mindepth 1 -maxdepth 1 \( -type f -o -type l \) \
+        -mmin "+$max_age_minutes" -exec rm -f -- {} + 2> /dev/null || true # SAFE: dedicated Mole temp root only
+
+    # Spinner control directories contain only flat control files. Remove
+    # their contents without recursive deletion, then rmdir the now-empty
+    # directory. Unexpected nested content makes rmdir fail closed.
+    local stale_dir
+    while IFS= read -r -d '' stale_dir; do
+        case "$stale_dir" in
+            "$root"/.mole-spinner.*) ;;
+            *) continue ;;
+        esac
+        [[ -d "$stale_dir" && ! -L "$stale_dir" && -O "$stale_dir" ]] || continue
+        find "$stale_dir" -mindepth 1 -maxdepth 1 \( -type f -o -type l \) \
+            -exec rm -f -- {} + 2> /dev/null || true # SAFE: validated spinner control dir only
+        rmdir "$stale_dir" 2> /dev/null || true
+    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -name '.mole-spinner.*' \
+        -mmin "+$max_age_minutes" -print0 2> /dev/null)
+}
+
+initialize_mole_temp_registry_path() {
+    [[ -n "${MOLE_RESOLVED_TMPDIR:-}" ]] || return 1
+
+    # Bash keeps $$ stable inside command substitutions and across exec, so the
+    # parent, its subshells, and an exec'd bin/*.sh all derive the same registry
+    # path. A forked child gets a different $$: the registry is exported, so an
+    # inherited value that no longer matches belongs to the parent process, and
+    # adopting it would make the child's exit cleanup delete the parent's live
+    # temp files. `mo update` lost its downloaded installer exactly this way,
+    # because install.sh runs the freshly installed `mole --version`.
+    local owned="${MOLE_RESOLVED_TMPDIR%/}/mole.registry.$$"
+    [[ "${MOLE_TEMP_REGISTRY_FILE:-}" == "$owned" ]] && return 0
+
+    MOLE_TEMP_REGISTRY_FILE="$owned"
+    export MOLE_TEMP_REGISTRY_FILE
+}
+
+ensure_mole_temp_registry_file() {
+    initialize_mole_temp_registry_path || return 1
+
+    case "$MOLE_TEMP_REGISTRY_FILE" in
+        "${MOLE_RESOLVED_TMPDIR%/}"/mole.registry.*) ;;
+        *) return 1 ;;
+    esac
+
+    if [[ ! -e "$MOLE_TEMP_REGISTRY_FILE" ]]; then
+        (umask 077 && set -C && : > "$MOLE_TEMP_REGISTRY_FILE") 2> /dev/null || true
+    fi
+
+    [[ -f "$MOLE_TEMP_REGISTRY_FILE" && ! -L "$MOLE_TEMP_REGISTRY_FILE" && -O "$MOLE_TEMP_REGISTRY_FILE" ]]
+}
+
 ensure_mole_temp_root() {
+    if is_root_user; then
+        # Whole-command sudo must not reuse TMPDIR or the invoking user's cache
+        # for root-written registries and command output. Keep all root temp
+        # state below root's private home so a lower-trust user cannot rename a
+        # checked file between validation and append/read operations.
+        local root_home="/private/var/root"
+        [[ -d "$root_home" && ! -L "$root_home" && -O "$root_home" ]] || root_home="/var/root"
+        [[ -d "$root_home" && ! -L "$root_home" && -O "$root_home" ]] || return 1
+
+        local root_temp="$root_home/.cache/mole/tmp"
+        mkdir -p "$root_temp" 2> /dev/null || return 1
+        chmod 700 "$root_home/.cache" "$root_home/.cache/mole" "$root_temp" 2> /dev/null || true
+        root_temp=$(cd -P "$root_temp" 2> /dev/null && pwd) || return 1
+        [[ "$root_temp" == "$root_home/.cache/mole/tmp" && -d "$root_temp" && ! -L "$root_temp" && -O "$root_temp" ]] || return 1
+
+        MOLE_RESOLVED_TMPDIR="$root_temp"
+        export MOLE_RESOLVED_TMPDIR
+        prune_stale_mole_temp_files "$MOLE_RESOLVED_TMPDIR"
+        case "${MOLE_TEMP_REGISTRY_FILE:-}" in
+            "$root_temp"/mole.registry.*) ;;
+            *) unset MOLE_TEMP_REGISTRY_FILE ;;
+        esac
+        initialize_mole_temp_registry_path || true
+        return 0
+    fi
+
     if [[ -n "${MOLE_RESOLVED_TMPDIR:-}" ]]; then
+        initialize_mole_temp_registry_path || true
         return 0
     fi
 
@@ -657,6 +847,8 @@ ensure_mole_temp_root() {
     [[ -n "$resolved" ]] || resolved="/tmp"
     MOLE_RESOLVED_TMPDIR="$resolved"
     export MOLE_RESOLVED_TMPDIR
+    initialize_mole_temp_registry_path || true
+    prune_stale_mole_temp_files "$MOLE_RESOLVED_TMPDIR"
 }
 
 prepare_mole_tmpdir() {
@@ -692,11 +884,17 @@ create_temp_dir() {
 # Register existing file for cleanup
 register_temp_file() {
     MOLE_TEMP_FILES+=("$1")
+    if ensure_mole_temp_registry_file; then
+        printf '%s\n' "$1" >> "$MOLE_TEMP_REGISTRY_FILE" 2> /dev/null || true
+    fi
 }
 
 # Register existing directory for cleanup
 register_temp_dir() {
     MOLE_TEMP_DIRS+=("$1")
+    if ensure_mole_temp_registry_file; then
+        printf '%s\n' "$1" >> "$MOLE_TEMP_REGISTRY_FILE" 2> /dev/null || true
+    fi
 }
 
 # Create temp file with prefix (for analyze.sh compatibility)
@@ -731,6 +929,25 @@ cleanup_temp_files() {
         for file in "${MOLE_TEMP_DIRS[@]}"; do
             [[ -d "$file" ]] && rm -rf "$file" 2> /dev/null || true # SAFE: cleanup_temp_files
         done
+    fi
+
+    # Command substitutions run mktemp_file/create_temp_* in a child shell, so
+    # their in-memory array updates cannot reach this parent. The registry is
+    # shared across those shells and closes that cleanup gap. See #1203.
+    if ensure_mole_temp_registry_file; then
+        local registered_path
+        while IFS= read -r registered_path; do
+            [[ -n "$registered_path" ]] || continue
+            [[ "$registered_path" == "${MOLE_RESOLVED_TMPDIR%/}/"* ]] || continue
+            [[ ! "$registered_path" =~ (^|/)\.\.(\/|$) ]] || continue
+
+            if [[ -d "$registered_path" && ! -L "$registered_path" ]]; then
+                rm -rf "$registered_path" 2> /dev/null || true # SAFE: mktemp dir registered under resolved Mole temp root
+            else
+                rm -f "$registered_path" 2> /dev/null || true
+            fi
+        done < "$MOLE_TEMP_REGISTRY_FILE"
+        rm -f "$MOLE_TEMP_REGISTRY_FILE" 2> /dev/null || true
     fi
 
     MOLE_TEMP_FILES=()
@@ -790,26 +1007,31 @@ note_activity() {
     fi
 }
 
-# Start a section spinner with optional message
+# Start a section spinner with optional message. When a spinner is already
+# running, swap its text in place instead of restarting the subprocess: the
+# stop/start cycle blanks the line for a frame and reads as flicker.
 # Usage: start_section_spinner "message"
 start_section_spinner() {
     local message="${1:-Scanning...}"
-    stop_inline_spinner || true
     if [[ -t 1 ]]; then
+        if declare -F update_inline_spinner_message > /dev/null 2>&1 &&
+            update_inline_spinner_message "$message"; then
+            return 0
+        fi
+        stop_inline_spinner || true
         MOLE_SPINNER_PREFIX="  " start_inline_spinner "$message"
+    else
+        stop_inline_spinner || true
     fi
 }
 
 # Stop spinner and clear the line
 # Usage: stop_section_spinner
 stop_section_spinner() {
-    # Always try to stop spinner (function handles empty PID gracefully)
+    # stop_inline_spinner clears the line itself when a spinner was running;
+    # a second unconditional clear here only blanked the row an extra frame
+    # right before result rows printed.
     stop_inline_spinner || true
-    # Always clear line to handle edge cases where spinner output remains
-    # (e.g., spinner was stopped elsewhere but line not cleared)
-    if [[ -t 1 ]]; then
-        printf "\r\033[2K" >&2 || true
-    fi
 }
 
 # Safe terminal line clearing with terminal type detection
@@ -823,11 +1045,17 @@ safe_clear_lines() {
     # Note: This forward reference works because functions are parsed before execution
     is_ansi_supported 2> /dev/null || return 1
 
-    # Clear lines one by one (more reliable than multi-line sequences)
+    [[ "$lines" =~ ^[0-9]+$ && "$lines" -gt 0 ]] || return 0
+
+    # Emit the whole erase as one write so the terminal renders it in a
+    # single frame; per-line writes flash intermediate states.
+    local sequence=""
     local i
     for ((i = 0; i < lines; i++)); do
-        printf "\033[1A\r\033[2K" > "$tty_device" 2> /dev/null || return 1
+        sequence+="\033[1A\r\033[2K"
     done
+    # shellcheck disable=SC2059
+    printf "$sequence" > "$tty_device" 2> /dev/null || return 1
 
     return 0
 }
@@ -866,8 +1094,8 @@ update_progress_if_needed() {
 
     # Check if enough time has elapsed
     if [[ $((current_time - last_time)) -ge $interval ]]; then
-        # Update the spinner with progress
-        stop_section_spinner
+        # Update the spinner text in place; restarting it here blinked the
+        # line on every progress tick.
         start_section_spinner "Scanning items... $completed/$total"
 
         # Update the last_update_time variable
@@ -927,4 +1155,106 @@ is_ansi_supported() {
             return 1
             ;;
     esac
+}
+
+# Record that a cleanup family was skipped because the app was running, so the
+# clean summary can tell the user which apps to quit and re-run.
+#
+# `defer_cleanup_family` is the real ledger and lives in bin/clean.sh, which is
+# the only production entry point that sources lib/clean/*. A cleanup lib
+# sourced on its own (every standalone Bats case) has no ledger, so this drops
+# the family into the debug log instead of failing.
+#
+# This is NOT one of the three-way-forked helpers documented above start_section:
+# there is exactly one implementation and callers must not fork their own. Three
+# byte-identical copies of it grew in lib/clean/{dev,user,app_caches}.sh before
+# it landed here, which is the reason it is a shared function rather than a
+# convention. `tests/clean_core.bats` pins that they do not come back.
+mole_defer_cleanup_family() {
+    if declare -f defer_cleanup_family > /dev/null 2>&1; then
+        defer_cleanup_family "$1"
+    else
+        debug_log "Deferred cleanup while active: $1"
+    fi
+}
+
+# Why a cleanup delete guard refused, read by the caller right after a denial.
+# Dynamically scoped rather than returned on stdout on purpose: guards run at
+# the delete boundary, where a command substitution would fork per candidate.
+# Callers that need it isolated declare `local _MOLE_CLEAN_GUARD_REASON` in the
+# wrapper that owns the cleanup.
+_MOLE_CLEAN_GUARD_REASON=""
+
+# Turn a tri-state process probe into an allow/deny plus that reason.
+#
+# Probe contract: 0 = the app is running, 1 = it is not, 2 = could not tell.
+# State 2 must deny. An unreadable process table is not evidence the app is
+# closed, and a copy of this block that folds 2 into "not running" silently
+# turns "unknown" into "safe to delete" on a path that then removes the files.
+# Nine guards across dev.sh, user.sh, and app_caches.sh open-coded these six
+# lines before they landed here; one transcription slip in any of them was a
+# deletion while the owning app was live.
+#
+# Compound guards (Codex runtime/staging, Claude Desktop, versioned agents) call
+# this for the process question and then add their own evidence.
+# The optional third argument overrides the unknown-state wording. Only the
+# default "process state unknown" is echoed against the item by
+# mole_report_guard_stop; a guard that supplies its own wording (the Codex
+# Sparkle updater probe) is deliberately routed to the deferred-family list
+# instead, so keep the two in step when changing either.
+mole_clean_process_guard() {
+    local probe="$1"
+    local busy_reason="$2"
+    local unknown_reason="${3:-process state unknown}"
+    local process_state=0
+    "$probe" || process_state=$?
+    if [[ $process_state -eq 1 ]]; then
+        return 0
+    fi
+
+    _MOLE_CLEAN_GUARD_REASON="$busy_reason"
+    [[ $process_state -eq 2 ]] && _MOLE_CLEAN_GUARD_REASON="$unknown_reason"
+    return 1
+}
+
+# Report a guard refusal. An unknown process state is the user's problem to see
+# now (it means Mole could not tell, not that it found something running), so it
+# prints against the item. A known-running app is ordinary and goes to the
+# end-of-run "Skipped while active" list instead of a line per cache.
+# Usage: mole_report_guard_stop "Xcode cache" mole_defer_cleanup_family "Xcode"
+mole_report_guard_stop() {
+    local display_name="$1"
+    shift
+    if [[ "$_MOLE_CLEAN_GUARD_REASON" == "process state unknown" ]]; then
+        echo -e "  ${GRAY}${ICON_WARNING}${NC} ${display_name} · stopped (${_MOLE_CLEAN_GUARD_REASON})"
+        note_activity
+    else
+        "$@"
+    fi
+}
+
+# Does any of these targets survive the eligibility filter, i.e. would a real
+# cleanup have anything to do?
+#
+# Callers use it to decide whether an active app is worth reporting as skipped:
+# deferring "Xcode" when every candidate was already whitelisted tells the user
+# to quit an app for no reason. The predicate list mirrors the one
+# `_safe_clean_impl` applies before it consults the delete guard, so the two
+# agree on what "eligible" means; broken symlinks are excluded there too.
+mole_cleanup_targets_exist() {
+    local target
+    for target in "$@"; do
+        [[ -e "$target" ]] || continue
+        if declare -f should_protect_path > /dev/null 2>&1 && should_protect_path "$target" 2> /dev/null; then
+            continue
+        fi
+        if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$target" 2> /dev/null; then
+            continue
+        fi
+        if declare -f holds_compiled_model_cache > /dev/null 2>&1 && holds_compiled_model_cache "$target" 2> /dev/null; then
+            continue
+        fi
+        return 0
+    done
+    return 1
 }
