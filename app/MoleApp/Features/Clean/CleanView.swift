@@ -239,7 +239,8 @@ struct CleanView: View {
                     .background(RoundedRectangle(cornerRadius: 5).fill(Semantic.warn.opacity(0.12)))
                     .foregroundStyle(Semantic.warn)
             }
-            Text(fmt(item.bytes ?? 0))
+            // bytes == nil 是协议里的"大小未知"（测量超时），不是 0 B——如实说。
+            Text(item.bytes.map(fmt) ?? L("clean.size.unknown"))
                 .font(Fonts.mono(11.5))
                 .foregroundStyle(look.textMute)
                 .frame(minWidth: 62, alignment: .trailing)

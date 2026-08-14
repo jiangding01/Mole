@@ -261,6 +261,22 @@ setup_apply_plan() {
     [ "$(printf '%s' "$output" | cut -f4)" = "/tmp/evil ," ] || return 1
 }
 
+@test "clean plan emits null bytes for size-unknown entries, not zero" {
+    require_jq
+    {
+        printf '=== Logs ===\n'
+        printf '/Users/x/Library/Logs/slow-dir  # size unknown\n'
+        printf '/Users/x/Library/Logs/fast-dir  # 2KB\n'
+    } > "$BATS_TEST_TMPDIR/export.txt"
+    plan_id=$(robot_plan_new "clean")
+    run robot_clean_plan_from_export "$BATS_TEST_TMPDIR/export.txt" "$plan_id"
+    [ "$status" -eq 0 ] || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][0].bytes == null' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][1].bytes == 2000' > /dev/null || return 1
+    # Unknown sizes stay out of the plan total instead of counting as 0-and-true.
+    echo "$output" | jq -se '[.[] | select(.event == "done")][0].summary.bytes_total == 2000' > /dev/null || return 1
+}
+
 @test "clean plan parser skips lines without the size marker" {
     require_jq
     {

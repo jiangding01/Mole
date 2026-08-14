@@ -246,7 +246,17 @@ robot_clean_plan_from_export() {
         path="${line%%  \#*}"
         size_part="${line##*  \# }"
         size_part="${size_part%%,*}"
-        bytes=$(robot_human_to_bytes "$size_part")
+        # "size unknown" (sizing timed out) is not 0 bytes: emit JSON null so
+        # the GUI can say "unknown" instead of lying with 0 B. The plan file
+        # still stores 0 — apply's freed math treats unknown as nothing found.
+        local bytes_json
+        if [[ "$size_part" == "size unknown"* ]]; then
+            bytes=0
+            bytes_json="null"
+        else
+            bytes=$(robot_human_to_bytes "$size_part")
+            bytes_json="$bytes"
+        fi
 
         if robot_section_is_insight "$section_slug"; then
             robot_emit_insight "$section_slug" "$path" "$bytes"
@@ -258,7 +268,7 @@ robot_clean_plan_from_export() {
             robot_emit_error "E_INTERNAL" "skipped unrepresentable path in section $section_slug" "false"
             continue
         fi
-        robot_emit_item "$item_id" "$section_slug" "$path" "$path" "$bytes" "safe" "true"
+        robot_emit_item "$item_id" "$section_slug" "$path" "$path" "$bytes_json" "safe" "true"
         items=$((items + 1))
         bytes_total=$((bytes_total + bytes))
     done < "$export_file"

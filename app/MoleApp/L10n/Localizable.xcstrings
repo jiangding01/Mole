@@ -1802,6 +1802,23 @@
         }
       }
     },
+    "clean.size.unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown size"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大小未知"
+          }
+        }
+      }
+    },
     "clean.title" : {
       "extractionState" : "manual",
       "localizations" : {
