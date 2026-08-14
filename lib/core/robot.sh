@@ -264,35 +264,37 @@ robot_clean_plan_from_export() {
 }
 
 # --- clean plan: incremental progress -----------------------------------------
-# While the wrapped clean dry-run is writing EXPORT_LIST_FILE, the router
-# polls it and calls this to summarize newly appended complete lines.
-# Echoes: "<section_slug>\t<last_path>\t<delta_bytes>\t<delta_items>".
-# State (current section) is carried by the caller via $3.
+# While the wrapped clean dry-run runs, candidates stream into the NUL-delimited
+# preview ledger (bin/clean.sh append_dry_run_cleanup_target): six fields per
+# tuple — identity, size_kb, item_count, size_known, section, path. The final
+# export file is only rendered after the whole scan (render_clean_preview_from_
+# ledger), so scan liveness must come from the ledger. Stateless full-file parse
+# per tick: the ledger stays small, and an incomplete trailing tuple simply
+# fails the six-read sextet and is picked up complete on the next tick.
+# Echoes: "<items>\t<bytes>\t<section_slug>\t<last_path>".
 
-robot_scan_export_delta() {
-    local file="$1" from_line="$2" carry_section="${3:-}"
-    local line section_slug="$carry_section" last_path="" delta_bytes=0 delta_items=0
-    local path size_part
+robot_clean_ledger_snapshot() {
+    local file="$1"
+    local identity size_kb count size_known section path
+    local items=0 bytes=0 last_section="" last_path=""
 
-    while IFS= read -r line; do
-        case "$line" in
-            "" | "#"*) continue ;;
-            "=== "*" ===")
-                section_slug=$(robot_section_slug "${line#=== }")
-                section_slug=${section_slug%_}
-                continue
-                ;;
-        esac
-        [[ -n "$section_slug" ]] || continue
-        path="${line%%  \#*}"
-        size_part="${line##*  \# }"
-        size_part="${size_part%%,*}"
-        delta_bytes=$((delta_bytes + $(robot_human_to_bytes "$size_part")))
-        delta_items=$((delta_items + 1))
-        last_path="$path"
-    done < <(sed -n "$((from_line + 1)),\$p" "$file" 2> /dev/null)
+    if [[ -f "$file" ]]; then
+        while IFS= read -r -d '' identity &&
+            IFS= read -r -d '' size_kb &&
+            IFS= read -r -d '' count &&
+            IFS= read -r -d '' size_known &&
+            IFS= read -r -d '' section &&
+            IFS= read -r -d '' path; do
+            [[ "$size_kb" =~ ^[0-9]+$ ]] || size_kb=0
+            items=$((items + 1))
+            bytes=$((bytes + size_kb * 1024))
+            last_section="$section"
+            last_path="$path"
+        done < "$file"
+    fi
 
-    printf '%s\t%s\t%s\t%s\n' "$section_slug" "$last_path" "$delta_bytes" "$delta_items"
+    printf '%s\t%s\t%s\t%s\n' "$items" "$bytes" \
+        "$(robot_section_slug "$last_section")" "$last_path"
 }
 
 # --- history: parse the structured logs ----------------------------------------

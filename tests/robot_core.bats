@@ -223,21 +223,39 @@ setup_apply_plan() {
     [ -e "$BATS_TEST_TMPDIR/data/exists" ] || return 1
 }
 
-# --- progress delta scanning ----------------------------------------------------
+# --- progress ledger scanning ----------------------------------------------------
 
-@test "robot_scan_export_delta summarizes newly appended lines" {
-    make_export_fixture
-    # Whole file from line 0: 3 items (insight lines counted as entries here is
-    # fine — the watcher only uses this for progress totals, not for the plan).
-    run robot_scan_export_delta "$BATS_TEST_TMPDIR/export.txt" 0 ""
+@test "robot_clean_ledger_snapshot parses NUL-delimited ledger tuples" {
+    printf '%s\0' id1 100 1 true "User Caches" "/Users/x/Library/Caches/foo" \
+        > "$BATS_TEST_TMPDIR/ledger"
+    printf '%s\0' id2 50 3 true "Developer Tools" "/Users/x/.cache/bar" \
+        >> "$BATS_TEST_TMPDIR/ledger"
+    run robot_clean_ledger_snapshot "$BATS_TEST_TMPDIR/ledger"
     [ "$status" -eq 0 ] || return 1
-    delta_items=$(printf '%s' "$output" | cut -f4)
-    [ "$delta_items" -eq 4 ] || return 1
-    # Carry-over: scanning from the middle keeps the caller's section context.
-    total_lines=$(wc -l < "$BATS_TEST_TMPDIR/export.txt" | tr -d ' ')
-    run robot_scan_export_delta "$BATS_TEST_TMPDIR/export.txt" "$total_lines" "developer_tools"
-    [ "$(printf '%s' "$output" | cut -f1)" = "developer_tools" ] || return 1
-    [ "$(printf '%s' "$output" | cut -f4)" = "0" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f1)" = "2" ] || return 1
+    # (100 + 50) KB * 1024
+    [ "$(printf '%s' "$output" | cut -f2)" = "153600" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f3)" = "developer_tools" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f4)" = "/Users/x/.cache/bar" ] || return 1
+}
+
+@test "robot_clean_ledger_snapshot ignores a partial trailing tuple" {
+    printf '%s\0' id1 100 1 true Logs /tmp/a > "$BATS_TEST_TMPDIR/ledger"
+    # Simulate the writer caught mid-tuple: only two of six fields flushed.
+    printf '%s\0' id2 >> "$BATS_TEST_TMPDIR/ledger"
+    printf '%s' 999 >> "$BATS_TEST_TMPDIR/ledger"
+    run robot_clean_ledger_snapshot "$BATS_TEST_TMPDIR/ledger"
+    [ "$status" -eq 0 ] || return 1
+    [ "$(printf '%s' "$output" | cut -f1)" = "1" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f2)" = "102400" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f4)" = "/tmp/a" ] || return 1
+}
+
+@test "robot_clean_ledger_snapshot on a missing file reports zero progress" {
+    run robot_clean_ledger_snapshot "$BATS_TEST_TMPDIR/absent-ledger"
+    [ "$status" -eq 0 ] || return 1
+    [ "$(printf '%s' "$output" | cut -f1)" = "0" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f2)" = "0" ] || return 1
 }
 
 # --- history parsing --------------------------------------------------------------

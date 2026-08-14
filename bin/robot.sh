@@ -40,23 +40,25 @@ EOF
 
 # Poll the export file while the wrapped clean runs, emitting progress events
 # so the GUI shows liveness during the multi-minute scan (§4.3 progress).
-robot_watch_clean_export() {
-    local pid="$1" export_file="$2"
-    local last_line=0 total bytes_acc=0 items_acc=0 section="" delta
+# Poll the growing preview ledger and emit progress while the wrapped clean
+# dry-run scans. The export file only materializes after the scan finishes
+# (bin/clean.sh renders it from this very ledger), so liveness comes from here.
+robot_watch_clean_ledger() {
+    local pid="$1" ledger_file="$2"
+    local size last_size=0 snap items bytes section current
 
     while kill -0 "$pid" 2> /dev/null; do
         sleep 1
-        [[ -f "$export_file" ]] || continue
-        total=$(wc -l < "$export_file" | tr -d ' ')
-        [[ "$total" -gt "$last_line" ]] || continue
-        delta=$(robot_scan_export_delta "$export_file" "$last_line" "$section" | tail -1)
-        section=$(printf '%s' "$delta" | cut -f1)
-        local current
-        current=$(printf '%s' "$delta" | cut -f2)
-        bytes_acc=$((bytes_acc + $(printf '%s' "$delta" | cut -f3)))
-        items_acc=$((items_acc + $(printf '%s' "$delta" | cut -f4)))
-        robot_emit_progress "scan" "$section" "$current" "$items_acc" "-1" "$bytes_acc"
-        last_line=$total
+        [[ -f "$ledger_file" ]] || continue
+        size=$(wc -c < "$ledger_file" | tr -d ' ')
+        [[ "$size" -gt "$last_size" ]] || continue
+        snap=$(robot_clean_ledger_snapshot "$ledger_file")
+        items=$(printf '%s' "$snap" | cut -f1)
+        bytes=$(printf '%s' "$snap" | cut -f2)
+        section=$(printf '%s' "$snap" | cut -f3)
+        current=$(printf '%s' "$snap" | cut -f4)
+        robot_emit_progress "scan" "$section" "$current" "$items" "-1" "$bytes"
+        last_size=$size
     done
 }
 
@@ -90,19 +92,28 @@ run_clean_plan() {
             exit 1
         fi
         export_file="$HOME/.config/mole/clean-list.txt"
-        # The dry run writes the authoritative candidate list to the export
-        # file; its human-facing stdout is not part of the protocol. Run it
-        # in the background and stream progress from the growing export file
-        # so the GUI shows liveness during the multi-minute scan.
-        local clean_pid clean_rc=0
+        # The dry run streams candidates into the NUL preview ledger and only
+        # renders the authoritative export file once the scan completes; its
+        # human-facing stdout is not part of the protocol. Pre-create a fixed
+        # ledger path, hand it to clean via MOLE_CLEAN_PREVIEW_LEDGER_FILE,
+        # and stream progress from it so the GUI shows liveness during the
+        # multi-minute scan.
+        local ledger_file clean_pid clean_rc=0
+        ledger_file=$(umask 077 && mktemp "${TMPDIR:-/tmp}/mole.robot-ledger.XXXXXX") || {
+            robot_emit_error "E_INTERNAL" "cannot create progress ledger" "true"
+            exit 1
+        }
         if [[ -n "$external" ]]; then
-            MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" "$SCRIPT_DIR/bin/clean.sh" --dry-run --external "$external" > /dev/null 2>&2 &
+            MOLE_CLEAN_PREVIEW_LEDGER_FILE="$ledger_file" MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" \
+                "$SCRIPT_DIR/bin/clean.sh" --dry-run --external "$external" > /dev/null 2>&2 &
         else
-            MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" "$SCRIPT_DIR/bin/clean.sh" --dry-run > /dev/null 2>&2 &
+            MOLE_CLEAN_PREVIEW_LEDGER_FILE="$ledger_file" MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" \
+                "$SCRIPT_DIR/bin/clean.sh" --dry-run > /dev/null 2>&2 &
         fi
         clean_pid=$!
-        robot_watch_clean_export "$clean_pid" "$export_file"
+        robot_watch_clean_ledger "$clean_pid" "$ledger_file"
         wait "$clean_pid" || clean_rc=$?
+        rm -f -- "$ledger_file" # SAFE: exact mktemp file created above
         if [[ $clean_rc -ne 0 ]]; then
             robot_emit_error "E_INTERNAL" "clean dry-run exited with $clean_rc" "true"
             exit 1

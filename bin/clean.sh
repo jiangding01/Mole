@@ -159,7 +159,15 @@ prepare_clean_preview_file() {
         ensure_user_file "$EXPORT_LIST_FILE"
     fi
 
-    CLEAN_PREVIEW_LEDGER_FILE=$(create_temp_file) || return 1
+    # Robot/GUI progress hook (bin/robot.sh): the router pre-creates a fixed
+    # ledger path and streams scan progress from it while this dry-run writes.
+    # Honored only for non-root runs; the sudo path keeps its private temp.
+    if [[ -n "${MOLE_CLEAN_PREVIEW_LEDGER_FILE:-}" ]] && ! is_root_user &&
+        [[ -f "$MOLE_CLEAN_PREVIEW_LEDGER_FILE" && ! -L "$MOLE_CLEAN_PREVIEW_LEDGER_FILE" && -O "$MOLE_CLEAN_PREVIEW_LEDGER_FILE" ]]; then
+        CLEAN_PREVIEW_LEDGER_FILE="$MOLE_CLEAN_PREVIEW_LEDGER_FILE"
+    else
+        CLEAN_PREVIEW_LEDGER_FILE=$(create_temp_file) || return 1
+    fi
     [[ -f "$CLEAN_PREVIEW_LEDGER_FILE" && ! -L "$CLEAN_PREVIEW_LEDGER_FILE" ]] || return 1
     : > "$CLEAN_PREVIEW_LEDGER_FILE"
 }
