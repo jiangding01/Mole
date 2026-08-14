@@ -31,11 +31,11 @@
 
 - [ ] **控制字符转义不全** — `robot_json_escape` 只处理 `\ " \n \t \r`，
   0x00–0x1F 其余字节会产出严格解码器拒收的 JSON（流损坏，非删除风险）。
-- [ ] **进度轮询边界** — watch 首个 tick 可能读到上一次运行的陈旧导出
-  （轮询先于 clean 截断文件）；`cut` 空字段在 `set -e` 下中断路由。
-  修法：启动 clean 前 `rm -f` 导出文件；数值字段空缺默认 0。
-  另：并发 `robot clean plan` 共享同一导出文件（安全无虞——apply 重验，
-  但 plan 可能交错），记录在案。
+- [x] **进度轮询边界** — 原 watch 首 tick 可能读到上次运行的陈旧导出、
+  `cut` 空字段中断路由。**已由 ledger 重构整体消解（2026-08-14 合并系列）**：
+  进度改为轮询 robot 每次运行新建的 mktemp 预览 ledger
+  （`MOLE_CLEAN_PREVIEW_LEDGER_FILE`），无跨次陈旧数据；快照恒输出四字段。
+  并发 plan 各持独立 ledger，导出文件仅在扫描结束后由 ledger 渲染。
 
 ## 已验证干净（免重复审计）
 

@@ -227,6 +227,7 @@ mole robot <domain> <verb> [options] [< request.json]
  "risk":"safe","detail":"应用重启后自动重建"}
 ```
 - `id`：`<domain缩写>.<section>.<path短哈希>`，**仅在本次 plan 会话内有效**。
+- `bytes` 可为 **null**（测量超时的"尺寸未知"）：GUI 显示"大小未知/—"而非 0 B，汇总与 `bytes_total` 均只计已知项；insight 事件同语义。
 - `kind ∈ {cache, log, leftover, installer_pkg, project_artifact, app_bundle, app_data, launch_item}`。
 - **label 现状（M0）**：label 暂为路径原文（plan 基于 dry-run 导出构建，导出只含路径）。人性化 label（如"微信 缓存"）需核心侧在导出中携带 description，为后续增强；GUI 侧可先从路径尾段/bundle id 推断显示名。
 - **i18n 约定**：`section`、`kind`、`risk` 是稳定机器键，GUI 侧本地化其显示名；`label` 中的应用名/路径片段为原样数据不翻译；`detail` 同时携带 `detail_key` + `detail_params`（如 `{"detail_key":"rebuilt_on_relaunch"}`），GUI 优先按 key 查本地化表渲染，未知 key 时回退显示核心输出的英文 `detail` 文本。核心（shell 层）保持英文单语，不做多语言。
@@ -905,6 +906,8 @@ TestFlight 不可用（非 MAS），用 Sparkle 双通道：`beta` appcast + `st
 ## 13. ROADMAP
 
 > 估算按"1 名全职工程师 + AI 辅助"折算；并行度标注了可同时开工的轨道。M0 是一切前提；CLI 轨道（本仓库）与 App 轨道（新仓库）在 M0 后可并行。
+>
+> **当前位置（2026-08-14）**：Phase 0–3 基本完成——六页全接真实 robot/serve/watch 数据、卸载/清理/优化闭环、Onboarding+FDA、i18n 双语。Phase 4（1.0 发布件：Sparkle、公证、诊断导出、可访问性 AC、内嵌核心 CoreBundle 拷贝阶段）未开始。上游 CLI main 已同步至 2026-08-14。
 
 ### Phase 0 — 协议与地基（M0，约 2–3 周）【CLI 仓库】
 

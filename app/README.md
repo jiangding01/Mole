@@ -2,17 +2,20 @@
 
 原生 macOS GUI，基于 Mole CLI 核心构建。完整技术方案见 [`docs/MAC_APP_DESIGN.md`](../docs/MAC_APP_DESIGN.md)，UI 规格见 [`docs/UI_DESIGN_PROMPT.md`](../docs/UI_DESIGN_PROMPT.md)。
 
-> 状态：工程骨架（Phase 1 起点），已在 macOS 上编译验证（MoleKit 8 测试全绿 + App target 构建通过）。
-> robot 协议层（CLI 侧，M0）的 `clean plan/apply` 已落地并经真机端到端验证
-> （`bin/robot.sh` + `lib/core/robot.sh`，`tests/robot_core.bats` 15 用例）；
-> 剩余 domain（apps/history/whitelist）按 ROADMAP 推进，契约 golden 文件随之接入。
+> 状态（2026-08-14）：**六大页面全部接通真实数据**——智能扫描/清理（robot
+> clean plan+apply，进度来自预览 ledger 轮询）、软件三 tab（卸载 apps
+> plan/apply + 更新 brew cask + 启动项 launchitems）、优化（catalog 注册表
+> 21 任务）、分析（`analyze --serve` 流式 Treemap）、状态（`status --watch`
+> NDJSON）。历史/设置 sheet、首启 Onboarding（FDA 轮询）、FDA 横幅、
+> i18n（zh-Hans/en 运行时切换）均已落地。ROADMAP Phase 0–3 基本完成，
+> Phase 4（1.0 发布：Sparkle/公证/诊断导出/可访问性）未开始。
+> 上游 CLI main 已于 2026-08-14 合并同步（含 robot 层适配，见
+> `docs/ROBOT_AUDIT_FOLLOWUP.md` 余留项）。
 >
-> **UI 开发已解冻（2026-07-07）**：Claude Design 设计稿已交付并入库——
-> `design/mole-dc/Mole.dc.html`（高保真交互原型，**拿不准的细节以它的实际
-> 运行效果为准**，浏览器直接打开可交互）+ `HANDOFF.md`（交接说明，实现前必读，
-> 尤其 §3 信任承诺、§5 全部数据是 mock 必须接真实 API、§6 TR 词表用作 i18n 起点）。
-> 设计 token 已提取进 `DesignSystem/Theme.swift`（Look×Accent 双轴），
-> 光谱环引擎已按设计参数移植为 `DesignSystem/SpectrumRingView.swift`。
+> 设计真源：`design/mole-dc/Mole.dc.html`（高保真交互原型，**拿不准的细节
+> 以它的实际运行效果为准**，浏览器直接打开可交互）+ `HANDOFF.md`（实现前
+> 必读，尤其 §3 信任承诺）。设计 token 在 `DesignSystem/Theme.swift`
+> （Look×Accent 双轴），光谱环引擎在 `DesignSystem/SpectrumRingView.swift`。
 > `support.js` 是原型运行时，仅供参考，**不移植**。
 
 ## 技术栈
