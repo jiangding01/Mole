@@ -328,14 +328,14 @@ func TestCollectorOverridesFastDisksWithCorrectedCache(t *testing.T) {
 	collector := NewCollector(ProcessWatchOptions{})
 	collector.cacheEnrichment(MetricsSnapshot{
 		Disks: []DiskStatus{
-			{Mount: "/", Total: 1000, Used: 600, UsedPercent: 60, External: false},
+			{Mount: "/", Total: 1000, Used: 600, UsedPercent: 60, External: false, SmartStatus: smartStatusVerified},
 		},
 	})
 
 	// Fast path produced raw statfs numbers that ignore APFS purgeable space.
 	next := MetricsSnapshot{
 		Disks: []DiskStatus{
-			{Mount: "/", Total: 1000, Used: 900, UsedPercent: 90, External: true},
+			{Mount: "/", Total: 1000, Used: 900, UsedPercent: 90, External: true, SmartStatus: smartStatusUnknown},
 		},
 	}
 
@@ -344,7 +344,8 @@ func TestCollectorOverridesFastDisksWithCorrectedCache(t *testing.T) {
 	if len(next.Disks) != 1 {
 		t.Fatalf("expected one disk, got %#v", next.Disks)
 	}
-	if next.Disks[0].Used != 600 || next.Disks[0].UsedPercent != 60 || next.Disks[0].External {
+	if next.Disks[0].Used != 600 || next.Disks[0].UsedPercent != 60 ||
+		next.Disks[0].External || next.Disks[0].SmartStatus != smartStatusVerified {
 		t.Fatalf("expected corrected disk values from cache, got %#v", next.Disks[0])
 	}
 }

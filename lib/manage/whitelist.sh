@@ -4,18 +4,27 @@
 
 set -euo pipefail
 
+optimize_whitelist_pattern_is_retired() {
+    case "$1" in
+        dock_refresh | memory_pressure_relief) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Get script directory and source dependencies
 _MOLE_MANAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_MOLE_MANAGE_DIR/../core/common.sh"
 source "$_MOLE_MANAGE_DIR/../ui/menu_simple.sh"
+source "$_MOLE_MANAGE_DIR/../optimize/catalog.sh"
 
 # Config file paths
 readonly WHITELIST_CONFIG_CLEAN="$HOME/.config/mole/whitelist"
 readonly WHITELIST_CONFIG_OPTIMIZE="$HOME/.config/mole/whitelist_optimize"
 readonly WHITELIST_CONFIG_OPTIMIZE_LEGACY="$HOME/.config/mole/whitelist_checks"
 
-# Default whitelist patterns defined in lib/core/common.sh:
+# Default / safety whitelist patterns defined in lib/core/base.sh:
 # - DEFAULT_WHITELIST_PATTERNS
+# - SAFETY_WHITELIST_PATTERNS (always merged for clean mode)
 # - FINDER_METADATA_SENTINEL
 
 # Save whitelist patterns to config (defaults to "clean" for legacy callers)
@@ -51,6 +60,11 @@ save_whitelist_patterns() {
     if [[ ${#patterns[@]} -gt 0 ]]; then
         local -a unique_patterns=()
         for pattern in "${patterns[@]}"; do
+            # Optimize also accepts path patterns for diagnostic exclusions, so
+            # migrate only task IDs that this release explicitly retired.
+            if [[ "$mode" == "optimize" ]] && optimize_whitelist_pattern_is_retired "$pattern"; then
+                continue
+            fi
             local duplicate="false"
             if [[ ${#unique_patterns[@]} -gt 0 ]]; then
                 for existing in "${unique_patterns[@]}"; do
@@ -93,10 +107,15 @@ VS Code runtime cache|$HOME/Library/Application Support/Code/Cache/*|ide_cache
 VS Code extension and update cache|$HOME/Library/Application Support/Code/CachedData/*|ide_cache
 VS Code system cache (Cursor, VSCodium)|$HOME/Library/Caches/com.microsoft.VSCode/*|ide_cache
 Cursor editor cache|$HOME/Library/Caches/com.todesktop.230313mzl4w4u92/*|ide_cache
+LM Studio app cache|$HOME/Library/Caches/com.lmstudio.lmstudio/*|ai_ml_cache
+Codex Desktop update staging|$HOME/Library/Caches/com.openai.codex/org.sparkle-project.Sparkle/Installation|ai_ml_cache
+Chrome on-device AI models|$HOME/Library/Application Support/Google/Chrome/OptGuideOnDevice*/*|ai_ml_cache
+Chrome optimization guide models|$HOME/Library/Application Support/Google/Chrome/optimization_guide_model_store/*|ai_ml_cache
 Bazel build cache|$HOME/.cache/bazel/*|compiler_cache
 Go build cache|$HOME/Library/Caches/go-build/*|compiler_cache
 Go module cache|$HOME/go/pkg/mod/*|compiler_cache
 Rust Cargo registry cache|$HOME/.cargo/registry/cache/*|compiler_cache
+Rust Cargo extracted sources|$HOME/.cargo/registry/src/*|compiler_cache
 Rust documentation cache|$HOME/.rustup/toolchains/*/share/doc/*|compiler_cache
 Rustup toolchain downloads|$HOME/.rustup/downloads/*|compiler_cache
 ccache compiler cache|$HOME/.ccache/*|compiler_cache
@@ -144,6 +163,7 @@ Surge proxy cache|$HOME/Library/Caches/com.nssurge.surge-mac/*|network_tools
 Surge configuration and data|$HOME/Library/Application Support/com.nssurge.surge-mac/*|network_tools
 Docker BuildX cache|$HOME/.docker/buildx/cache/*|container_cache
 Podman container cache|$HOME/.local/share/containers/cache/*|container_cache
+Tart OCI/IPSW cache|$HOME/.tart/cache|container_cache
 Font cache|$HOME/Library/Caches/com.apple.FontRegistry/*|system_cache
 Spotlight metadata cache|$HOME/Library/Caches/com.apple.spotlight/*|system_cache
 CloudKit cache|$HOME/Library/Caches/CloudKit/*|system_cache
@@ -158,30 +178,12 @@ EOF
 # Get all optimize items with their patterns
 get_optimize_whitelist_items() {
     # Format: "display_name|pattern|category"
-    cat << 'EOF'
-DNS & Spotlight Check|system_maintenance|optimize_task
-Finder Cache Refresh|cache_refresh|optimize_task
-App State Cleanup|saved_state_cleanup|optimize_task
-Broken Config Repair|fix_broken_configs|optimize_task
-Network Cache Refresh|network_optimization|optimize_task
-Database Optimization|sqlite_vacuum|optimize_task
-LaunchServices Repair|launch_services_rebuild|optimize_task
-Dock Refresh|dock_refresh|optimize_task
-Prevent Finder .DS_Store|prevent_network_dsstore|optimize_task
-Memory Optimization|memory_pressure_relief|optimize_task
-Network Stack Refresh|network_stack_optimize|optimize_task
-Permission Repair|disk_permissions_repair|optimize_task
-Spotlight Optimization|spotlight_index_optimize|optimize_task
-Spotlight Orphan Rules|spotlight_orphan_rules_cleanup|optimize_task
-Periodic Maintenance|periodic_maintenance|optimize_task
-Shared File Lists|shared_file_list_repair|optimize_task
-Disk Health|disk_verify|optimize_task
-Login Items Audit|login_items_audit|optimize_task
-Quarantine Database Cleanup|quarantine_cleanup|optimize_task
-Launch Agents Cleanup|launch_agents_cleanup|optimize_task
-Notifications|notification_cleanup|optimize_task
-Usage Data|coreduet_cleanup|optimize_task
-EOF
+    local index
+    for ((index = 0; index < ${#MOLE_OPTIMIZE_ACTIONS[@]}; index++)); do
+        printf '%s|%s|optimize_task\n' \
+            "${MOLE_OPTIMIZE_WHITELIST_NAMES[$index]}" \
+            "${MOLE_OPTIMIZE_ACTIONS[$index]}"
+    done
 }
 
 patterns_equivalent() {
@@ -240,6 +242,11 @@ load_whitelist() {
     if [[ ${#patterns[@]} -gt 0 ]]; then
         local -a unique_patterns=()
         for pattern in "${patterns[@]}"; do
+            # Preserve custom diagnostic path patterns; only explicit retired
+            # task IDs are migrated away.
+            if [[ "$mode" == "optimize" ]] && optimize_whitelist_pattern_is_retired "$pattern"; then
+                continue
+            fi
             local duplicate="false"
             if [[ ${#unique_patterns[@]} -gt 0 ]]; then
                 for existing in "${unique_patterns[@]}"; do
@@ -252,16 +259,30 @@ load_whitelist() {
             [[ "$duplicate" == "true" ]] && continue
             unique_patterns+=("$pattern")
         done
-        CURRENT_WHITELIST_PATTERNS=("${unique_patterns[@]}")
-        WHITELIST_PATTERNS=("${unique_patterns[@]}")
+        if [[ ${#unique_patterns[@]} -gt 0 ]]; then
+            CURRENT_WHITELIST_PATTERNS=("${unique_patterns[@]}")
+            WHITELIST_PATTERNS=("${unique_patterns[@]}")
+        else
+            CURRENT_WHITELIST_PATTERNS=()
+            WHITELIST_PATTERNS=()
+        fi
 
         # Migrate legacy optimize config to the new path automatically
         if [[ "$mode" == "optimize" && "$using_legacy" == "true" && "$config_file" != "$WHITELIST_CONFIG_OPTIMIZE" ]]; then
-            save_whitelist_patterns "$mode" "${CURRENT_WHITELIST_PATTERNS[@]}"
+            if [[ ${#CURRENT_WHITELIST_PATTERNS[@]} -gt 0 ]]; then
+                save_whitelist_patterns "$mode" "${CURRENT_WHITELIST_PATTERNS[@]}"
+            else
+                save_whitelist_patterns "$mode"
+            fi
         fi
     else
         CURRENT_WHITELIST_PATTERNS=()
         WHITELIST_PATTERNS=()
+    fi
+
+    # Hard safety defaults always reach existing clean whitelist files (#1396).
+    if [[ "$mode" == "clean" ]]; then
+        ensure_safety_whitelist_patterns
     fi
 }
 

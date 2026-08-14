@@ -178,8 +178,13 @@ func (s *serveState) handleScan(req serveRequest, bypassCache bool) {
 	defer s.cancels.Delete(req.ID)
 
 	events := make(chan liveScanEventMsg, max(len(targets)*4, 8))
+	// rescan 绕过磁盘缓存（对齐 TUI 的 scanBypassingCacheCmd 语义）；普通 scan 复用。
+	cachePolicy := scanCacheReuse
+	if bypassCache {
+		cachePolicy = scanCacheBypass
+	}
 	go runLiveScan(ctx, 0, req.Path, entries, targets, totalSize, totalFiles, largeFiles,
-		limiter, &filesScanned, &dirsScanned, &bytesScanned, &currentPath, events)
+		limiter, &filesScanned, &dirsScanned, &bytesScanned, &currentPath, events, cachePolicy)
 
 	// 进度节流：200ms 一条（设计性能策略）
 	progressDone := make(chan struct{})

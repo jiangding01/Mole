@@ -32,7 +32,7 @@ files_cleaned=0
 total_size_cleaned=0
 
 readonly MOLE_UNINSTALL_META_CACHE_DIR="$HOME/.cache/mole"
-readonly MOLE_UNINSTALL_META_CACHE_FILE="$MOLE_UNINSTALL_META_CACHE_DIR/uninstall_app_metadata_v1"
+readonly MOLE_UNINSTALL_META_CACHE_FILE="$MOLE_UNINSTALL_META_CACHE_DIR/uninstall_app_metadata_v2"
 readonly MOLE_UNINSTALL_META_CACHE_LOCK="${MOLE_UNINSTALL_META_CACHE_FILE}.lock"
 readonly MOLE_UNINSTALL_META_REFRESH_TTL=604800 # 7 days
 readonly MOLE_UNINSTALL_EPOCH_FLOOR=978307200
@@ -40,6 +40,11 @@ readonly MOLE_UNINSTALL_EPOCH_FLOOR=978307200
 # cold Spotlight.
 readonly MOLE_UNINSTALL_INLINE_MDLS_DISPLAY_TIMEOUT_SEC="${MOLE_UNINSTALL_INLINE_MDLS_DISPLAY_TIMEOUT_SEC:-0.04}"
 readonly MOLE_UNINSTALL_INLINE_MDLS_SIZE_TIMEOUT_SEC="${MOLE_UNINSTALL_INLINE_MDLS_SIZE_TIMEOUT_SEC:-0.04}"
+# Bounded inline du fallback for cold rows whose quick mdls probe missed
+# (new apps are often not yet Spotlight-indexed). Only enabled when the
+# cold-row count is small so a fully cold first scan keeps the fast path.
+readonly MOLE_UNINSTALL_INLINE_DU_SIZE_TIMEOUT_SEC="${MOLE_UNINSTALL_INLINE_DU_SIZE_TIMEOUT_SEC:-2}"
+readonly MOLE_UNINSTALL_INLINE_DU_MAX_COLD_ROWS="${MOLE_UNINSTALL_INLINE_DU_MAX_COLD_ROWS:-20}"
 
 uninstall_normalize_size_display() {
     local size="${1:-}"
@@ -68,10 +73,29 @@ uninstall_quick_app_size_kb() {
         return 0
     }
 
-    local logical_size
-    logical_size=$(run_with_timeout "$MOLE_UNINSTALL_INLINE_MDLS_SIZE_TIMEOUT_SEC" mdls -name kMDItemLogicalSize -raw "$app_path" 2> /dev/null || echo "")
-    if [[ "$logical_size" =~ ^[0-9]+$ && "$logical_size" -gt 0 ]]; then
-        echo $(((logical_size + 1023) / 1024))
+    local physical_size
+    physical_size=$(run_with_timeout "$MOLE_UNINSTALL_INLINE_MDLS_SIZE_TIMEOUT_SEC" mdls -name kMDItemPhysicalSize -raw "$app_path" 2> /dev/null || echo "")
+    if [[ "$physical_size" =~ ^[0-9]+$ && "$physical_size" -gt 0 ]]; then
+        echo $(((physical_size + 1023) / 1024))
+        return 0
+    fi
+
+    echo "0"
+}
+
+# This bounded physical-size fallback stands in until the deferred refresh
+# can query Spotlight metadata.
+uninstall_inline_du_size_kb() {
+    local app_path="$1"
+    [[ -n "$app_path" && -d "$app_path" ]] || {
+        echo "0"
+        return 0
+    }
+
+    local du_size_kb
+    du_size_kb=$(run_with_timeout "$MOLE_UNINSTALL_INLINE_DU_SIZE_TIMEOUT_SEC" du -skP "$app_path" 2> /dev/null | awk '{print $1; exit}') || du_size_kb=""
+    if [[ "$du_size_kb" =~ ^[0-9]+$ && "$du_size_kb" -gt 0 ]]; then
+        echo "$du_size_kb"
         return 0
     fi
 
@@ -249,6 +273,9 @@ start_uninstall_metadata_refresh() {
             ((worker_idx++))
             local worker_output="${updates_file}.${worker_idx}"
 
+            # stdin from /dev/null: these workers never read the terminal, and a
+            # background job that keeps the tty on stdin lets its timeout helpers
+            # take the terminal away from the foreground prompt (#1222).
             (
                 local last_used_epoch=0
                 local metadata_date
@@ -266,7 +293,7 @@ start_uninstall_metadata_refresh() {
                 [[ "$size_kb" =~ ^[0-9]+$ ]] || size_kb=0
 
                 printf "%s|%s|%s|%s|%s|%s|%s\n" "$app_path" "${app_mtime:-0}" "$size_kb" "${last_used_epoch:-0}" "$now_epoch" "$bundle_id" "$display_name" > "$worker_output"
-            ) &
+            ) < /dev/null &
             worker_pids+=($!)
 
             if ((${#worker_pids[@]} >= max_parallel)); then
@@ -321,7 +348,14 @@ start_uninstall_metadata_refresh() {
         uninstall_release_metadata_lock "$MOLE_UNINSTALL_META_CACHE_LOCK"
         rm -f "$updates_file" "$refresh_merged_file"
         rm -f "$refresh_file" 2> /dev/null || true
-    ) > /dev/null 2>&1 &
+        # Redirect stdin from /dev/null so the perl timeout fallback does not see
+        # a tty on stdin and hand the controlling terminal to its timed child.
+        # This background refresh (and its nested workers, which inherit this
+        # stdin) never needs the terminal; leaving stdin as the tty lets a worker
+        # steal the foreground process group and stop the foreground prompt with
+        # SIGTTIN (issue #1222). The interactive sudo handoff (#1201) is on
+        # non-background call sites and is unaffected.
+    ) > /dev/null 2>&1 < /dev/null &
     disown "$!" 2> /dev/null || true
 
 }
@@ -432,17 +466,17 @@ uninstall_app_is_background_only() {
     return 1
 }
 
-uninstall_app_is_top_level_onedrive() {
+uninstall_app_is_directly_in_search_root() {
     local app_path="$1"
-    local bundle_id="${2:-}"
+    local app_parent="${app_path%/*}"
+    local app_dir
 
-    [[ "$bundle_id" == com.microsoft.OneDrive* ]] || return 1
-
-    case "$app_path" in
-        /Applications/OneDrive.app | "$HOME"/Applications/OneDrive.app)
+    while IFS= read -r app_dir; do
+        [[ -n "$app_dir" ]] || continue
+        if [[ "$app_parent" == "$app_dir" ]]; then
             return 0
-            ;;
-    esac
+        fi
+    done < <(uninstall_print_app_search_dirs)
 
     return 1
 }
@@ -457,7 +491,7 @@ uninstall_app_is_currently_eligible() {
         return 1
     fi
 
-    if uninstall_app_is_background_only "$app_path" && ! uninstall_app_is_top_level_onedrive "$app_path" "$bundle_id"; then
+    if uninstall_app_is_background_only "$app_path" && ! uninstall_app_is_directly_in_search_root "$app_path"; then
         return 1
     fi
 
@@ -488,13 +522,14 @@ uninstall_print_app_paths_with_mtime() {
 }
 
 uninstall_app_inventory_fingerprint() {
-    local app_dir app_path app_mtime pkg_app_path
+    local app_dir app_path app_mtime info_mtime pkg_app_path
 
     {
         while IFS= read -r pkg_app_path; do
             [[ -n "$pkg_app_path" && -d "$pkg_app_path" ]] || continue
             app_mtime=$(get_file_mtime "$pkg_app_path")
-            printf '%s|%s\n' "$pkg_app_path" "${app_mtime:-0}"
+            info_mtime=$(get_file_mtime "$pkg_app_path/Contents/Info.plist")
+            printf '%s|%s|%s\n' "$pkg_app_path" "${app_mtime:-0}" "${info_mtime:-0}"
         done < <(pkg_receipt_nonstandard_app_paths)
 
         while IFS= read -r app_dir; do
@@ -502,10 +537,40 @@ uninstall_app_inventory_fingerprint() {
             while IFS=$'\t' read -r app_mtime app_path; do
                 [[ -n "$app_path" ]] || continue
                 uninstall_should_skip_app_path "$app_path" && continue
-                printf '%s|%s\n' "$app_path" "${app_mtime:-0}"
+                info_mtime=$(get_file_mtime "$app_path/Contents/Info.plist")
+                printf '%s|%s|%s\n' "$app_path" "${app_mtime:-0}" "${info_mtime:-0}"
             done < <(uninstall_print_app_paths_with_mtime "$app_dir")
         done < <(uninstall_print_app_search_dirs)
-    } | sort -u
+    } | LC_ALL=C sort -u
+}
+
+# The in-session app index remains valid when the live inventory only loses
+# rows. load_applications rechecks path existence before displaying each row.
+# New rows and changed mtimes must rebuild the index so protection and bundle
+# metadata are evaluated again.
+uninstall_inventory_can_reuse_cached_apps() {
+    local cached_inventory="$1"
+    local current_inventory="$2"
+    local additions=""
+    local removals=""
+
+    [[ -n "$cached_inventory" && -n "$current_inventory" ]] || return 1
+    additions=$(LC_ALL=C comm -13 \
+        <(printf '%s\n' "$cached_inventory") \
+        <(printf '%s\n' "$current_inventory")) || return 1
+    [[ -z "$additions" ]] || return 1
+
+    removals=$(LC_ALL=C comm -23 \
+        <(printf '%s\n' "$cached_inventory") \
+        <(printf '%s\n' "$current_inventory")) || return 1
+    local removed_row removed_path
+    while IFS= read -r removed_row; do
+        [[ -n "$removed_row" ]] || continue
+        removed_path="${removed_row%|*}"
+        removed_path="${removed_path%|*}"
+        [[ ! -e "$removed_path" ]] || return 1
+    done <<< "$removals"
+    return 0
 }
 
 # Internal helpers for scan_applications. They read and write locals
@@ -628,6 +693,15 @@ _scan_partition_cache() {
 _scan_resolve_uncached() {
     local app_count=0
     local total_apps=${#app_data_tuples[@]}
+    # Cold rows are usually the handful of newly installed or updated apps;
+    # give those a bounded du when the quick mdls probe misses so the size
+    # shows on first paint. A fully cold cache (first run) exceeds the cap
+    # and keeps the fast path; the deferred refresh still fills the cache.
+    local inline_du_fallback=0
+    if [[ "$MOLE_UNINSTALL_INLINE_DU_MAX_COLD_ROWS" =~ ^[0-9]+$ ]] &&
+        ((total_apps > 0 && total_apps <= MOLE_UNINSTALL_INLINE_DU_MAX_COLD_ROWS)); then
+        inline_du_fallback=1
+    fi
     local max_parallel
     max_parallel=$(get_optimal_parallel_jobs "io")
     if [[ $max_parallel -lt 8 ]]; then
@@ -659,18 +733,26 @@ _scan_resolve_uncached() {
         quick_size_kb=$(uninstall_quick_app_size_kb "$app_path")
         [[ "$quick_size_kb" =~ ^[0-9]+$ ]] || quick_size_kb=0
 
+        if [[ "$quick_size_kb" -eq 0 && "${inline_du_fallback:-0}" == "1" ]]; then
+            quick_size_kb=$(uninstall_inline_du_size_kb "$app_path")
+            [[ "$quick_size_kb" =~ ^[0-9]+$ ]] || quick_size_kb=0
+        fi
+
         echo "${app_path}|${display_name}|${bundle_id}|${app_mtime}|${quick_size_kb}" >> "$output_file"
     }
 
     update_scan_status "Scanning applications..." "0" "$total_apps"
 
     # Skip Pass 2 when the warm cache already wrote every row to $scan_raw_file.
-    # Also avoids expanding an empty array — macOS bash 3.2 (the /bin/bash that
+    # Also avoids expanding an empty array; macOS bash 3.2 (the /bin/bash that
     # this script targets) treats `"${empty[@]}"` as unbound under `set -u`.
     if ((total_apps > 0)); then
         for app_data_tuple in "${app_data_tuples[@]}"; do
             ((app_count++))
-            process_app_metadata "$app_data_tuple" "$scan_raw_file" &
+            # Redirect stdin from /dev/null so the perl timeout fallback used by
+            # process_app_metadata does not hand the controlling terminal to its
+            # timed mdls/du child from this background worker (issue #1222).
+            process_app_metadata "$app_data_tuple" "$scan_raw_file" < /dev/null &
             pids+=($!)
             update_scan_status "Scanning applications..." "$app_count" "$total_apps"
 
@@ -1131,13 +1213,38 @@ load_applications() {
     return 0
 }
 
+# Keep the scan and selector on one alternate screen so restoring the terminal
+# also restores the primary-screen cursor to the command's original row.
+start_uninstall_interactive_screen() {
+    if [[ -t 1 && -t 2 && "${MOLE_ALT_SCREEN_ACTIVE:-}" != "1" ]]; then
+        enter_alt_screen
+        export MOLE_ALT_SCREEN_ACTIVE=1
+        export MOLE_MANAGED_ALT_SCREEN=1
+        printf '\033[2J\033[H' >&2
+    fi
+}
+
+stop_uninstall_interactive_screen() {
+    if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+        leave_alt_screen
+    fi
+    unset MOLE_ALT_SCREEN_ACTIVE MOLE_MANAGED_ALT_SCREEN
+}
+
+# Surface an abort during scan/load/selection instead of returning to the
+# prompt as if the run had succeeded. Interactive mode renders on an alternate
+# screen, so the reason has to be printed after the screen is restored (#1339).
+uninstall_abort() {
+    local reason="$1"
+    stop_uninstall_interactive_screen
+    show_cursor
+    log_error "Uninstall aborted: $reason"
+}
+
 # Cleanup: restore cursor and kill keepalive.
 cleanup() {
     local exit_code="${1:-$?}"
-    if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
-        leave_alt_screen
-        unset MOLE_ALT_SCREEN_ACTIVE
-    fi
+    stop_uninstall_interactive_screen
     if [[ -n "${sudo_keepalive_pid:-}" ]]; then
         kill "$sudo_keepalive_pid" 2> /dev/null || true
         wait "$sudo_keepalive_pid" 2> /dev/null || true
@@ -1158,6 +1265,52 @@ match_apps_by_name() {
     local -a search_terms=("$@")
     selected_apps=()
     local -a matched_indices=()
+
+    # `mo uninstall Tor Browser` arrives as two words. Matching each word
+    # alone sent "Tor" into a substring hit on WebSTORm while the app the
+    # user actually named sat in the list (#1365). When the words joined
+    # with spaces exactly match an installed app's display or directory
+    # name, that is the query, UNLESS every word already exactly names its
+    # own installed app: with Foo.app, Bar.app, and "Foo Bar.app" all
+    # present, `mo uninstall Foo Bar` keeps its original two-app meaning
+    # rather than silently collapsing into the third.
+    if [[ ${#search_terms[@]} -gt 1 ]]; then
+        local every_word_exact=true
+        local word word_lower word_app word_hit
+        for word in "${search_terms[@]}"; do
+            word_lower=$(echo "$word" | tr '[:upper:]' '[:lower:]')
+            word_hit=false
+            for word_app in "${apps_data[@]}"; do
+                IFS='|' read -r epoch app_path app_name bundle_id size last_used size_kb <<< "$word_app"
+                local word_name_lower word_dir_lower
+                word_name_lower=$(echo "$app_name" | tr '[:upper:]' '[:lower:]')
+                word_dir_lower=$(basename "$app_path" .app | tr '[:upper:]' '[:lower:]')
+                if [[ "$word_name_lower" == "$word_lower" || "$word_dir_lower" == "$word_lower" ]]; then
+                    word_hit=true
+                    break
+                fi
+            done
+            if [[ "$word_hit" == "false" ]]; then
+                every_word_exact=false
+                break
+            fi
+        done
+        if [[ "$every_word_exact" == "false" ]]; then
+            local joined_lower
+            joined_lower=$(echo "$*" | tr '[:upper:]' '[:lower:]')
+            local joined_app
+            for joined_app in "${apps_data[@]}"; do
+                IFS='|' read -r epoch app_path app_name bundle_id size last_used size_kb <<< "$joined_app"
+                local joined_name_lower joined_dir_lower
+                joined_name_lower=$(echo "$app_name" | tr '[:upper:]' '[:lower:]')
+                joined_dir_lower=$(basename "$app_path" .app | tr '[:upper:]' '[:lower:]')
+                if [[ "$joined_name_lower" == "$joined_lower" || "$joined_dir_lower" == "$joined_lower" ]]; then
+                    selected_apps=("$joined_app")
+                    return 0
+                fi
+            done
+        fi
+    fi
 
     for search_term in "${search_terms[@]}"; do
         local search_lower
@@ -1466,13 +1619,16 @@ uninstall_robot_plan() {
 uninstall_list_apps() {
     local apps_file=""
     if ! apps_file=$(scan_applications); then
+        uninstall_abort "could not complete the application scan"
         return 1
     fi
     if [[ ! -f "$apps_file" ]]; then
+        uninstall_abort "application scan produced no list"
         return 1
     fi
     if ! load_applications "$apps_file"; then
         rm -f "$apps_file"
+        uninstall_abort "no applications available for uninstallation"
         return 1
     fi
     rm -f "$apps_file"
@@ -1645,16 +1801,16 @@ main() {
     if [[ ${#app_name_args[@]} -gt 0 ]]; then
         local apps_file=""
         if ! apps_file=$(scan_applications); then
-            show_cursor
+            uninstall_abort "could not complete the application scan"
             return 1
         fi
         if [[ ! -f "$apps_file" ]]; then
-            show_cursor
+            uninstall_abort "application scan produced no list"
             return 1
         fi
         if ! load_applications "$apps_file"; then
             rm -f "$apps_file"
-            show_cursor
+            uninstall_abort "no applications available for uninstallation"
             return 1
         fi
 
@@ -1698,8 +1854,15 @@ main() {
     local first_scan=true
     local cached_apps_file=""
     local cached_inventory_fingerprint=""
+    unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN MOLE_ALT_SCREEN_ACTIVE
     while true; do
-        unset MOLE_INLINE_LOADING MOLE_MANAGED_ALT_SCREEN
+        unset MOLE_INLINE_LOADING
+
+        # Keep scanning and selection on one alternate screen. Entering the
+        # selector only after the scan leaves the primary-screen cursor below
+        # the scan progress; restoring it on cancel then creates a large blank
+        # gap before the next shell prompt (#1194).
+        start_uninstall_interactive_screen
 
         if [[ $first_scan == false ]]; then
             echo -e "${GRAY}Checking application list...${NC}" >&2
@@ -1711,9 +1874,10 @@ main() {
         if [[ -n "$cached_apps_file" && -f "$cached_apps_file" && -n "$cached_inventory_fingerprint" ]]; then
             local current_inventory_fingerprint
             current_inventory_fingerprint=$(uninstall_app_inventory_fingerprint 2> /dev/null || echo "")
-            if [[ -n "$current_inventory_fingerprint" && "$current_inventory_fingerprint" == "$cached_inventory_fingerprint" ]]; then
+            if uninstall_inventory_can_reuse_cached_apps "$cached_inventory_fingerprint" "$current_inventory_fingerprint"; then
                 apps_file="$cached_apps_file"
                 reused_app_cache=true
+                cached_inventory_fingerprint="$current_inventory_fingerprint"
             fi
         fi
 
@@ -1722,7 +1886,16 @@ main() {
                 rm -f "$cached_apps_file" 2> /dev/null || true
             fi
 
+            local scan_abort_reason=""
             if ! apps_file=$(scan_applications); then
+                scan_abort_reason="could not complete the application scan"
+            elif [[ ! -f "$apps_file" ]]; then
+                scan_abort_reason="application scan produced no list"
+            fi
+            if [[ -n "$scan_abort_reason" ]]; then
+                uninstall_abort "$scan_abort_reason"
+                rm -f "$apps_file"
+                [[ "$apps_file" == "$cached_apps_file" ]] && cached_apps_file=""
                 return 1
             fi
 
@@ -1730,13 +1903,10 @@ main() {
             cached_inventory_fingerprint=$(uninstall_app_inventory_fingerprint 2> /dev/null || echo "")
         fi
 
-        if [[ ! -f "$apps_file" ]]; then
-            return 1
-        fi
-
         if ! load_applications "$apps_file"; then
             rm -f "$apps_file"
             [[ "$apps_file" == "$cached_apps_file" ]] && cached_apps_file=""
+            uninstall_abort "no applications available for uninstallation"
             return 1
         fi
 
@@ -1751,15 +1921,21 @@ main() {
         set -e
 
         if [[ $exit_code -ne 0 ]]; then
-            show_cursor
-            clear_screen
-            printf '\033[2J\033[H' >&2
             rm -f "$apps_file"
             [[ "$apps_file" == "$cached_apps_file" ]] && cached_apps_file=""
-
-            return 0
+            if [[ "${_MOLE_MENU_USER_QUIT:-0}" == "1" ]]; then
+                # A deliberate q is a cancel, not a failure: leave quietly
+                # with success, matching mole's other cancel flows. Only a
+                # selector that broke gets the visible abort below.
+                stop_uninstall_interactive_screen
+                show_cursor
+                return 0
+            fi
+            uninstall_abort "application selection did not complete"
+            return 1
         fi
 
+        stop_uninstall_interactive_screen
         show_cursor
         clear_screen
         printf '\033[2J\033[H' >&2
@@ -1853,6 +2029,15 @@ main() {
 
         batch_uninstall_applications
 
+        # A nested command may have returned the controlling terminal to the
+        # parent shell. Reading while Mole is no longer the foreground process
+        # group would suspend the completed uninstall with SIGTTIN. The removal
+        # is already finished, so exit cleanly instead of touching terminal input.
+        if ! mole_tty_is_foreground; then
+            show_cursor
+            return 0
+        fi
+
         local _countdown=5
         local _key=""
         local _pressed=false
@@ -1877,4 +2062,7 @@ main() {
     done
 }
 
-main "$@"
+# Run only when executed; sourcing loads definitions for tests. Kept on one
+# line because test harnesses slice this file with sed/awk anchored on the
+# `main "$@"` sentinel, and a multi-line guard leaves them an unclosed `if`.
+[[ "${BASH_SOURCE[0]}" != "$0" ]] || main "$@"

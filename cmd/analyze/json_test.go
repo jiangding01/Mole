@@ -99,3 +99,28 @@ func TestJSONEntriesFromDirEntriesMarksOverviewInsights(t *testing.T) {
 		t.Fatalf("expected entry to be marked as insight")
 	}
 }
+
+func TestPerformOverviewScanForJSONSchemaWithInjectedEntries(t *testing.T) {
+	root := t.TempDir()
+	payload := filepath.Join(root, "payload")
+	if err := os.WriteFile(payload, []byte("overview"), 0o644); err != nil {
+		t.Fatalf("write overview payload: %v", err)
+	}
+
+	result := performOverviewScanForJSONWithEntries("/", nil, []dirEntry{{
+		Name:  "Fixture",
+		Path:  root,
+		IsDir: true,
+		Size:  -1,
+	}})
+
+	if result.Path != "/" || !result.Overview {
+		t.Fatalf("unexpected overview identity: path=%q overview=%v", result.Path, result.Overview)
+	}
+	if result.Entries == nil {
+		t.Fatal("overview entries must be a JSON list, not nil")
+	}
+	if result.TotalSize <= 0 {
+		t.Fatalf("expected measured overview size, got %d", result.TotalSize)
+	}
+}

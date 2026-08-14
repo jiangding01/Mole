@@ -29,25 +29,10 @@ func main() {
 		return
 	}
 
-	target := os.Getenv("MO_ANALYZE_PATH")
-	if target == "" && len(flag.Args()) > 0 {
-		target = flag.Args()[0]
-	}
-
-	var abs string
-	var isOverview bool
-
-	if target == "" {
-		isOverview = true
-		abs = "/"
-	} else {
-		var err error
-		abs, err = filepath.Abs(target)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "cannot resolve %q: %v\n", target, err)
-			os.Exit(1)
-		}
-		isOverview = false
+	abs, isOverview, err := resolveScanTarget(os.Getenv("MO_ANALYZE_PATH"), flag.Args())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 
 	go pruneAnalyzerCache()
@@ -56,6 +41,29 @@ func main() {
 	} else {
 		runTUIMode(abs, isOverview)
 	}
+}
+
+// resolveScanTarget decides which scan a given invocation asks for. Kept
+// separate from main so the overview-vs-directory routing has a test that fails
+// when it flips: an end-to-end overview scan measures the real /Applications
+// and /Library, which cost 106s of a single CI test file's 134s.
+func resolveScanTarget(envPath string, args []string) (string, bool, error) {
+	target := envPath
+	if target == "" && len(args) > 0 {
+		target = args[0]
+	}
+
+	// No explicit target means the machine-wide overview, not the root
+	// directory: "/" is only where the overview rows are anchored.
+	if target == "" {
+		return "/", true, nil
+	}
+
+	abs, err := filepath.Abs(target)
+	if err != nil {
+		return "", false, fmt.Errorf("cannot resolve %q: %v", target, err)
+	}
+	return abs, false, nil
 }
 
 func runTUIMode(path string, isOverview bool) {
@@ -149,15 +157,19 @@ func createOverviewEntriesWithInsights(insightEntries []dirEntry) []dirEntry {
 		}
 	}
 
-	entries = append(entries,
-		dirEntry{Name: "Applications", Path: "/Applications", IsDir: true, Size: -1},
-		dirEntry{Name: "System Library", Path: "/Library", IsDir: true, Size: -1},
-	)
+	entries = append(entries, systemOverviewRoots()...)
 
-	// Hidden space insights — paths that silently accumulate disk usage.
+	// Hidden space insights: paths that silently accumulate disk usage.
 	entries = append(entries, insightEntries...)
 
 	return entries
+}
+
+func systemOverviewRoots() []dirEntry {
+	return []dirEntry{
+		{Name: "Applications", Path: "/Applications", IsDir: true, Size: -1},
+		{Name: "System Library", Path: "/Library", IsDir: true, Size: -1},
+	}
 }
 
 func sumKnownEntrySizes(entries []dirEntry) int64 {

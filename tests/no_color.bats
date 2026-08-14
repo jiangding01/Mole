@@ -7,7 +7,7 @@ setup_file() {
 }
 
 @test "NO_COLOR strips ANSI escapes from base color vars" {
-	run env NO_COLOR=1 PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+	run env NO_COLOR=1 PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/base.sh"
 printf '%s' "<${GREEN}><${RED}><${YELLOW}><${BLUE}><${CYAN}><${PURPLE}><${PURPLE_BOLD}><${GRAY}><${NC}>"
@@ -17,7 +17,7 @@ EOF
 }
 
 @test "default keeps ANSI escapes in base color vars" {
-	run env -u NO_COLOR PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+	run env -u NO_COLOR PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/base.sh"
 printf '%s' "${GREEN}x${NC}"
@@ -27,7 +27,7 @@ EOF
 }
 
 @test "empty NO_COLOR keeps ANSI escapes per spec" {
-	run env NO_COLOR="" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+	run env NO_COLOR="" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/base.sh"
 printf '%s' "${RED}y${NC}"

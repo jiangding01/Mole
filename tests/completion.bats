@@ -55,28 +55,28 @@ setup() {
 @test "completion --help shows usage" {
 	run "$PROJECT_ROOT/bin/completion.sh" --help
 	[ "$status" -ne 0 ]
-	[[ "$output" == *"Usage: mole completion"* ]]
+	[[ "$output" == *"Usage: mole completion"* ]] || return 1
 	[[ "$output" == *"Auto-install"* ]]
 }
 
 @test "completion bash generates valid bash script" {
 	run "$PROJECT_ROOT/bin/completion.sh" bash
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"_mole_completions"* ]]
+	[[ "$output" == *"_mole_completions"* ]] || return 1
 	[[ "$output" == *"complete -F _mole_completions mole mo"* ]]
 }
 
 @test "completion bash script includes all commands" {
 	run "$PROJECT_ROOT/bin/completion.sh" bash
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"optimize"* ]]
-	[[ "$output" == *"clean"* ]]
-	[[ "$output" == *"uninstall"* ]]
-	[[ "$output" == *"analyze"* ]]
-	[[ "$output" == *"status"* ]]
-	[[ "$output" == *"history"* ]]
-	[[ "$output" == *"purge"* ]]
-	[[ "$output" == *"touchid"* ]]
+	[[ "$output" == *"optimize"* ]] || return 1
+	[[ "$output" == *"clean"* ]] || return 1
+	[[ "$output" == *"uninstall"* ]] || return 1
+	[[ "$output" == *"analyze"* ]] || return 1
+	[[ "$output" == *"status"* ]] || return 1
+	[[ "$output" == *"history"* ]] || return 1
+	[[ "$output" == *"purge"* ]] || return 1
+	[[ "$output" == *"touchid"* ]] || return 1
 	[[ "$output" == *"completion"* ]]
 }
 
@@ -89,17 +89,17 @@ setup() {
 @test "completion bash includes current clean, analyze, history, and purge options only" {
 	run "$PROJECT_ROOT/bin/completion.sh" bash
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"--dry-run -n --external --whitelist --debug --help -h"* ]]
-	[[ "$output" == *"--json --help -h"* ]]
-	[[ "$output" == *"--json --limit --help -h"* ]]
-	[[ "$output" == *"--paths --dry-run -n --include-empty --debug --help -h"* ]]
-	[[ "$output" != *"--select"* ]]
-	[[ "$output" != *"--categories"* ]]
+	[[ "$output" == *"--dry-run -n --external --whitelist --debug --help -h"* ]] || return 1
+	[[ "$output" == *"--json --help -h"* ]] || return 1
+	[[ "$output" == *"--json --limit --help -h"* ]] || return 1
+	[[ "$output" == *"--paths --dry-run -n --include-empty --debug --help -h"* ]] || return 1
+	[[ "$output" != *"--select"* ]] || return 1
+	[[ "$output" != *"--categories"* ]] || return 1
 	[[ "$output" != *"--exclude-paths"* ]]
 }
 
 @test "completion bash can be loaded in bash" {
-	run bash -c "eval \"\$(\"$PROJECT_ROOT/bin/completion.sh\" bash)\" && complete -p mole"
+	run /bin/bash -c "eval \"\$(\"$PROJECT_ROOT/bin/completion.sh\" bash)\" && complete -p mole"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"_mole_completions"* ]]
 }
@@ -107,36 +107,36 @@ setup() {
 @test "completion zsh generates valid zsh script" {
 	run "$PROJECT_ROOT/bin/completion.sh" zsh
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"#compdef mole mo"* ]]
+	[[ "$output" == *"#compdef mole mo"* ]] || return 1
 	[[ "$output" == *"_mole()"* ]]
 }
 
 @test "completion zsh includes command descriptions" {
 	run "$PROJECT_ROOT/bin/completion.sh" zsh
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"optimize:Refresh caches and services"* ]]
-	[[ "$output" == *"clean:Free up disk space"* ]]
+	[[ "$output" == *"optimize:Refresh caches and services"* ]] || return 1
+	[[ "$output" == *"clean:Free up disk space"* ]] || return 1
 	[[ "$output" == *"history:Review cleanup activity"* ]]
 }
 
 @test "completion zsh includes current clean, analyze, history, and purge options only" {
 	run "$PROJECT_ROOT/bin/completion.sh" zsh
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"--dry-run"* ]]
-	[[ "$output" == *"--external"* ]]
-	[[ "$output" == *"--whitelist"* ]]
-	[[ "$output" == *"--json"* ]]
-	[[ "$output" == *"--limit"* ]]
-	[[ "$output" == *"--include-empty"* ]]
-	[[ "$output" != *"--select"* ]]
-	[[ "$output" != *"--categories"* ]]
+	[[ "$output" == *"--dry-run"* ]] || return 1
+	[[ "$output" == *"--external"* ]] || return 1
+	[[ "$output" == *"--whitelist"* ]] || return 1
+	[[ "$output" == *"--json"* ]] || return 1
+	[[ "$output" == *"--limit"* ]] || return 1
+	[[ "$output" == *"--include-empty"* ]] || return 1
+	[[ "$output" != *"--select"* ]] || return 1
+	[[ "$output" != *"--categories"* ]] || return 1
 	[[ "$output" != *"--exclude-paths"* ]]
 }
 
 @test "completion fish generates valid fish script" {
 	run "$PROJECT_ROOT/bin/completion.sh" fish
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"complete -f -c mole"* ]]
+	[[ "$output" == *"complete -f -c mole"* ]] || return 1
 	[[ "$output" == *"complete -f -c mo"* ]]
 }
 
@@ -152,14 +152,14 @@ setup() {
 @test "completion fish includes current clean, analyze, history, and purge options only" {
 	run "$PROJECT_ROOT/bin/completion.sh" fish
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"-l dry-run"* ]]
-	[[ "$output" == *"-l external"* ]]
-	[[ "$output" == *"-l whitelist"* ]]
-	[[ "$output" == *"-l json"* ]]
-	[[ "$output" == *"-l limit"* ]]
-	[[ "$output" == *"-l include-empty"* ]]
-	[[ "$output" != *"-l select"* ]]
-	[[ "$output" != *"-l categories"* ]]
+	[[ "$output" == *"-l dry-run"* ]] || return 1
+	[[ "$output" == *"-l external"* ]] || return 1
+	[[ "$output" == *"-l whitelist"* ]] || return 1
+	[[ "$output" == *"-l json"* ]] || return 1
+	[[ "$output" == *"-l limit"* ]] || return 1
+	[[ "$output" == *"-l include-empty"* ]] || return 1
+	[[ "$output" != *"-l select"* ]] || return 1
+	[[ "$output" != *"-l categories"* ]] || return 1
 	[[ "$output" != *"-l exclude-paths"* ]]
 }
 
@@ -168,7 +168,7 @@ setup() {
 	export SHELL=/bin/zsh
 
 	# Simulate auto-install (no interaction)
-	run bash -c "echo 'y' | \"$PROJECT_ROOT/bin/completion.sh\""
+	run /bin/bash -c "echo 'y' | \"$PROJECT_ROOT/bin/completion.sh\""
 
 	if [[ "$output" == *"Already configured"* ]]; then
 		skip "Already configured from previous test"
@@ -193,7 +193,7 @@ setup() {
 @test "completion --dry-run previews changes without writing config" {
 	run env SHELL=/bin/zsh "$PROJECT_ROOT/bin/completion.sh" --dry-run
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"DRY RUN MODE"* ]]
+	[[ "$output" == *"DRY RUN MODE"* ]] || return 1
 	[ ! -f "$HOME/.zshrc" ]
 }
 

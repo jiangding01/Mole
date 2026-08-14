@@ -48,7 +48,7 @@ setup() {
 	mkdir -p "$HOME/Library/Android/sdk/platform-tools"
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "com.google.android.studio" "Android Studio"
@@ -70,7 +70,7 @@ EOF
 	mkdir -p "$HOME/.docker/buildx"
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "com.docker.docker" "Docker"
@@ -91,7 +91,7 @@ EOF
 
 @test "official uninstaller vendor blocks managed security apps" {
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 official_uninstaller_vendor "com.crowdstrike.falcon.UserAgent" "Falcon" "/Applications/Falcon.app"
@@ -104,7 +104,7 @@ EOF
 }
 
 @test "receipt payload allowlist rejects broad system roots" {
-	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 
@@ -122,7 +122,7 @@ EOF
 	mkdir -p "$HOME/Library/LaunchAgents"
 	touch "$HOME/Library/LaunchAgents/com.example.foo.plist"
 
-	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -155,7 +155,7 @@ EOF
 PLIST
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -164,6 +164,42 @@ EOF
 	)"
 
 	[[ "$result" == "com.example.carrier.helper" ]]
+}
+
+@test "login item helper discovery discards partial results and propagates cancellation" {
+	app="$HOME/Applications/RacedCarrier.app"
+	helper="$app/Contents/Library/LoginItems/Raced Helper.app/Contents"
+	mkdir -p "$helper"
+	printf '<plist/>\n' > "$helper/Info.plist"
+
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" APP="$app" \
+		HELPER_APP="${helper%/Contents}" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+run_with_timeout() {
+	local _duration="$1"
+	shift
+	if [[ "${1:-}" == "find" ]]; then
+		printf '%s\0' "$HELPER_APP"
+		return "${SCAN_RC:?}"
+	fi
+	"$@"
+}
+
+SCAN_RC=1
+result=$(discover_login_item_helper_bundle_ids "$APP")
+[[ -z "$result" ]] || exit 1
+
+SCAN_RC=130
+rc=0
+result=$(discover_login_item_helper_bundle_ids "$APP") || rc=$?
+[[ $rc -eq 130 ]] || exit 1
+[[ -z "$result" ]]
+EOF
+
+	[ "$status" -eq 0 ]
 }
 
 @test "find_app_files preserves Xcode user data and only collects regenerable caches" {
@@ -176,7 +212,7 @@ EOF
 	mkdir -p "$HOME/Library/Developer/CoreSimulator/Caches/dyld"
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "com.apple.dt.Xcode" "Xcode"
@@ -211,7 +247,7 @@ EOF
 	mkdir -p "$HOME/Library/Logs/Huawei"
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "com.huawei.deveco" "DevEco-Studio"
@@ -246,7 +282,7 @@ EOF
 
 	for bad_id in "com.foo.*" "com.foo.?" "com.foo.[abc]" "../../.ssh/id_rsa" "../etc/passwd" "*"; do
 		result="$(
-			HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" BAD_ID="$bad_id" bash --noprofile --norc <<'EOF'
+			HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" BAD_ID="$bad_id" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "$BAD_ID" "FakeApp"
@@ -271,7 +307,7 @@ EOF
 	touch "$HOME/Library/LaunchAgents/com.example.real.plist"
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "com.example.real" "RealApp"
@@ -296,7 +332,7 @@ EOF
 	touch "$HOME/Library/Preferences/ByHost/com.example.TestApplication.ABC123.plist"
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "com.example.TestApp" "TestApp"
@@ -315,7 +351,7 @@ EOF
 	touch "$HOME/Library/Preferences/ByHost/com.example.TestApp.ABC123.plist"
 	mkdir -p "$HOME/Applications/TestApp.app"
 
-	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -367,7 +403,7 @@ EOF
 	touch "$HOME/Library/Preferences/ByHost/com.example.TestApp.ABC123.plist"
 	mkdir -p "$HOME/Applications/TestApp.app"
 
-	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
@@ -428,7 +464,7 @@ EOF
 	touch "$HOME/Library/Application Support/CrashReporter/OtherApp_EEEE-FFFF.plist"
 
 	result="$(
-		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+		HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 find_app_files "com.example.testapp" "TestApp"
@@ -438,4 +474,269 @@ EOF
 	[[ "$result" == *"CrashReporter/TestApp_AAAA-BBBB.plist"* ]] || { echo "missed CrashReporter plist 1"; exit 1; }
 	[[ "$result" == *"CrashReporter/TestApp_CCCC-DDDD.plist"* ]] || { echo "missed CrashReporter plist 2"; exit 1; }
 	[[ "$result" != *"OtherApp_EEEE-FFFF.plist"* ]] || { echo "leaked unrelated CrashReporter plist"; exit 1; }
+}
+
+@test "an unreadable path makes the same-bundle scan indeterminate, never absent" {
+	# find exits 1 for a subdirectory it cannot read even though it printed
+	# everything else, and macOS hands that out routinely under TCC. Treating
+	# it as a dead scan aborted the whole uninstall (#1339, #1340). Treating it
+	# as proven absence would be worse: the caller would then tear down
+	# leftovers a sibling install still needs. It has to be its own verdict.
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+root="$HOME/scan-roots"
+mkdir -p "$root/readable/Some.app" "$root/blocked/inner"
+chmod 000 "$root/blocked"
+trap 'chmod 755 "$root/blocked" 2>/dev/null || true' EXIT
+
+out="$(create_temp_file)"
+rc=0
+_uninstall_materialize_complete_find0 "$out" "$((SECONDS + 30))" \
+    "$root" -maxdepth 3 \( -type d -o -type l \) -name '*.app' || rc=$?
+
+[[ "$rc" -eq "$MOLE_UNINSTALL_SCAN_PARTIAL" ]] || { echo "RC:$rc want $MOLE_UNINSTALL_SCAN_PARTIAL"; exit 1; }
+# The listing it did produce must survive: discarding it is what turned a
+# readable-but-incomplete scan into a total failure.
+grep -qa "Some.app" "$out" || { echo "RESULTS_DISCARDED"; exit 1; }
+EOF
+	[ "$status" -eq 0 ] || {
+		echo "$output"
+		return 1
+	}
+	[[ "$output" != *"RESULTS_DISCARDED"* ]] || return 1
+}
+
+@test "wrapped iOS bundles and id-less bundles do not make the sibling scan unknown (#1339)" {
+	# Two bundle shapes that are ordinary installs, not mysteries: an iOS app
+	# on Apple Silicon keeps its plist under Wrapper/<name>.app, and vendor
+	# uninstallers ship a plist with no CFBundleIdentifier at all. Both read as
+	# "unknown" before, and one of either anywhere on the machine aborted the
+	# uninstall of every other app.
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+apps="$HOME/sibling-shapes"
+mkdir -p "$apps/Wrapped.app/Wrapper/Inner.app" "$apps/NoId.app/Contents" "$apps/Broken.app/Contents"
+cat > "$apps/Wrapped.app/Wrapper/Inner.app/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.wrapped</string></dict></plist>
+PLIST
+cat > "$apps/NoId.app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>run.sh</string></dict></plist>
+PLIST
+printf 'not a plist' > "$apps/Broken.app/Contents/Info.plist"
+
+live_paths=(); live_records=()
+deadline=$((SECONDS + 30))
+
+# The wrapped bundle's real id must be found, so it matches when it should.
+rc=0
+_uninstall_collect_live_sibling_candidate "$apps/Wrapped.app" "/nowhere.app" \
+    "com.example.wrapped" "$deadline" true || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "WRAPPED_RC:$rc want 0"; exit 1; }
+
+# No CFBundleIdentifier is an answer: it cannot be a sibling.
+rc=0
+_uninstall_collect_live_sibling_candidate "$apps/NoId.app" "/nowhere.app" \
+    "com.example.wrapped" "$deadline" true || rc=$?
+[[ "$rc" -eq 1 ]] || { echo "NOID_RC:$rc want 1"; exit 1; }
+
+# A plist that will not parse is still unknown, and must stay that way.
+rc=0
+_uninstall_collect_live_sibling_candidate "$apps/Broken.app" "/nowhere.app" \
+    "com.example.wrapped" "$deadline" true || rc=$?
+[[ "$rc" -eq 2 ]] || { echo "BROKEN_RC:$rc want 2"; exit 1; }
+EOF
+	[ "$status" -eq 0 ] || {
+		echo "$output"
+		return 1
+	}
+}
+
+@test "interactive scan failure is a visible abort, not a silent success (#1339)" {
+	# The interactive loop used to return to the prompt with nothing on screen
+	# when the scan could not complete; the session then read as a successful
+	# run with zero operations. The abort must be printed after the alternate
+	# screen is restored, and the command must fail.
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+
+# No real machine scanning or terminal in this test.
+scan_applications() { return 1; }
+start_uninstall_interactive_screen() { :; }
+stop_uninstall_interactive_screen() { :; }
+hide_cursor() { :; }
+show_cursor() { :; }
+
+main
+EOF
+
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Uninstall aborted: could not complete the application scan"* ]]
+}
+
+@test "failed app selection aborts visibly instead of returning success (#1339)" {
+	# EOF or a broken selector used to exit 0 with nothing printed, so the
+	# session read as successful with zero operations. A selector that did
+	# not complete for any reason other than a deliberate quit must say so
+	# and fail. The deliberate-quit case is pinned separately below.
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+
+fake_apps_list="$HOME/fake-apps"
+printf '0|/tmp/Fake.app|Fake|com.example.fake|1KB|Today|1\n' > "$fake_apps_list"
+scan_applications() { printf '%s\n' "$fake_apps_list"; }
+load_applications() {
+	apps_data=("0|/tmp/Fake.app|Fake|com.example.fake|1KB|Today|1")
+	selection_state=(false)
+	return 0
+}
+select_apps_for_uninstall() { return 1; }
+start_uninstall_interactive_screen() { :; }
+stop_uninstall_interactive_screen() { :; }
+hide_cursor() { :; }
+show_cursor() { :; }
+
+main
+EOF
+
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Uninstall aborted: application selection did not complete"* ]]
+}
+
+@test "a deliberate quit in the selector stays a quiet cancel, not an abort" {
+	# Pressing q is the documented way to leave the selector, matching
+	# mole's other cancel flows (mo remove ESC exits 0 silently). Only a
+	# selector that broke may print the abort and fail; the menu marks the
+	# difference through _MOLE_MENU_USER_QUIT.
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+
+fake_apps_list="$HOME/fake-apps"
+printf '0|/tmp/Fake.app|Fake|com.example.fake|1KB|Today|1\n' > "$fake_apps_list"
+scan_applications() { printf '%s\n' "$fake_apps_list"; }
+load_applications() {
+	apps_data=("0|/tmp/Fake.app|Fake|com.example.fake|1KB|Today|1")
+	selection_state=(false)
+	return 0
+}
+select_apps_for_uninstall() {
+	_MOLE_MENU_USER_QUIT=1
+	return 1
+}
+start_uninstall_interactive_screen() { :; }
+stop_uninstall_interactive_screen() { :; }
+hide_cursor() { :; }
+show_cursor() { :; }
+
+main
+EOF
+
+	[ "$status" -eq 0 ] || {
+		echo "$output"
+		return 1
+	}
+	[[ "$output" != *"Uninstall aborted"* ]] || return 1
+	[ "$status" -eq 0 ]
+}
+
+@test "uninstall --list surfaces a failed scan instead of a bare exit (#1339)" {
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+
+scan_applications() { return 1; }
+
+uninstall_list_apps
+EOF
+
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Uninstall aborted: could not complete the application scan"* ]]
+}
+
+@test "a receipt scan that outlives its budget degrades to indeterminate, not a dead run" {
+	# Receipt enumeration is machine-wide: 274 receipts with one holding
+	# 22k paths blew the shared deadline and the resulting 124 ended the
+	# whole uninstall with nothing on screen (#1340). Out of budget is an
+	# incomplete scan, so it must land on the same partial verdict an
+	# unreadable path produces, never abort the run.
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+root="$HOME/live-roots"
+mkdir -p "$root"
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=("$root")
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$HOME/no-such-volumes"
+pkg_receipt_nonstandard_app_paths() { return 124; }
+
+rc=0
+uninstall_live_bundle_has_other_install \
+    "com.example.selected" "$root/Selected.app" || rc=$?
+[[ "$rc" -eq "$MOLE_UNINSTALL_SCAN_PARTIAL" ]] || { echo "RC:$rc want $MOLE_UNINSTALL_SCAN_PARTIAL"; exit 1; }
+EOF
+	[ "$status" -eq 0 ] || {
+		echo "$output"
+		return 1
+	}
+}
+
+@test "a signal during the receipt scan still cancels the uninstall" {
+	# Only deadline timeouts degrade to the partial verdict. A signal is
+	# the user cancelling, and must keep propagating unchanged.
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+root="$HOME/live-roots"
+mkdir -p "$root"
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=("$root")
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$HOME/no-such-volumes"
+pkg_receipt_nonstandard_app_paths() { return 130; }
+
+rc=0
+uninstall_live_bundle_has_other_install \
+    "com.example.selected" "$root/Selected.app" || rc=$?
+[[ "$rc" -eq 130 ]] || { echo "RC:$rc want 130"; exit 1; }
+EOF
+	[ "$status" -eq 0 ] || {
+		echo "$output"
+		return 1
+	}
+}
+
+@test "execution-time partial acceptance is gated on an empty deletion plan" {
+	# guard_login alone does not prove a bundle-only plan: the
+	# surviving-sibling name-collision path sets it while keeping
+	# name-keyed leftovers in encoded_files. If the partial re-check
+	# acceptance ever drops the empty-deletion-list gate, a sibling
+	# hidden behind the unreadable part of a partial re-scan could lose
+	# name-keyed data without the fingerprint defense.
+	local window
+	# shellcheck disable=SC2016 # the \$ patterns are literal source text
+	window=$(command grep -A2 'live_sibling_rc -eq \$MOLE_UNINSTALL_SCAN_PARTIAL &&' \
+		"$PROJECT_ROOT/lib/uninstall/batch.sh")
+	# Positive control: the acceptance branch must exist at all.
+	printf '%s\n' "$window" | command grep -q 'guard_login' || {
+		echo "acceptance branch not found"
+		return 1
+	}
+	# shellcheck disable=SC2016 # the \$ pattern is literal source text
+	printf '%s\n' "$window" | command grep -q -- '-z "\$encoded_files"' || {
+		echo "gate missing the empty-plan check"
+		return 1
+	}
 }

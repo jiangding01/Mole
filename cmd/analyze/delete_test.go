@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,8 +34,11 @@ func TestTrashPathWithProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trashPathWithProgress returned error: %v", err)
 	}
-	if count != int64(len(files)) {
-		t.Fatalf("expected %d files trashed, got %d", len(files), count)
+	if count != 1 {
+		t.Fatalf("expected one path-level Trash operation, got %d", count)
+	}
+	if counter != 1 {
+		t.Fatalf("expected one completed Trash operation, got %d", counter)
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("expected target to be moved to Trash, stat err=%v", err)
@@ -69,7 +73,10 @@ func TestDeleteMultiplePathsCmdHandlesParentChild(t *testing.T) {
 		t.Fatalf("unexpected error: %v", progress.err)
 	}
 	if progress.count != 2 {
-		t.Fatalf("expected 2 files trashed, got %d", progress.count)
+		t.Fatalf("expected 2 paths trashed, got %d", progress.count)
+	}
+	if counter != 2 {
+		t.Fatalf("expected two completed Trash operations, got %d", counter)
 	}
 	if _, err := os.Stat(parent); !os.IsNotExist(err) {
 		t.Fatalf("expected parent to be moved to Trash, err=%v", err)
@@ -110,6 +117,247 @@ func TestValidateTrashTargetRejectsOrbStackLiveData(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			if err := validateTrashTarget(path); err == nil || !strings.Contains(err.Error(), "protected path") {
 				t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", path, err)
+			}
+		})
+	}
+}
+
+func TestValidateTrashTargetRejectsDockerDesktopLiveData(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []string{
+		filepath.Join(home, "Library", "Containers", "com.docker.docker"),
+		filepath.Join(home, "Library", "Containers", "com.docker.docker", "Data"),
+		filepath.Join(home, "Library", "Containers", "com.docker.docker", "Data", "vms", "0", "data", "Docker.raw"),
+	}
+
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			if err := validateTrashTarget(path); err == nil || !strings.Contains(err.Error(), "protected path") {
+				t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", path, err)
+			}
+		})
+	}
+}
+
+func TestValidateTrashTargetRejectsDockerDesktopSymlinkAlias(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dockerData := filepath.Join(home, "Library", "Containers", "com.docker.docker", "Data")
+	if err := os.MkdirAll(dockerData, 0o755); err != nil {
+		t.Fatalf("create Docker data fixture: %v", err)
+	}
+	alias := filepath.Join(home, "docker-data")
+	if err := os.Symlink(filepath.Dir(dockerData), alias); err != nil {
+		t.Fatalf("create Docker data symlink: %v", err)
+	}
+
+	path := filepath.Join(alias, "Data")
+	if err := validateTrashTarget(path); err == nil || !strings.Contains(err.Error(), "protected path") {
+		t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", path, err)
+	}
+}
+
+func TestValidateTrashTargetRejectsDockerDesktopCaseVariant(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dockerData := filepath.Join(home, "Library", "Containers", "com.docker.docker", "Data")
+	if err := os.MkdirAll(dockerData, 0o755); err != nil {
+		t.Fatalf("create Docker data fixture: %v", err)
+	}
+
+	caseVariant := filepath.Join(home, "library", "containers", "COM.DOCKER.DOCKER", "Data")
+	if _, err := os.Stat(caseVariant); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	if err := validateTrashTarget(caseVariant); err == nil || !strings.Contains(err.Error(), "protected path") {
+		t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", caseVariant, err)
+	}
+}
+
+func TestValidateTrashTargetRejectsDockerDesktopLiveDataWithoutHOME(t *testing.T) {
+	currentUser, err := user.Current()
+	if err != nil || currentUser.HomeDir == "" {
+		t.Skipf("current user home unavailable: %v", err)
+	}
+	t.Setenv("HOME", "")
+
+	path := filepath.Join(currentUser.HomeDir, "Library", "Containers", "com.docker.docker", "Data")
+	if err := validateTrashTarget(path); err == nil || !strings.Contains(err.Error(), "protected path") {
+		t.Fatalf("validateTrashTarget(%q) with empty HOME error = %v, want protected path error", path, err)
+	}
+}
+
+func TestValidateTrashTargetRejectsOrbStackGroupContainerAliases(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	groupRoot := filepath.Join(home, "Library", "Group Containers", "HUAQ24HBR6.dev.orbstack")
+	groupData := filepath.Join(groupRoot, "data")
+	if err := os.MkdirAll(groupData, 0o755); err != nil {
+		t.Fatalf("create OrbStack group fixture: %v", err)
+	}
+
+	alias := filepath.Join(home, "orbstack-group")
+	if err := os.Symlink(groupRoot, alias); err != nil {
+		t.Fatalf("create OrbStack group symlink: %v", err)
+	}
+	if err := validateTrashTarget(filepath.Join(alias, "data")); err == nil || !strings.Contains(err.Error(), "protected path") {
+		t.Fatalf("OrbStack group symlink error = %v, want protected path error", err)
+	}
+
+	caseVariant := filepath.Join(home, "library", "group containers", "huaq24hbr6.DEV.ORBSTACK", "data")
+	if _, err := os.Stat(caseVariant); err == nil {
+		if err := validateTrashTarget(caseVariant); err == nil || !strings.Contains(err.Error(), "protected path") {
+			t.Fatalf("OrbStack group case variant error = %v, want protected path error", err)
+		}
+	}
+}
+
+func TestValidateTrashTargetRejectsOrbStackGroupContainerWithoutHOME(t *testing.T) {
+	currentUser, err := user.Current()
+	if err != nil || currentUser.HomeDir == "" {
+		t.Skipf("current user home unavailable: %v", err)
+	}
+	t.Setenv("HOME", "")
+
+	path := filepath.Join(currentUser.HomeDir, "Library", "Group Containers", "HUAQ24HBR6.dev.orbstack", "data")
+	if err := validateTrashTarget(path); err == nil || !strings.Contains(err.Error(), "protected path") {
+		t.Fatalf("validateTrashTarget(%q) with empty HOME error = %v, want protected path error", path, err)
+	}
+}
+
+func TestValidateTrashTargetRejectsCriticalRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []string{
+		"/",
+		"/Applications",
+		"/Library",
+		"/System",
+		"/Users",
+		"/Volumes",
+		"/dev",
+		"/etc",
+		"/tmp",
+		"/var",
+		"/private",
+		"/private/etc",
+		"/private/tmp",
+		"/private/var",
+		"/private/var/audit",
+		"/private/var/db",
+		"/private/var/root",
+		"/private/var/tmp",
+		"/private/var/folders",
+		"/Library/Apple",
+		"/Library/Extensions",
+		"/Library/Keychains",
+		"/Applications/Finder.app",
+		"/Applications/Safari.app",
+		"/usr",
+		"/opt",
+		"/opt/homebrew",
+		"/Users/another-account",
+		home,
+	}
+
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			if err := validateTrashTarget(path); err == nil || !strings.Contains(err.Error(), "protected path") {
+				t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", path, err)
+			}
+		})
+	}
+}
+
+func TestValidateTrashTargetRejectsCriticalRootCaseAliases(t *testing.T) {
+	tests := []struct {
+		alias     string
+		canonical string
+	}{
+		{"/SYSTEM", "/System"},
+		{"/DEV", "/dev"},
+		{"/PRIVATE/TMP", "/private/tmp"},
+		{"/PRIVATE/VAR/FOLDERS", "/private/var/folders"},
+		{"/USERS", "/Users"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.alias, func(t *testing.T) {
+			if !isSameExistingPath(tt.alias, tt.canonical) {
+				t.Skip("filesystem does not expose this case-insensitive alias")
+			}
+			if err := validateTrashTarget(tt.alias); err == nil || !strings.Contains(err.Error(), "protected path") {
+				t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", tt.alias, err)
+			}
+		})
+	}
+}
+
+func TestEndpointSecurityCachePathIsCaseInsensitive(t *testing.T) {
+	path := "/PRIVATE/VAR/FOLDERS/9D/ABC/C/COM.CROWDSTRIKE.FALCON.APP/cache"
+	if !isEndpointSecurityCachePath(path) {
+		t.Fatalf("isEndpointSecurityCachePath(%q) = false, want true", path)
+	}
+}
+
+func TestValidateTrashTargetRejectsOrbStackCaseVariant(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join(home, "LIBRARY", "GROUP CONTAINERS", "HUAQ24HBR6.DEV.ORBSTACK", "DATA")
+	if err := validateTrashTarget(path); err == nil || !strings.Contains(err.Error(), "protected path") {
+		t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", path, err)
+	}
+}
+
+func TestValidateTrashTargetAllowsChildrenOfOtherUserHomes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := "/Users/another-account/Library/Caches/old-cache"
+	if err := validateTrashTarget(path); err != nil {
+		t.Fatalf("validateTrashTarget(%q) error = %v, want nil", path, err)
+	}
+}
+
+func TestValidateTrashTargetRejectsSymlinkToCriticalRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	parent := t.TempDir()
+	alias := filepath.Join(parent, "home-alias")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Fatalf("create critical-root symlink: %v", err)
+	}
+
+	if err := validateTrashTarget(alias); err == nil || !strings.Contains(err.Error(), "protected path") {
+		t.Fatalf("validateTrashTarget(%q) error = %v, want protected path error", alias, err)
+	}
+}
+
+func TestValidateTrashTargetAllowsChildrenOfCriticalRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []string{
+		filepath.Join(home, "Downloads", "old.zip"),
+		"/Applications/Example.app",
+		"/Library/Caches/com.example.app",
+		"/Volumes/External/old-artifact",
+		"/private/tmp/mole-user-artifact",
+		"/private/var/tmp/mole-user-artifact",
+	}
+
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			if err := validateTrashTarget(path); err != nil {
+				t.Fatalf("validateTrashTarget(%q) error = %v, want nil", path, err)
 			}
 		})
 	}
@@ -216,6 +464,7 @@ func TestValidateTrashTargetAllowsRegularUserPaths(t *testing.T) {
 	tests := []string{
 		filepath.Join(home, "Downloads", "old.zip"),
 		filepath.Join(home, "Library", "Caches", "example.cache"),
+		filepath.Join(home, "Library", "Containers", "com.docker.docker-helper", "Data"),
 		filepath.Join(home, "Library", "Group Containers", "group.com.example.tool", "Library", "Caches", "item"),
 	}
 
@@ -306,5 +555,136 @@ func TestValidatePathWithChineseAndSpecialChars(t *testing.T) {
 				t.Errorf("validatePath rejected valid path %q: %v", tc.path, err)
 			}
 		})
+	}
+}
+
+// Regression for discussion #474: deleting from analyze over SSH appeared to do
+// nothing. The only Trash path was Finder AppleScript, which raises a dialog on
+// the physical machine that a remote user cannot answer, so every delete sat for
+// trashTimeout and then failed. trash(8) needs no Finder, so it must be tried
+// first and must actually move the file.
+func TestMoveToTrashViaBinaryMovesFile(t *testing.T) {
+	if _, err := os.Stat(trashBinary); err != nil {
+		t.Skipf("%s not present on this macOS version", trashBinary)
+	}
+
+	dir := t.TempDir()
+	probe, err := os.CreateTemp(dir, "mole-trash-binary-probe-*.txt")
+	if err != nil {
+		t.Fatalf("failed to create unique target: %v", err)
+	}
+	target := probe.Name()
+	if _, err := probe.WriteString("probe"); err != nil {
+		_ = probe.Close()
+		t.Fatalf("failed to seed target: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatalf("failed to close target: %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("failed to resolve user home: %v", err)
+	}
+	trashCopy := filepath.Join(home, ".Trash", filepath.Base(target))
+	if _, err := os.Lstat(trashCopy); !os.IsNotExist(err) {
+		t.Fatalf("refusing Trash probe basename collision at %s", trashCopy)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(trashCopy)
+	})
+
+	if err := moveToTrashViaBinary(target); err != nil {
+		t.Fatalf("moveToTrashViaBinary failed: %v", err)
+	}
+
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to be gone, Lstat returned %v", target, err)
+	}
+}
+
+func TestMoveToTrashViaFilesystemMovesWithoutOverwritingCollision(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	trashDir := filepath.Join(home, ".Trash")
+	sourceDir := filepath.Join(root, "source")
+	if err := os.MkdirAll(trashDir, 0o700); err != nil {
+		t.Fatalf("create fake Trash: %v", err)
+	}
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(sourceDir, "report.txt")
+	if err := os.WriteFile(target, []byte("new"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	existing := filepath.Join(trashDir, filepath.Base(target))
+	if err := os.WriteFile(existing, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write collision: %v", err)
+	}
+
+	if err := moveToTrashViaFilesystem(target); err != nil {
+		t.Fatalf("filesystem Trash move failed: %v", err)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected source to be gone, Lstat returned %v", err)
+	}
+	if got, err := os.ReadFile(existing); err != nil || string(got) != "keep" {
+		t.Fatalf("existing Trash item was changed: data=%q err=%v", got, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(trashDir, "report.txt.*"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("expected one collision-safe Trash item, matches=%v err=%v", matches, err)
+	}
+	if got, err := os.ReadFile(matches[0]); err != nil || string(got) != "new" {
+		t.Fatalf("moved Trash item mismatch: data=%q err=%v", got, err)
+	}
+}
+
+func TestMoveToTrashViaFilesystemRejectsSymlinkedTrash(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	realTrash := filepath.Join(root, "real-trash")
+	sourceDir := filepath.Join(root, "source")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatalf("create fake home: %v", err)
+	}
+	if err := os.MkdirAll(realTrash, 0o700); err != nil {
+		t.Fatalf("create real Trash: %v", err)
+	}
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.Symlink(realTrash, filepath.Join(home, ".Trash")); err != nil {
+		t.Fatalf("create Trash symlink: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(sourceDir, "report.txt")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	if err := moveToTrashViaFilesystem(target); err == nil {
+		t.Fatal("expected symlinked Trash to be rejected")
+	}
+	if _, err := os.Lstat(target); err != nil {
+		t.Fatalf("target changed after rejected Trash move: %v", err)
+	}
+}
+
+// trash(8) takes no "--" separator. Passing one makes it report a missing file
+// named "--" and exit non-zero while still trashing the real target, which would
+// make moveToTrash fall through to Finder and delete a second time. Absolute
+// paths cannot be mistaken for options, so no separator is used.
+func TestMoveToTrashViaBinaryUsesAbsolutePathWithoutSeparator(t *testing.T) {
+	data, err := os.ReadFile("delete.go")
+	if err != nil {
+		t.Fatalf("failed to read delete.go: %v", err)
+	}
+	if strings.Contains(string(data), `trashBinary, "--"`) {
+		t.Error(`moveToTrashViaBinary must not pass "--" to trash(8); it trashes the target but exits non-zero`)
 	}
 }

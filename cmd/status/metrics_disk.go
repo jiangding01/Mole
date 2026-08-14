@@ -49,6 +49,13 @@ var (
 	diskUsageFunc      = disk.Usage
 )
 
+const (
+	smartStatusVerified    = "verified"
+	smartStatusFailing     = "failing"
+	smartStatusUnsupported = "unsupported"
+	smartStatusUnknown     = "unknown"
+)
+
 func collectDisks() ([]DiskStatus, error) {
 	return collectDisksWithCorrections(true)
 }
@@ -98,8 +105,9 @@ func collectDisksWithCorrections(useCorrections bool) ([]DiskStatus, error) {
 		}
 		used := usage.Used
 		usedPercent := usage.UsedPercent
+		purgeable := uint64(0)
 		if useCorrections && runtime.GOOS == "darwin" && strings.ToLower(part.Fstype) == "apfs" {
-			used, usedPercent = correctAPFSDiskUsage(part.Mountpoint, total, usage.Used)
+			used, usedPercent, purgeable = correctAPFSDiskUsage(part.Mountpoint, total, usage.Used, usage.Free)
 		}
 
 		disks = append(disks, DiskStatus{
@@ -110,13 +118,15 @@ func collectDisksWithCorrections(useCorrections bool) ([]DiskStatus, error) {
 			UsedPercent: usedPercent,
 			Fstype:      part.Fstype,
 			External:    !useCorrections && strings.HasPrefix(part.Mountpoint, "/Volumes/"),
+			SmartStatus: smartStatusUnknown,
+			Purgeable:   purgeable,
 		})
 		seenDevice[baseDevice] = true
 		seenVolume[volKey] = true
 	}
 
 	if useCorrections {
-		annotateDiskTypes(disks)
+		annotateDiskMetadata(disks)
 	}
 
 	sort.Slice(disks, func(i, j int) bool {
@@ -163,11 +173,16 @@ func shouldSkipDiskPartition(part disk.PartitionStat) bool {
 	return false
 }
 
+type diskMetadata struct {
+	External    bool
+	SmartStatus string
+}
+
 var (
-	// External disk cache.
-	lastDiskCacheAt time.Time
-	diskTypeCache   = make(map[string]bool)
-	diskCacheTTL    = 2 * time.Minute
+	// Slow disk metadata cache.
+	lastDiskCacheAt   time.Time
+	diskMetadataCache = make(map[string]diskMetadata)
+	diskCacheTTL      = 2 * time.Minute
 
 	// Finder startup disk usage cache (macOS APFS purgeable-aware).
 	finderDiskCacheMu  sync.Mutex
@@ -185,7 +200,7 @@ var (
 	trashSizeCacheTTL     = 5 * time.Second
 )
 
-func annotateDiskTypes(disks []DiskStatus) {
+func annotateDiskMetadata(disks []DiskStatus) {
 	if len(disks) == 0 || runtime.GOOS != "darwin" || !commandExists("diskutil") {
 		return
 	}
@@ -193,7 +208,7 @@ func annotateDiskTypes(disks []DiskStatus) {
 	now := time.Now()
 	// Clear stale cache.
 	if now.Sub(lastDiskCacheAt) > diskCacheTTL {
-		diskTypeCache = make(map[string]bool)
+		diskMetadataCache = make(map[string]diskMetadata)
 		lastDiskCacheAt = now
 	}
 
@@ -203,17 +218,19 @@ func annotateDiskTypes(disks []DiskStatus) {
 			base = disks[i].Device
 		}
 
-		if val, ok := diskTypeCache[base]; ok {
-			disks[i].External = val
+		if metadata, ok := diskMetadataCache[base]; ok {
+			disks[i].External = metadata.External
+			disks[i].SmartStatus = metadata.SmartStatus
 			continue
 		}
 
-		external, err := isExternalDisk(base)
+		metadata, err := readDiskMetadata(base)
 		if err != nil {
-			external = strings.HasPrefix(disks[i].Mount, "/Volumes/")
+			metadata.External = strings.HasPrefix(disks[i].Mount, "/Volumes/")
 		}
-		disks[i].External = external
-		diskTypeCache[base] = external
+		disks[i].External = metadata.External
+		disks[i].SmartStatus = metadata.SmartStatus
+		diskMetadataCache[base] = metadata
 	}
 }
 
@@ -230,34 +247,56 @@ func baseDeviceName(device string) string {
 	return device
 }
 
-func isExternalDisk(device string) (bool, error) {
+func readDiskMetadata(device string) (diskMetadata, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	out, err := runCmd(ctx, "diskutil", "info", device)
 	if err != nil {
-		return false, err
+		return diskMetadata{SmartStatus: smartStatusUnknown}, err
 	}
+	return parseDiskMetadata(out)
+}
+
+func parseDiskMetadata(out string) (diskMetadata, error) {
+	metadata := diskMetadata{SmartStatus: smartStatusUnknown}
 	var (
-		found    bool
-		external bool
+		externalFound bool
+		locationFound bool
+		locationValue bool
 	)
 	for line := range strings.Lines(out) {
 		trim := strings.TrimSpace(line)
 		if strings.HasPrefix(trim, "Internal:") {
-			found = true
-			external = strings.Contains(trim, "No")
-			break
+			externalFound = true
+			metadata.External = strings.Contains(trim, "No")
 		}
-		if strings.HasPrefix(trim, "Device Location:") {
-			found = true
-			external = strings.Contains(trim, "External")
+		if !externalFound && strings.HasPrefix(trim, "Device Location:") {
+			locationFound = true
+			locationValue = strings.Contains(trim, "External")
+		}
+		if smartValue, ok := strings.CutPrefix(trim, "SMART Status:"); ok {
+			value := strings.ToLower(strings.TrimSpace(smartValue))
+			switch value {
+			case "verified":
+				metadata.SmartStatus = smartStatusVerified
+			case "failing", "failed":
+				metadata.SmartStatus = smartStatusFailing
+			case "not supported", "unsupported":
+				metadata.SmartStatus = smartStatusUnsupported
+			default:
+				metadata.SmartStatus = smartStatusUnknown
+			}
 		}
 	}
-	if !found {
-		return false, errors.New("diskutil info missing Internal field")
+	if !externalFound && locationFound {
+		externalFound = true
+		metadata.External = locationValue
 	}
-	return external, nil
+	if !externalFound {
+		return metadata, errors.New("diskutil info missing Internal field")
+	}
+	return metadata, nil
 }
 
 // correctDiskTotalBytes uses diskutil's plist output when macOS reports a
@@ -293,20 +332,21 @@ func getDiskutilTotalBytes(mountpoint string) (uint64, error) {
 	return extractPlistUint(out, "TotalSize", "DiskSize", "Size")
 }
 
-// correctAPFSDiskUsage returns Finder-accurate used bytes and percent for an
-// APFS volume, accounting for purgeable caches and APFS local snapshots that
-// statfs incorrectly counts as "used". Uses a three-tier fallback:
-//  1. Finder via osascript (startup disk only) — exact match with macOS Finder
-//  2. diskutil APFSContainerFree — corrects APFS snapshot space
-//  3. Raw gopsutil values — original statfs-based calculation
-func correctAPFSDiskUsage(mountpoint string, total, rawUsed uint64) (used uint64, usedPercent float64) {
+// correctAPFSDiskUsage returns Finder-accurate used bytes, percent, and the
+// purgeable bytes Finder counts as free, for an APFS volume. It accounts for
+// purgeable caches and APFS local snapshots that statfs incorrectly counts as
+// "used". Uses a three-tier fallback:
+//  1. Finder via osascript (startup disk only), exact match with macOS Finder
+//  2. diskutil APFSContainerFree, corrects APFS snapshot space
+//  3. Raw gopsutil values, original statfs-based calculation
+func correctAPFSDiskUsage(mountpoint string, total, rawUsed, rawFree uint64) (used uint64, usedPercent float64, purgeable uint64) {
 	// Tier 1: Finder via osascript (startup disk at "/" only).
 	if mountpoint == "/" && commandExists("osascript") {
 		if finderFree, finderTotal, err := getFinderStartupDiskFreeBytes(); err == nil &&
 			finderTotal > 0 && finderFree <= finderTotal {
 			used = finderTotal - finderFree
 			usedPercent = float64(used) / float64(finderTotal) * 100.0
-			return
+			return used, usedPercent, finderPurgeableBytes(rawFree, finderFree)
 		}
 	}
 
@@ -318,13 +358,26 @@ func correctAPFSDiskUsage(mountpoint string, total, rawUsed uint64) (used uint64
 			if rawUsed > corrected && rawUsed-corrected > 1<<30 {
 				used = corrected
 				usedPercent = float64(used) / float64(total) * 100.0
-				return
+				return used, usedPercent, 0
 			}
 		}
 	}
 
 	// Tier 3: fall back to raw gopsutil values.
-	return rawUsed, float64(rawUsed) / float64(total) * 100.0
+	return rawUsed, float64(rawUsed) / float64(total) * 100.0, 0
+}
+
+// finderPurgeableBytes returns the purgeable portion of Finder's free space:
+// Finder counts reclaimable purgeable files as free, while statfs (df) does
+// not, so the difference is the purgeable total. Both inputs must come from
+// the same accounting: rawFree is the statfs free figure, never a value
+// derived from the diskutil-corrected total, or the correction itself would
+// be misreported as purgeable space.
+func finderPurgeableBytes(rawFree, finderFree uint64) uint64 {
+	if finderFree <= rawFree {
+		return 0
+	}
+	return finderFree - rawFree
 }
 
 // getAPFSContainerFreeBytes returns the APFS container free space (including

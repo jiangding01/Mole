@@ -120,10 +120,11 @@ type overviewSizeMsg struct {
 type tickMsg time.Time
 
 type deleteProgressMsg struct {
-	done  bool
-	err   error
-	count int64
-	path  string
+	done         bool
+	err          error
+	count        int64
+	path         string
+	removedPaths []string
 }
 
 type model struct {

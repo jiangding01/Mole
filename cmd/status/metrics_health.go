@@ -62,7 +62,11 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 	cpuPenalty := 0.0
 	if cpu.Usage > cpuNormalThreshold {
 		if cpu.Usage > cpuHighThreshold {
-			cpuPenalty = healthCPUWeight * (cpu.Usage - cpuNormalThreshold) / cpuHighThreshold
+			// Scale across the remaining range up to 100% so the penalty keeps
+			// growing with usage (matches the disk branch). Dividing by the raw
+			// high threshold instead made the penalty drop past 85%, letting the
+			// score rise as CPU load got worse.
+			cpuPenalty = healthCPUWeight * (cpu.Usage - cpuNormalThreshold) / (100 - cpuNormalThreshold)
 		} else {
 			cpuPenalty = (healthCPUWeight / 2) * (cpu.Usage - cpuNormalThreshold) / (cpuHighThreshold - cpuNormalThreshold)
 		}
@@ -76,7 +80,11 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 	memPenalty := 0.0
 	if mem.UsedPercent > memNormalThreshold {
 		if mem.UsedPercent > memHighThreshold {
-			memPenalty = healthMemWeight * (mem.UsedPercent - memNormalThreshold) / memNormalThreshold
+			// Scale across the remaining range up to 100% so the penalty keeps
+			// growing with usage (matches the disk branch). Dividing by the raw
+			// normal threshold instead made the penalty drop past 88%, letting
+			// the score rise as memory pressure got worse.
+			memPenalty = healthMemWeight * (mem.UsedPercent - memNormalThreshold) / (100 - memNormalThreshold)
 		} else {
 			memPenalty = (healthMemWeight / 2) * (mem.UsedPercent - memNormalThreshold) / (memHighThreshold - memNormalThreshold)
 		}
@@ -110,6 +118,15 @@ func calculateHealthScore(cpu CPUStatus, mem MemoryStatus, disks []DiskStatus, d
 		score -= diskPenalty
 		if diskUsage > diskCritThreshold {
 			issues = append(issues, "Disk Almost Full")
+		}
+	}
+	for _, disk := range disks {
+		if disk.SmartStatus == smartStatusFailing {
+			if score > 44 {
+				score = 44
+			}
+			issues = append(issues, "Disk SMART Failing")
+			break
 		}
 	}
 

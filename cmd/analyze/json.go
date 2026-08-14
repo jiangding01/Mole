@@ -79,6 +79,10 @@ func performDirectoryScanForJSON(path string) jsonOutput {
 func performOverviewScanForJSON(path string) jsonOutput {
 	insightEntries := createInsightEntries()
 	overviewEntries := createOverviewEntriesWithInsights(insightEntries)
+	return performOverviewScanForJSONWithEntries(path, insightEntries, overviewEntries)
+}
+
+func performOverviewScanForJSONWithEntries(path string, insightEntries, overviewEntries []dirEntry) jsonOutput {
 	insightPaths := make(map[string]bool, len(insightEntries))
 	for _, insight := range insightEntries {
 		insightPaths[insight.Path] = true

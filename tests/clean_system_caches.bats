@@ -46,7 +46,7 @@ setup() {
 }
 
 @test "check_tcc_permissions skips in non-interactive mode" {
-    run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; check_tcc_permissions" < /dev/null
+    run /bin/bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; check_tcc_permissions" < /dev/null
     [ "$status" -eq 0 ]
     [[ ! -f "$HOME/.cache/mole/permissions_granted" ]]
 }
@@ -55,22 +55,22 @@ setup() {
     mkdir -p "$HOME/.cache/mole"
     touch "$HOME/.cache/mole/permissions_granted"
 
-    run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; [[ -t 1 ]] || true; check_tcc_permissions"
+    run /bin/bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; [[ -t 1 ]] || true; check_tcc_permissions"
     [ "$status" -eq 0 ]
 }
 
 @test "check_tcc_permissions validates protected directories" {
 
-    [[ -d "$HOME/Library/Caches" ]]
-    [[ -d "$HOME/Library/Logs" ]]
-    [[ -d "$HOME/.cache/mole" ]]
+    [[ -d "$HOME/Library/Caches" ]] || return 1
+    [[ -d "$HOME/Library/Logs" ]] || return 1
+    [[ -d "$HOME/.cache/mole" ]] || return 1
 
-    run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; check_tcc_permissions < /dev/null"
+    run /bin/bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; check_tcc_permissions < /dev/null"
     [ "$status" -eq 0 ]
 }
 
 @test "clean_service_worker_cache returns early when path doesn't exist" {
-    run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; clean_service_worker_cache 'TestBrowser' '/nonexistent/path'"
+    run /bin/bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; source '$PROJECT_ROOT/lib/clean/caches.sh'; clean_service_worker_cache 'TestBrowser' '/nonexistent/path'"
     [ "$status" -eq 0 ]
 }
 
@@ -95,7 +95,7 @@ setup() {
     mkdir -p "$test_cache/abc123_https_capcut.com_0"
     mkdir -p "$test_cache/def456_https_example.com_0"
 
-    run bash -c "
+    run /bin/bash -c "
         export DRY_RUN=true
         export PROTECTED_SW_DOMAINS=(capcut.com photopea.com)
         source '$PROJECT_ROOT/lib/core/common.sh'
@@ -120,20 +120,20 @@ setup() {
     "
     [ "$status" -eq 0 ]
 
-    [[ -d "$test_cache/abc123_https_capcut.com_0" ]]
+    [[ -d "$test_cache/abc123_https_capcut.com_0" ]] || return 1
 
     rm -rf "$test_cache"
 }
 
 # Regression for #724: MV3 extension SW caches are keyed by origin hash,
 # so the PROTECTED_SW_DOMAINS domain-match never fires for them. The
-# whitelist is the only escape hatch users have — respect it here.
+# whitelist is the only escape hatch users have, respect it here.
 @test "clean_service_worker_cache honors is_path_whitelisted (#724)" {
     local test_cache="$HOME/test_sw_cache_wl"
     mkdir -p "$test_cache/abc123hash_extension"
     mkdir -p "$test_cache/def456hash_other"
 
-    run bash -c "
+    run /bin/bash -c "
         export DRY_RUN=false
         export PROTECTED_SW_DOMAINS=(nomatch.invalid)
         source '$PROJECT_ROOT/lib/core/common.sh'
@@ -162,11 +162,11 @@ setup() {
 
     [ "$status" -eq 0 ]
     # Whitelisted dir must never be passed to safe_remove
-    [[ "$output" != *"REMOVE:$test_cache/abc123hash_extension"* ]]
+    [[ "$output" != *"REMOVE:$test_cache/abc123hash_extension"* ]] || return 1
     # Non-whitelisted dir must be removed
-    [[ "$output" == *"REMOVE:$test_cache/def456hash_other"* ]]
+    [[ "$output" == *"REMOVE:$test_cache/def456hash_other"* ]] || return 1
     # UI reports the protection count
-    [[ "$output" == *"1 protected"* ]]
+    [[ "$output" == *"1 protected"* ]] || return 1
 
     rm -rf "$test_cache"
 }
@@ -175,7 +175,7 @@ setup() {
     local test_cache="$HOME/test_sw_cache_colored"
     mkdir -p "$test_cache/abc123_https_example.com_0"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -200,10 +200,113 @@ clean_service_worker_cache 'TestBrowser' '$test_cache'
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"TestBrowser Service Worker"* ]]
-    [[ "$output" == *$'\033[0;32m1MB\033[0m'* ]]
+    [[ "$output" == *"TestBrowser Service Worker"* ]] || return 1
+    [[ "$output" == *$'\033[0;32m1.0MB\033[0m'* ]] || return 1
 
     rm -rf "$test_cache"
+}
+
+@test "clean_service_worker_cache reports sub-megabyte cleanups as KB, not 0MB" {
+    local test_cache="$HOME/test_sw_cache_submb"
+    mkdir -p "$test_cache/abc123_https_example.com_0"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+DRY_RUN=false
+declare -a PROTECTED_SW_DOMAINS=("capcut.com")
+safe_remove() { return 0; }
+note_activity() { :; }
+run_with_timeout() {
+    local timeout="\$1"
+    shift
+    if [[ "\$1" == "sh" ]]; then
+        printf '%s\n' "$test_cache/abc123_https_example.com_0"
+        return 0
+    fi
+    if [[ "\$1" == "du" ]]; then
+        # 900 KB: under 1MB, so the old KB/1024 truncation printed "0MB".
+        printf '900\t%s\n' "$test_cache/abc123_https_example.com_0"
+        return 0
+    fi
+    "\$@"
+}
+clean_service_worker_cache 'TestBrowser' '$test_cache'
+EOF
+
+    # Every assertion ends with || return 1: bare [[ ]] failures mid-test can
+    # be swallowed and let the trailing rm -rf pass the test vacuously (#886).
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"TestBrowser Service Worker"* ]] || return 1
+    [[ "$output" == *"KB"* ]] || return 1
+    [[ "$output" != *"0MB"* ]] || return 1
+
+    rm -rf "$test_cache"
+}
+
+@test "clean_service_worker_cache reports only successful removals" {
+    local test_cache="$HOME/test_sw_cache_failed_remove"
+    mkdir -p "$test_cache/abc123_https_example.com_0"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+DRY_RUN=false
+declare -a PROTECTED_SW_DOMAINS=("never.invalid")
+safe_remove() { return 1; }
+note_activity() { :; }
+run_with_timeout() {
+    shift
+    if [[ "\$1" == "sh" ]]; then
+        printf '%s\n' "$test_cache/abc123_https_example.com_0"
+    elif [[ "\$1" == "du" ]]; then
+        printf '512\t%s\n' "$test_cache/abc123_https_example.com_0"
+    else
+        "\$@"
+    fi
+}
+clean_service_worker_cache TestBrowser "$test_cache"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" != *"TestBrowser Service Worker"* ]]
+}
+
+@test "clean_service_worker_cache checks its guard after sizing before dry-run registration" {
+    local test_cache="$HOME/test_sw_cache_guard"
+    mkdir -p "$test_cache/abc123_https_example.com_0"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+DRY_RUN=true
+declare -a PROTECTED_SW_DOMAINS=("never.invalid")
+delete_guard() { [[ ! -e "$test_cache/process-started" ]]; }
+record_dry_run_cleanup_target() { echo "UNEXPECTED_RECORD:\$1"; }
+note_activity() { :; }
+run_with_timeout() {
+    shift
+    if [[ "\$1" == "sh" ]]; then
+        printf '%s\n' "$test_cache/abc123_https_example.com_0"
+    elif [[ "\$1" == "du" ]]; then
+        touch "$test_cache/process-started"
+        printf '512\t%s\n' "$test_cache/abc123_https_example.com_0"
+    else
+        "\$@"
+    fi
+}
+rc=0
+clean_service_worker_cache TestBrowser "$test_cache" delete_guard || rc=\$?
+printf 'RC:%s\n' "\$rc"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC:75"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_RECORD"* ]] || return 1
+    [[ "$output" != *"TestBrowser Service Worker"* ]]
 }
 
 @test "clean_project_caches completes without errors" {
@@ -215,7 +318,7 @@ EOF
     touch "$HOME/Projects/test-app/.next/cache/test.cache"
     touch "$HOME/Projects/python-app/__pycache__/module.pyc"
 
-    run bash -c "
+    run /bin/bash -c "
         export DRY_RUN=true
         source '$PROJECT_ROOT/lib/core/common.sh'
         source '$PROJECT_ROOT/lib/clean/caches.sh'
@@ -233,7 +336,7 @@ EOF
     touch "$HOME/Projects/python-app/pkg/__pycache__/module.pyc"
     touch "$HOME/Projects/python-app/subpkg/__pycache__/other.pyc"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -241,10 +344,10 @@ DRY_RUN=true
 clean_project_caches
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Python bytecode cache"* ]]
-    [[ "$output" == *"~/Projects/python-app"* ]]
-    [[ "$output" == *"2 dirs"* ]]
-    [[ "$output" != *"module.pyc"* ]]
+    [[ "$output" == *"Python bytecode cache"* ]] || return 1
+    [[ "$output" == *"Python bytecode cache · python-app"* ]] || return 1
+    [[ "$output" == *"2 dirs"* ]] || return 1
+    [[ "$output" != *"module.pyc"* ]] || return 1
 
     rm -rf "$HOME/Projects"
 }
@@ -256,7 +359,7 @@ EOF
     touch "$HOME/Projects/python-app/pkg/__pycache__/module.pyc"
     # empty/__pycache__ has no .pyc files
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -264,8 +367,8 @@ DRY_RUN=true
 clean_project_caches
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Python bytecode cache"* ]]
-    [[ "$output" == *"1 dirs"* ]]
+    [[ "$output" == *"Python bytecode cache"* ]] || return 1
+    [[ "$output" == *"1 dirs"* ]] || return 1
 
     rm -rf "$HOME/Projects"
 }
@@ -273,7 +376,7 @@ EOF
 @test "pycache_has_bytecode checks direct bytecode files without spawning find" {
     mkdir -p "$HOME/Projects/python-app/pkg/__pycache__"
 
-    run bash -c "
+    run /bin/bash -c "
 source '$PROJECT_ROOT/lib/clean/caches.sh'
 if pycache_has_bytecode '$HOME/Projects/python-app/pkg/__pycache__'; then
     echo has-bytecode
@@ -295,7 +398,7 @@ fi
 @test "pycache_has_bytecode tolerates empty matches when nullglob is enabled" {
     mkdir -p "$HOME/Projects/nullglob-app/pkg/__pycache__"
 
-    run bash -c "
+    run /bin/bash -c "
 set -euo pipefail
 source '$PROJECT_ROOT/lib/clean/caches.sh'
 shopt -s nullglob
@@ -322,7 +425,7 @@ fi
     touch "$HOME/Projects/python-app/pkg/__pycache__/module.pyc"
     touch "$HOME/Projects/python-app/protected/__pycache__/blocked.pyc"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -338,12 +441,12 @@ cat "$EXPORT_LIST_FILE"
 printf '\nSKIPPED=%s\n' "$whitelist_skipped_count"
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"1 dirs"* ]]
-    [[ "$output" == *"1 skipped"* ]]
-    [[ "$output" == *"EXPORT"* ]]
-    [[ "$output" == *"$HOME/Projects/python-app/pkg/__pycache__"* ]]
-    [[ "$output" != *"$HOME/Projects/python-app/protected/__pycache__"* ]]
-    [[ "$output" == *"SKIPPED=1"* ]]
+    [[ "$output" == *"1 dirs"* ]] || return 1
+    [[ "$output" == *"1 skipped"* ]] || return 1
+    [[ "$output" == *"EXPORT"* ]] || return 1
+    [[ "$output" == *"$HOME/Projects/python-app/pkg/__pycache__"* ]] || return 1
+    [[ "$output" != *"$HOME/Projects/python-app/protected/__pycache__"* ]] || return 1
+    [[ "$output" == *"SKIPPED=1"* ]] || return 1
 
     rm -rf "$HOME/Projects" "$HOME/export.txt"
 }
@@ -375,7 +478,7 @@ fi
 EOF
     chmod +x "$fake_bin/find"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$fake_bin:$PATH" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$fake_bin:$PATH" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 printf '%s\n' "$HOME/CustomProjects" > "$HOME/.config/mole/purge_paths"
 source "$PROJECT_ROOT/lib/core/common.sh"
@@ -385,7 +488,7 @@ safe_clean() { echo "$2|$1"; }
 clean_project_caches
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Next.js build cache"* ]]
+    [[ "$output" == *"Next.js build cache"* ]] || return 1
     grep -q -- "-P $HOME/CustomProjects " "$find_log"
     run grep -q -- "-P $HOME " "$find_log"
     [ "$status" -eq 1 ]
@@ -398,7 +501,7 @@ EOF
     touch "$HOME/go/src/demo/go.mod"
     touch "$HOME/go/src/demo/.next/cache/test.cache"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -406,7 +509,7 @@ safe_clean() { echo "$2|$1"; }
 clean_project_caches
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Next.js build cache|$HOME/go/src/demo/.next/cache/test.cache"* ]]
+    [[ "$output" == *"Next.js build cache|$HOME/go/src/demo/.next/cache/test.cache"* ]] || return 1
 
     rm -rf "$HOME/go"
 }
@@ -416,7 +519,7 @@ EOF
     touch "$HOME/go/src/github.com/example/demo/go.mod"
     touch "$HOME/go/src/github.com/example/demo/.next/cache/test.cache"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -424,7 +527,7 @@ safe_clean() { echo "$2|$1"; }
 clean_project_caches
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Next.js build cache|$HOME/go/src/github.com/example/demo/.next/cache/test.cache"* ]]
+    [[ "$output" == *"Next.js build cache|$HOME/go/src/github.com/example/demo/.next/cache/test.cache"* ]] || return 1
 
     rm -rf "$HOME/go"
 }
@@ -436,7 +539,7 @@ EOF
     ln -s "$HOME/code" "$HOME/Code"
     printf '%s\n' "$HOME/Code" > "$HOME/.config/mole/purge_paths"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -476,7 +579,7 @@ exit 0
 EOF
     chmod +x "$fake_bin/find"
 
-    run /usr/bin/perl -e 'alarm 5; exec @ARGV' env -i HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$fake_bin:$PATH:/usr/bin:/bin:/usr/sbin:/sbin" TERM="${TERM:-xterm-256color}" bash --noprofile --norc <<'EOF'
+    run /usr/bin/perl -e 'alarm 5; exec @ARGV' env -i HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$fake_bin:$PATH:/usr/bin:/bin:/usr/sbin:/sbin" TERM="${TERM:-xterm-256color}" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/caches.sh"
@@ -489,9 +592,9 @@ clean_project_caches
 echo "ELAPSED=$SECONDS"
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"ELAPSED="* ]]
+    [[ "$output" == *"ELAPSED="* ]] || return 1
     elapsed=$(printf '%s\n' "$output" | awk -F= '/ELAPSED=/{print $2}' | tail -1)
-    [[ "$elapsed" =~ ^[0-9]+$ ]]
+    [[ "$elapsed" =~ ^[0-9]+$ ]] || return 1
     (( elapsed < 5 ))
 
     rm -rf "$HOME/.config/mole" "$HOME/SlowProjects" "$fake_bin"
@@ -509,7 +612,7 @@ EOF
     local output_file
     output_file=$(mktemp)
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<EOF
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<EOF
 set -euo pipefail
 source "\$PROJECT_ROOT/lib/core/common.sh"
 source "\$PROJECT_ROOT/lib/clean/caches.sh"
@@ -518,9 +621,9 @@ scan_project_cache_root "$HOME/Projects" "$output_file"
 cat "$output_file"
 EOF
     [ "$status" -eq 0 ]
-    [[ "$output" == *"app/__pycache__"* ]]
-    [[ "$output" != *"miniconda3"* ]]
-    [[ "$output" != *"site-packages"* ]]
+    [[ "$output" == *"app/__pycache__"* ]] || return 1
+    [[ "$output" != *"miniconda3"* ]] || return 1
+    [[ "$output" != *"site-packages"* ]] || return 1
 
     rm -rf "$HOME/Projects" "$output_file"
 }
@@ -531,7 +634,7 @@ EOF
     mkdir -p "$HOME/Projects/app/.next/cache"
     touch "$HOME/Projects/app/package.json"
 
-    run bash -c "
+    run /bin/bash -c "
         export DRY_RUN=true
         source '$PROJECT_ROOT/lib/core/common.sh'
         source '$PROJECT_ROOT/lib/clean/caches.sh'

@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -77,6 +76,7 @@ type model struct {
 	collecting    bool
 	animFrame     int
 	catHidden     bool // true = hidden, false = visible
+	cpuCores      int  // how many CPU cores to list; 0 = all
 }
 
 // padViewToHeight ensures the rendered frame always overwrites the full
@@ -94,50 +94,11 @@ func padViewToHeight(view string, height int) string {
 	return view + strings.Repeat("\n", height-contentHeight)
 }
 
-// getConfigPath returns the path to the status preferences file.
-func getConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".config", "mole", "status_prefs")
-}
-
-// loadCatHidden loads the cat hidden preference from config file.
-func loadCatHidden() bool {
-	path := getConfigPath()
-	if path == "" {
-		return false
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(data)) == "cat_hidden=true"
-}
-
-// saveCatHidden saves the cat hidden preference to config file.
-func saveCatHidden(hidden bool) {
-	path := getConfigPath()
-	if path == "" {
-		return
-	}
-	// Ensure directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
-	}
-	value := "cat_hidden=false"
-	if hidden {
-		value = "cat_hidden=true"
-	}
-	_ = os.WriteFile(path, []byte(value+"\n"), 0644)
-}
-
 func newModel() model {
 	return model{
 		collector: NewCollector(processWatchOptionsFromFlags()),
 		catHidden: loadCatHidden(),
+		cpuCores:  loadCPUCores(),
 	}
 }
 
@@ -173,6 +134,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Toggle cat visibility and persist preference
 			m.catHidden = !m.catHidden
 			saveCatHidden(m.catHidden)
+			return m, nil
+		case "c":
+			// Cycle how many CPU cores the card lists (2 → 4 → 8 → all) and persist.
+			m.cpuCores = nextCPUCores(m.cpuCores)
+			saveCPUCores(m.cpuCores)
 			return m, nil
 		}
 	case tea.WindowSizeMsg:
@@ -227,38 +193,51 @@ func (m model) View() string {
 	header, mole := renderHeader(m.metrics, m.errMessage, m.animFrame, termWidth, m.catHidden)
 	alertBar := renderProcessAlertBar(m.metrics.ProcessAlerts, termWidth)
 
-	var cardContent string
-	if termWidth <= 80 {
-		cardWidth := termWidth
-		if cardWidth > 2 {
-			cardWidth -= 2
-		}
-		cards := buildCards(m.metrics, cardWidth)
-
-		var rendered []string
-		for i, c := range cards {
-			if i > 0 {
-				rendered = append(rendered, "")
+	renderFrame := func(cpuCores int) string {
+		var cardContent string
+		if termWidth <= 80 {
+			cardWidth := termWidth
+			if cardWidth > 2 {
+				cardWidth -= 2
 			}
-			rendered = append(rendered, renderCard(c, cardWidth, 0))
+			cards := buildCards(m.metrics, cardWidth, cpuCores, !m.lastFullAt.IsZero())
+
+			var rendered []string
+			for i, c := range cards {
+				if i > 0 {
+					rendered = append(rendered, "")
+				}
+				rendered = append(rendered, renderCard(c, cardWidth))
+			}
+			cardContent = lipgloss.JoinVertical(lipgloss.Left, rendered...)
+		} else {
+			cardWidth := max(24, termWidth/2-4)
+			cards := buildCards(m.metrics, cardWidth, cpuCores, !m.lastFullAt.IsZero())
+			cardContent = renderTwoColumns(cards, termWidth)
 		}
-		cardContent = lipgloss.JoinVertical(lipgloss.Left, rendered...)
-	} else {
-		cardWidth := max(24, termWidth/2-4)
-		cards := buildCards(m.metrics, cardWidth)
-		cardContent = renderTwoColumns(cards, termWidth)
+
+		// Combine header, mole, and cards with consistent spacing
+		parts := []string{header}
+		if alertBar != "" {
+			parts = append(parts, alertBar)
+		}
+		if mole != "" {
+			parts = append(parts, mole)
+		}
+		parts = append(parts, cardContent)
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
 
-	// Combine header, mole, and cards with consistent spacing
-	parts := []string{header}
-	if alertBar != "" {
-		parts = append(parts, alertBar)
+	// Every extra core is another card row, and the frame has no scrollback: on
+	// a 20-core Mac "all" adds ~18 lines and pushes the lower cards off a short
+	// window. Step the preference back down until the frame fits; the stored
+	// preference is untouched, so a taller window gets it back.
+	cpuCores := m.cpuCores
+	output := renderFrame(cpuCores)
+	for m.height > 0 && lipgloss.Height(output) > m.height && cpuCores != cpuCoresCycle[0] {
+		cpuCores = smallerCPUCores(cpuCores)
+		output = renderFrame(cpuCores)
 	}
-	if mole != "" {
-		parts = append(parts, mole)
-	}
-	parts = append(parts, cardContent)
-	output := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return padViewToHeight(output, m.height)
 }
 
