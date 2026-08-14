@@ -3400,6 +3400,40 @@
         }
       }
     },
+    "optimize.task.legacy_overrides_audit.desc" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove hidden App Nap and disk-image verification overrides left by old tweak tools"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除旧优化工具遗留的 App Nap 与磁盘映像校验隐藏覆盖项"
+          }
+        }
+      }
+    },
+    "optimize.task.legacy_overrides_audit.name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Legacy Overrides"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遗留覆盖项清理"
+          }
+        }
+      }
+    },
     "optimize.task.login_items_audit.desc" : {
       "extractionState" : "manual",
       "localizations" : {
