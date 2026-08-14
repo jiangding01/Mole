@@ -464,6 +464,14 @@ render_clean_preview_from_ledger() {
                 fi
             fi
 
+            # The export is a line-delimited format: a path with an embedded
+            # newline is unrepresentable and would split into two lines — the
+            # first of which can alias a DIFFERENT real path (a dir literally
+            # named $'mole\n,' rendered a line equal to the real .../Logs/mole).
+            # Skip such paths here; the interactive display already showed them.
+            if [[ "$path" == *$'\n'* || "$path" == *$'\r'* ]]; then
+                continue
+            fi
             [[ "$size_kb" =~ ^[0-9]+$ ]] || size_kb=0
             [[ "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]] || count=1
             local item_note=""

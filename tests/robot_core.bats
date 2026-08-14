@@ -251,6 +251,31 @@ setup_apply_plan() {
     [ "$(printf '%s' "$output" | cut -f4)" = "/tmp/a" ] || return 1
 }
 
+@test "robot_clean_ledger_snapshot flattens newline paths to one TSV line" {
+    printf '%s\0' id1 10 1 true Logs "$(printf '/tmp/evil\n,')" \
+        > "$BATS_TEST_TMPDIR/ledger"
+    run robot_clean_ledger_snapshot "$BATS_TEST_TMPDIR/ledger"
+    [ "$status" -eq 0 ] || return 1
+    line_count=$(printf '%s\n' "$output" | wc -l | tr -d ' ')
+    [ "$line_count" = "1" ] || return 1
+    [ "$(printf '%s' "$output" | cut -f4)" = "/tmp/evil ," ] || return 1
+}
+
+@test "clean plan parser skips lines without the size marker" {
+    require_jq
+    {
+        printf '=== Logs ===\n'
+        # Fragment of an unrepresentable multi-line path: no "  #" marker.
+        printf '/Users/x/Library/Logs/real-dir\n'
+        printf '/Users/x/Library/Logs/junk  # 1KB\n'
+    } > "$BATS_TEST_TMPDIR/export.txt"
+    plan_id=$(robot_plan_new "clean")
+    run robot_clean_plan_from_export "$BATS_TEST_TMPDIR/export.txt" "$plan_id"
+    [ "$status" -eq 0 ] || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")] | length == 1' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")][0].path | endswith("junk")' > /dev/null || return 1
+}
+
 @test "robot_clean_ledger_snapshot on a missing file reports zero progress" {
     run robot_clean_ledger_snapshot "$BATS_TEST_TMPDIR/absent-ledger"
     [ "$status" -eq 0 ] || return 1

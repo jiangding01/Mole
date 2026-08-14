@@ -239,7 +239,10 @@ robot_clean_plan_from_export() {
             esac
         fi
 
-        # Entry format: "<path>  # <size_human>[, <N> items]"
+        # Entry format: "<path>  # <size_human>[, <N> items]". A line without
+        # the size marker is not a plan entry (defense against fragments of
+        # unrepresentable multi-line paths aliasing real paths).
+        [[ "$line" == *"  #"* ]] || continue
         path="${line%%  \#*}"
         size_part="${line##*  \# }"
         size_part="${size_part%%,*}"
@@ -293,6 +296,12 @@ robot_clean_ledger_snapshot() {
         done < "$file"
     fi
 
+    # Progress is display-only: flatten any control whitespace a hostile or
+    # merely weird filename could carry, so the TSV line and the NDJSON
+    # progress event it feeds stay single-line.
+    last_path=${last_path//$'\n'/ }
+    last_path=${last_path//$'\r'/ }
+    last_path=${last_path//$'\t'/ }
     printf '%s\t%s\t%s\t%s\n' "$items" "$bytes" \
         "$(robot_section_slug "$last_section")" "$last_path"
 }
