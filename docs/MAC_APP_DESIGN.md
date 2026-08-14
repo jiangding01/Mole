@@ -211,7 +211,7 @@ mole robot <domain> <verb> [options] [< request.json]
 
 所有事件公共字段：`{"v":1,"event":"<type>","ts":"<RFC3339>"}`。
 
-**progress** — 扫描/执行进度（节流目标：≥100ms 或每 20 项合并一次。**M0 现状**：clean plan 的进度来自对增长中的 dry-run 导出文件的 1s 轮询——天然节流但粒度较粗，per-section 细粒度进度随 robot 深度接入 clean 时再提升）
+**progress** — 扫描/执行进度（节流目标：≥100ms 或每 20 项合并一次。**现状**：clean plan 的进度来自对增长中的 dry-run 预览 ledger（NUL 分隔六元组临时文件，经 `MOLE_CLEAN_PREVIEW_LEDGER_FILE` 注入）的 1s 轮询快照——导出文件在扫描结束后才由 ledger 渲染，不能作为活性来源；per-section 细粒度进度随 robot 深度接入 clean 时再提升）
 ```json
 {"v":1,"event":"progress","phase":"scan","section":"app_caches",
  "current":"~/Library/Caches/com.tencent.xinWeChat","done":36,"total":129,
