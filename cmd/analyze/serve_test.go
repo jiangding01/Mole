@@ -8,11 +8,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeServeFixture(t *testing.T) string {
@@ -65,6 +67,118 @@ func filterEvents(events []serveEvent, id, kind string) []serveEvent {
 	return got
 }
 
+// runServeConversation drives runServe interactively over a pair of pipes,
+// waiting for each request's scan_done event before writing the next
+// request to stdin. This mirrors how the real GUI client behaves: it never
+// issues a follow-up request for a path before the prior one settles.
+//
+// runServeScript, by contrast, writes every request to stdin up front.
+// scan/children/rescan are dispatched onto goroutines concurrently by
+// design (cancel needs to interrupt an in-flight scan), so a later
+// children/rescan request for the same path can start racing the earlier
+// scan before that scan has populated the cache. runServeConversation
+// restores the real ordering by only sending request N+1 after request N's
+// scan_done event has actually been observed on stdout.
+func runServeConversation(t *testing.T, requests []string) []serveEvent {
+	t.Helper()
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		runServe(stdinR, stdoutW)
+	}()
+
+	type scannedLine struct {
+		ev  serveEvent
+		err error
+	}
+	lines := make(chan scannedLine, 64)
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		defer close(lines)
+		scanner := bufio.NewScanner(stdoutR)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			var ev serveEvent
+			if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+				lines <- scannedLine{err: fmt.Errorf("non-JSON line in protocol stream: %q", scanner.Text())}
+				continue
+			}
+			lines <- scannedLine{ev: ev}
+		}
+	}()
+
+	const stepTimeout = 10 * time.Second
+	var all []serveEvent
+	waitForScanDone := func(id string) {
+		timeout := time.NewTimer(stepTimeout)
+		defer timeout.Stop()
+		for {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatalf("event stream closed before scan_done for id=%s", id)
+					return
+				}
+				if line.err != nil {
+					t.Fatal(line.err)
+				}
+				all = append(all, line.ev)
+				if line.ev["id"] == id && line.ev["event"] == "scan_done" {
+					return
+				}
+			case <-timeout.C:
+				t.Fatalf("timed out waiting for scan_done id=%s", id)
+				return
+			}
+		}
+	}
+
+	for _, req := range requests {
+		var parsed serveRequest
+		if err := json.Unmarshal([]byte(req), &parsed); err != nil {
+			t.Fatalf("bad test request json %q: %v", req, err)
+		}
+		if _, err := io.WriteString(stdinW, req+"\n"); err != nil {
+			t.Fatalf("write request %q: %v", req, err)
+		}
+		waitForScanDone(parsed.ID)
+	}
+
+	if err := stdinW.Close(); err != nil {
+		t.Fatalf("close stdin: %v", err)
+	}
+
+	select {
+	case <-serveDone:
+	case <-time.After(stepTimeout):
+		t.Fatal("runServe did not return after stdin was closed")
+	}
+	if err := stdoutW.Close(); err != nil {
+		t.Fatalf("close stdout: %v", err)
+	}
+
+	select {
+	case <-readerDone:
+	case <-time.After(stepTimeout):
+		t.Fatal("stdout reader did not finish after runServe returned")
+	}
+	// Drain anything buffered after the last scan_done we waited on (e.g. a
+	// trailing scan_progress tick emitted before that scan's cleanup ran).
+	for line := range lines {
+		if line.err != nil {
+			t.Fatal(line.err)
+		}
+		all = append(all, line.ev)
+	}
+
+	return all
+}
+
 func TestServeScanEmitsNodesAndDone(t *testing.T) {
 	root := writeServeFixture(t)
 	events := runServeScript(t, []string{
@@ -104,7 +218,11 @@ func TestServeScanEmitsNodesAndDone(t *testing.T) {
 
 func TestServeChildrenHitsCacheAndRescanBypasses(t *testing.T) {
 	root := writeServeFixture(t)
-	events := runServeScript(t, []string{
+	// scan/children/rescan for the same path only exercise the cache
+	// correctly if each request is sent after the previous one's scan_done
+	// lands, so this test drives runServe interactively rather than through
+	// runServeScript's fire-and-forget stdin dump (see runServeConversation).
+	events := runServeConversation(t, []string{
 		`{"op":"scan","id":"q1","path":"` + root + `"}`,
 		`{"op":"children","id":"q2","path":"` + root + `"}`,
 		`{"op":"rescan","id":"q3","path":"` + root + `"}`,
