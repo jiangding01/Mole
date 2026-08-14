@@ -200,21 +200,22 @@ optimize_robot_source_emitters() {
     fi
 }
 
-# 只读任务清单：id = action（闭合枚举，见 execute_optimization 的 case 表），
-# label/desc 为核心英文原文（GUI 按 id 本地化，未知 id 回退原文，§4.3）。
+# 只读任务清单：id = action（闭合枚举，真源 = lib/optimize/catalog.sh 注册表，
+# 与 execute_optimization 的分发同源）。label/desc 为核心英文原文
+# （GUI 按 id 本地化，未知 id 回退原文，§4.3）。
 optimize_robot_list() {
     optimize_robot_source_emitters
-    local health_json
-    if ! health_json=$(generate_health_json 2> /dev/null); then
-        robot_emit_error "E_INTERNAL" "health collection failed" "true"
+    if ! optimize_catalog_validate 2> /dev/null; then
+        robot_emit_error "E_INTERNAL" "optimize catalog invalid" "true"
         return 1
     fi
-    local action name desc safe count=0
-    while IFS='|' read -r action name desc safe; do
-        [[ -n "$action" ]] || continue
-        robot_emit_item "$action" "tasks" "$name" "" 0 "safe" "true" "$desc"
+    local index count=0
+    for ((index = 0; index < ${#MOLE_OPTIMIZE_ACTIONS[@]}; index++)); do
+        robot_emit_item "${MOLE_OPTIMIZE_ACTIONS[$index]}" "tasks" \
+            "${MOLE_OPTIMIZE_HEALTH_NAMES[$index]}" "" 0 "safe" "true" \
+            "${MOLE_OPTIMIZE_DESCRIPTIONS[$index]}"
         count=$((count + 1))
-    done < <(parse_optimization_items "$health_json")
+    done
     robot_emit_done "true" "" "\"items\":$count"
 }
 
@@ -229,27 +230,15 @@ optimize_robot_run() {
     export MOLE_OPTIMIZE_SUDO_AVAILABLE="false"
     export FIRST_ACTION=true
 
-    local health_json
-    if ! health_json=$(generate_health_json 2> /dev/null); then
-        robot_emit_error "E_INTERNAL" "health collection failed" "true"
-        return 1
-    fi
-    local valid=$'\n' action _n _d _s
-    while IFS='|' read -r action _n _d _s; do
-        [[ -n "$action" ]] && valid="${valid}${action}"$'\n'
-    done < <(parse_optimization_items "$health_json")
-
-    local done_count=0 failed=0 skipped=0 t0 elapsed
+    local done_count=0 failed=0 skipped=0 t0 elapsed action
     while IFS= read -r action; do
         [[ -n "$action" ]] || continue
-        case "$valid" in
-            *$'\n'"$action"$'\n'*) ;;
-            *)
-                robot_emit_task_status "$action" "failed" "unknown or unavailable task"
-                failed=$((failed + 1))
-                continue
-                ;;
-        esac
+        # 闭合枚举校验：catalog 注册表即唯一合法集合（与 execute_optimization 同源）。
+        if ! optimize_catalog_index_for "$action" > /dev/null; then
+            robot_emit_task_status "$action" "failed" "unknown or unavailable task"
+            failed=$((failed + 1))
+            continue
+        fi
         if command -v is_whitelisted > /dev/null && is_whitelisted "$action"; then
             robot_emit_task_status "$action" "skipped" "whitelisted"
             skipped=$((skipped + 1))
