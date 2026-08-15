@@ -274,7 +274,10 @@ struct CleanView: View {
         let shown = Array(sorted.prefix(visible))
         let zeros = store.zeroCount(group)
         let firstZeroShownIndex = shown.firstIndex { $0.bytes == 0 }
-        LazyVStack(spacing: 0) {
+        // 普通 VStack：行数已被分页封顶（首屏 12/每次 +50），有界；
+        // 嵌套在外层 LazyVStack item 里的 LazyVStack 拿不到滚动视口，
+        // 会退化成全量物化——这是"展开大组即卡死"的另一半原因。
+        VStack(spacing: 0) {
             ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
                 if index == firstZeroShownIndex, !store.isAllZero(group) {
                     zeroSeparator(count: zeros)
@@ -327,52 +330,14 @@ struct CleanView: View {
     }
 
     private func itemRow(_ item: RobotItem, dimmed: Bool = false) -> some View {
-        let checked = store.checked.contains(item.id)
-        return HStack(spacing: 11) {
-            CleanCheckBox(checked: checked, accent: accent, look: look, size: 17) {
-                store.toggle(item)
-            }
-            Text(((item.path ?? item.label) as NSString).abbreviatingWithTildeInPath)
-                .font(Fonts.mono(11.5))
-                .foregroundStyle(checked ? look.text : look.textDim)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 8)
-            if item.risk == "caution" {
-                Text(L("clean.badge.review"))
-                    .font(Fonts.ui(10, .semibold))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(Semantic.warn.opacity(0.12)))
-                    .foregroundStyle(Semantic.warn)
-            }
-            // bytes == nil 是协议里的"大小未知"（测量超时），不是 0 B——如实说。
-            // .help 只挂在未知行：每个 .help 注册一个 tooltip 追踪区，
-            // 1854 行全挂（哪怕空字符串）是再入冻结的帮凶之一。
-            if item.bytes == nil {
-                Text(L("clean.size.unknown"))
-                    .font(Fonts.mono(11.5))
-                    .foregroundStyle(look.textMute)
-                    .frame(minWidth: 62, alignment: .trailing)
-                    .help(L("clean.size.unknown.help"))
-            } else if dimmed {
-                // 0 B 行（r2 §P1.4）：测量出来的零，与"大小未知"是两回事
-                Text(verbatim: "0 B")
-                    .font(Fonts.mono(11.5))
-                    .foregroundStyle(look.textMute)
-                    .frame(minWidth: 62, alignment: .trailing)
-                    .help(L("clean.zero.help"))
-            } else {
-                Text(item.bytes.map(fmt) ?? "")
-                    .font(Fonts.mono(11.5))
-                    .foregroundStyle(look.textMute)
-                    .frame(minWidth: 62, alignment: .trailing)
-            }
-        }
-        .padding(.horizontal, 14).padding(.vertical, 6)
-        .opacity(dimmed ? 0.62 : 1)
-        .contentShape(Rectangle())
-        .onTapGesture { store.toggle(item) }
-        .pointingCursor()
+        CleanItemRow(
+            item: item,
+            checked: store.checked.contains(item.id),
+            dimmed: dimmed,
+            look: look,
+            accent: accent,
+            onToggle: { store.toggle(item) }
+        )
     }
 
     /// 组头图标（原型语汇 → SF Symbols 映射，未知 slug 回退文件夹）。
@@ -799,5 +764,69 @@ private struct CleanCheckBox: View {
         }
         .buttonStyle(.plain)
         .pointingCursor()
+    }
+}
+
+// MARK: - 条目行（性能关键）
+
+/// 确认清单条目行。独立 View 结构体而非视图函数：SwiftUI 按行 diff，
+/// 勾选/翻页只重建变化的行——函数式写法会让每次 store 变更重算全部可见行。
+/// 行上**不挂 pointingCursor**：它的 NSTrackingArea 在每次 mouseMoved 都强制
+/// 设置光标，几百行同时注册是"展开开发者工具即卡死"的直接原因；
+/// tooltip 同理只保留在未知/0B 行（数据必需），普通行零追踪区。
+private struct CleanItemRow: View {
+    var item: RobotItem
+    var checked: Bool
+    var dimmed: Bool
+    var look: Look
+    var accent: ModuleAccent
+    var onToggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 11) {
+            CleanCheckBox(checked: checked, accent: accent, look: look, size: 17, onToggle: onToggle)
+            Text(((item.path ?? item.label) as NSString).abbreviatingWithTildeInPath)
+                .font(Fonts.mono(11.5))
+                .foregroundStyle(checked ? look.text : look.textDim)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            if item.risk == "caution" {
+                Text(L("clean.badge.review"))
+                    .font(Fonts.ui(10, .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Semantic.warn.opacity(0.12)))
+                    .foregroundStyle(Semantic.warn)
+            }
+            sizeColumn
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .opacity(dimmed ? 0.62 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onToggle)
+    }
+
+    @ViewBuilder
+    private var sizeColumn: some View {
+        // bytes == nil 是协议里的"大小未知"（测量超时），不是 0 B——如实说。
+        if item.bytes == nil {
+            Text(L("clean.size.unknown"))
+                .font(Fonts.mono(11.5))
+                .foregroundStyle(look.textMute)
+                .frame(minWidth: 62, alignment: .trailing)
+                .help(L("clean.size.unknown.help"))
+        } else if dimmed {
+            // 0 B 行（r2 §P1.4）：测量出来的零，与"大小未知"是两回事
+            Text(verbatim: "0 B")
+                .font(Fonts.mono(11.5))
+                .foregroundStyle(look.textMute)
+                .frame(minWidth: 62, alignment: .trailing)
+                .help(L("clean.zero.help"))
+        } else {
+            Text(ByteCountFormatter.string(fromByteCount: item.bytes ?? 0, countStyle: .file))
+                .font(Fonts.mono(11.5))
+                .foregroundStyle(look.textMute)
+                .frame(minWidth: 62, alignment: .trailing)
+        }
     }
 }
