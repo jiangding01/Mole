@@ -206,6 +206,40 @@ final class CleanStoreDisplayTests: XCTestCase {
         XCTAssertEqual(store.visibleCount(group), 3)
     }
 
+    /// 聚合锚点上提（CacheStorage 层级优化）：散列目录层不作聚合键，
+    /// 整片 Service Worker 缓存折成一条；展开仍逐项可勾（红线不破）。
+    func testAggregationAnchorLifting() {
+        func pathItem(_ id: String, _ path: String, bytes: Int64) -> RobotItem {
+            let json = """
+            {"id":"\(id)","section":"browsers","label":"\(path)","path":"\(path)",
+             "bytes":\(bytes),"kind":"cache","reversible":true,
+             "default_selected":true,"risk":"safe"}
+            """
+            return try! JSONDecoder().decode(RobotItem.self, from: Data(json.utf8))
+        }
+        let sw = "\(NSHomeDirectory())/Library/Caches/Google/Chrome/Default/Service Worker/CacheStorage"
+        let store = CleanStore()
+        store.ingestPlanForTesting(planId: "pl_test", items: [
+            // 三个不同散列目录下的子项（旧规则会得到 hashA 小聚合 + hashB/C 两个单行）
+            pathItem("a", "\(sw)/hashA/entry-1", bytes: 300),
+            pathItem("b", "\(sw)/hashA/entry-2", bytes: 200),
+            pathItem("c", "\(sw)/hashB/entry-3", bytes: 100),
+            pathItem("d", "\(sw)/hashC/entry-4", bytes: 50),
+        ], insights: [])
+        let nodes = store.displayNodes(store.groups[0])
+        XCTAssertEqual(nodes.count, 1)
+        guard case let .aggregate(parent, children) = nodes[0] else {
+            return XCTFail("应为单个聚合节点，实际 \(nodes[0])")
+        }
+        XCTAssertTrue(parent.hasSuffix("/Service Worker/CacheStorage"))
+        XCTAssertEqual(children.count, 4)
+        XCTAssertEqual(store.aggregateBytes(children), 650)
+        // 锚点父行命中专属语义名（先于泛浏览器规则）
+        let name = CleanPathNames.semanticName(forAbbreviatedPath: (parent as NSString).abbreviatingWithTildeInPath)
+        XCTAssertNotNil(name)
+        XCTAssertTrue(name!.contains("Service Worker"))
+    }
+
     /// 折叠/展开默认与重置：ingest 后全折叠。
     func testCollapsedByDefaultAndGroupStats() {
         let (store, group) = makeStore([100, 0, nil])

@@ -95,7 +95,13 @@ enum CleanPathNames {
               zh: "Homebrew 下载缓存", en: "Homebrew downloads"),
         .init(match: .prefix("~/.composer/cache"), zh: "Composer 缓存", en: "Composer cache"),
 
-        // 浏览器（profile 路径在 Caches 与 Application Support 两处出现）
+        // 浏览器（profile 路径在 Caches 与 Application Support 两处出现）。
+        // Service Worker 两条须在泛浏览器规则之前：聚合锚点上提后的父行
+        // 与散列子行都命中这里，得到比"Chrome 缓存"更准确的名字。
+        .init(match: .contains("/Service Worker/CacheStorage"),
+              zh: "Service Worker 缓存", en: "Service Worker cache"),
+        .init(match: .contains("/Service Worker/ScriptCache"),
+              zh: "Service Worker 脚本缓存", en: "Service Worker script cache"),
         .init(match: .contains("/Google/Chrome"), zh: "Chrome 缓存", en: "Chrome cache"),
         .init(match: .contains("/Microsoft Edge"), zh: "Edge 缓存", en: "Edge cache"),
         .init(match: .contains("/BraveSoftware"), zh: "Brave 缓存", en: "Brave cache"),

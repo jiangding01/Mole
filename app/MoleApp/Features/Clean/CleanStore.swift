@@ -261,12 +261,28 @@ final class CleanStore {
         "/tmp", "/private/tmp", "/var/folders", "/private/var/folders",
     ]
 
+    /// 语义锚点上提（CacheStorage 层级优化）：这些已知噪音容器下是成片的
+    /// 散列目录，按"直接父目录"聚合会得到几十条同名小聚合（每个散列一条），
+    /// 信息密度为零。命中时聚合键上提到容器本身，整片折成一条；容器归属
+    /// 单一浏览器 profile / 应用分区，不越 §P5.1 的跨语义红线。
+    private static let aggregationAnchors = [
+        "/Service Worker/CacheStorage/",
+        "/Service Worker/ScriptCache/",
+    ]
+
     /// 展示节点构建（r3 §P5）：在展示序上把"同一非共享父目录的 ≥2 个子项"
     /// 折成聚合节点，位置取其最大子项在展示序中的位置；子项保持展示序。
     private static func buildDisplayNodes(_ sorted: [RobotItem]) -> [DisplayNode] {
         func parentKey(_ item: RobotItem) -> String? {
             guard let path = item.path, path.contains("/") else { return nil }
-            let parent = ((path as NSString).deletingLastPathComponent as NSString)
+            let abbreviated = (path as NSString).abbreviatingWithTildeInPath
+            // 锚点上提优先于直接父目录
+            for anchor in aggregationAnchors {
+                if let range = abbreviated.range(of: anchor) {
+                    return String(abbreviated[..<range.upperBound].dropLast())
+                }
+            }
+            let parent = ((abbreviated as NSString).deletingLastPathComponent as NSString)
                 .abbreviatingWithTildeInPath
             guard !parent.isEmpty, parent != "/" else { return nil }
             return aggregationDeniedParents.contains(parent) ? nil : parent
