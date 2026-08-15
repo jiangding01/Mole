@@ -32,6 +32,21 @@ final class CleanStore {
         }
     }
 
+    /// 确认清单展示节点（r3 §P5）：单项，或同父目录 ≥2 子项的聚合。
+    /// 聚合是纯展示层折叠——每个子项仍逐条列出、逐条可勾、各自有体积，
+    /// 父行只是可折叠表头（size 不参与统计，总量由子行汇总，杜绝重复计数）。
+    enum DisplayNode: Identifiable {
+        case single(RobotItem)
+        case aggregate(parent: String, items: [RobotItem])
+
+        var id: String {
+            switch self {
+            case let .single(item): item.id
+            case let .aggregate(parent, _): "agg:" + parent
+            }
+        }
+    }
+
     struct LogEntry: Identifiable, Equatable {
         let id: String
         let name: String
@@ -66,6 +81,10 @@ final class CleanStore {
     /// 全部沉底，但"以下 N 项为 0 B · 空目录"对未知项是错误陈述（r2 §P1.4
     /// 明确两者是两回事），这里按设计意图对原型代码做有意偏差。
     private(set) var sortedItemsByGroup: [String: [RobotItem]] = [:]
+    /// 组内展示节点（r3 §P5）：展示序上把同父目录 ≥2 子项折成聚合节点。
+    private(set) var displayNodesByGroup: [String: [DisplayNode]] = [:]
+    /// 展开的聚合父行（默认全部收起，§P5.3）。键 = DisplayNode.id。
+    private(set) var expandedAggregates: Set<String> = []
     /// 每组真 0 B 项数（分隔线文案与全 0 B 变体卡用；未知项不计入）。
     private(set) var zeroCountByGroup: [String: Int] = [:]
 
@@ -210,11 +229,57 @@ final class CleanStore {
         sortedItemsByGroup = Dictionary(uniqueKeysWithValues: groups.map { group in
             (group.section, Self.displayOrder(group.items))
         })
+        displayNodesByGroup = Dictionary(uniqueKeysWithValues: groups.map { group in
+            (group.section, Self.buildDisplayNodes(sortedItemsByGroup[group.section] ?? []))
+        })
+        expandedAggregates = []
         zeroCountByGroup = Dictionary(uniqueKeysWithValues: groups.map { group in
             (group.section, group.items.count(where: { $0.bytes == 0 }))
         })
         confirmRevealStart = Date()
         phase = items.isEmpty ? .empty : .confirm
+    }
+
+    /// 聚合拒绝表（r3 §P5.1 红线落点）：这些**共享位置**的直接子项彼此
+    /// 语义无关（45 个不同应用的缓存并成一条 = 被禁止的跨语义聚合）。
+    /// 只有父目录本身归属单一应用/容器时（Containers/<bundle>/…、
+    /// Caches/<app>/<子项>）同父才等于同语义。路径为 tilde 缩写形态。
+    private static let aggregationDeniedParents: Set<String> = [
+        "~", "~/Library", "~/Library/Caches", "~/Library/Application Support",
+        "~/Library/Logs", "~/Library/Containers", "~/Library/Group Containers",
+        "~/Library/Developer", "~/Library/Developer/Xcode",
+        "~/Library/Application Support/Google", "~/Library/Caches/Google",
+        "/Library", "/Library/Caches", "/Library/Logs",
+        "/tmp", "/private/tmp", "/var/folders", "/private/var/folders",
+    ]
+
+    /// 展示节点构建（r3 §P5）：在展示序上把"同一非共享父目录的 ≥2 个子项"
+    /// 折成聚合节点，位置取其最大子项在展示序中的位置；子项保持展示序。
+    private static func buildDisplayNodes(_ sorted: [RobotItem]) -> [DisplayNode] {
+        func parentKey(_ item: RobotItem) -> String? {
+            guard let path = item.path, path.contains("/") else { return nil }
+            let parent = ((path as NSString).deletingLastPathComponent as NSString)
+                .abbreviatingWithTildeInPath
+            guard !parent.isEmpty, parent != "/" else { return nil }
+            return aggregationDeniedParents.contains(parent) ? nil : parent
+        }
+        var childrenByParent: [String: [RobotItem]] = [:]
+        for item in sorted {
+            if let key = parentKey(item) { childrenByParent[key, default: []].append(item) }
+        }
+        var emitted: Set<String> = []
+        var nodes: [DisplayNode] = []
+        for item in sorted {
+            if let key = parentKey(item), let children = childrenByParent[key], children.count >= 2 {
+                if !emitted.contains(key) {
+                    emitted.insert(key)
+                    nodes.append(.aggregate(parent: key, items: children))
+                }
+            } else {
+                nodes.append(.single(item))
+            }
+        }
+        return nodes
     }
 
     /// 展示序（r2 §P1.2）：有尺寸项体积降序 → 大小未知 → 0 B。
@@ -246,8 +311,9 @@ final class CleanStore {
         }
     }
 
+    /// 分页单位是展示节点（聚合父行算一行；展开聚合不消耗分页配额）。
     func visibleCount(_ group: Group) -> Int {
-        min(visibleCounts[group.section] ?? Self.initialVisible, group.items.count)
+        min(visibleCounts[group.section] ?? Self.initialVisible, displayNodes(group).count)
     }
 
     func revealMore(_ group: Group) {
@@ -256,6 +322,84 @@ final class CleanStore {
 
     func sortedItems(_ group: Group) -> [RobotItem] {
         sortedItemsByGroup[group.section] ?? group.items
+    }
+
+    func displayNodes(_ group: Group) -> [DisplayNode] {
+        displayNodesByGroup[group.section] ?? group.items.map { .single($0) }
+    }
+
+    // MARK: - 聚合行（r3 §P5）
+
+    func isAggregateExpanded(_ node: DisplayNode) -> Bool {
+        expandedAggregates.contains(node.id)
+    }
+
+    func toggleAggregateExpand(_ node: DisplayNode) {
+        if expandedAggregates.contains(node.id) {
+            expandedAggregates.remove(node.id)
+        } else {
+            expandedAggregates.insert(node.id)
+        }
+    }
+
+    /// 父行三态（§P5.4）：全选 / 半选 / 未选。白名单子行除名（不可勾）。
+    func aggregateAllChecked(_ items: [RobotItem]) -> Bool {
+        let checkable = items.filter { !whitelistedIds.contains($0.id) }
+        return !checkable.isEmpty && checkable.allSatisfy { checked.contains($0.id) }
+    }
+
+    func aggregateAnyChecked(_ items: [RobotItem]) -> Bool {
+        items.contains { checked.contains($0.id) }
+    }
+
+    /// 父行勾选 = 全子联动：已全选则全取消，否则勾满全部可勾子行。
+    func toggleAggregate(_ items: [RobotItem]) {
+        if aggregateAllChecked(items) {
+            for item in items {
+                checked.remove(item.id)
+            }
+        } else {
+            for item in items where !whitelistedIds.contains(item.id) {
+                checked.insert(item.id)
+            }
+        }
+    }
+
+    /// 父行总量 = 子行已知体积之和（父行自身 size = 0，不参与统计，§P5.4）。
+    func aggregateBytes(_ items: [RobotItem]) -> Int64 {
+        items.compactMap(\.bytes).reduce(0, +)
+    }
+
+    func aggregateSelectedCount(_ items: [RobotItem]) -> Int {
+        items.count(where: { checked.contains($0.id) })
+    }
+
+    /// 父行盾牌态：全部子行已加白才算"父行已加白"。
+    func aggregateWhitelisted(_ items: [RobotItem]) -> Bool {
+        !items.isEmpty && items.allSatisfy { whitelistedIds.contains($0.id) }
+    }
+
+    func aggregateWhitelistBusy(_ items: [RobotItem]) -> Bool {
+        items.contains { whitelistBusyIds.contains($0.id) }
+    }
+
+    /// 父行盾牌 = 批量加白全部子行（§P3）；已全白则批量撤销。
+    /// 逐项顺序往返，成一项记一项——中途失败保持已成部分，不回滚（落盘即真相）。
+    func toggleAggregateWhitelist(_ items: [RobotItem]) {
+        let removing = aggregateWhitelisted(items)
+        let targets = items.filter {
+            !whitelistBusyIds.contains($0.id)
+                && (removing ? whitelistedIds.contains($0.id) : !whitelistedIds.contains($0.id))
+        }
+        guard !targets.isEmpty else { return }
+        for item in targets {
+            whitelistBusyIds.insert(item.id)
+        }
+        Task { [weak self] in
+            for item in targets {
+                await self?.whitelistRoundtrip(item, removing: removing)
+            }
+        }
     }
 
     func zeroCount(_ group: Group) -> Int {
@@ -311,6 +455,8 @@ final class CleanStore {
         expandedGroups = []
         visibleCounts = [:]
         sortedItemsByGroup = [:]
+        displayNodesByGroup = [:]
+        expandedAggregates = []
         zeroCountByGroup = [:]
     }
 
@@ -375,32 +521,44 @@ final class CleanStore {
     /// 在 Finder 中显示（只读动作，不动文件）。
     func revealInFinder(_ item: RobotItem) {
         guard let path = item.path ?? (item.label.isEmpty ? nil : item.label) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        revealPath(path)
+    }
+
+    /// 路径形态的 Finder 显示（聚合父行用；接受 tilde 缩写形态）。
+    func revealPath(_ path: String) {
+        let expanded = (path as NSString).expandingTildeInPath
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: expanded)])
     }
 
     /// 盾牌开关（§P3 可撤销状态机）：加白 = CLI 即时落盘 + 行灰置 + 取消勾选；
     /// 再点 = 从白名单移除，行重新可勾（不自动回勾，由用户决定）。
     /// 失败保持原状态不变（下次点击重试），不做乐观更新——落盘成败即真相。
     func toggleWhitelist(_ item: RobotItem) {
-        guard let path = item.path ?? (item.label.isEmpty ? nil : item.label) else { return }
         guard !whitelistBusyIds.contains(item.id) else { return }
-        whitelistBusyIds.insert(item.id)
         let removing = whitelistedIds.contains(item.id)
+        whitelistBusyIds.insert(item.id)
         Task { [weak self] in
-            defer { self?.whitelistBusyIds.remove(item.id) }
-            do {
-                let client = WhitelistClient()
-                if removing {
-                    _ = try await client.remove(pattern: path, mode: .clean)
-                    self?.whitelistedIds.remove(item.id)
-                } else {
-                    _ = try await client.add(pattern: path, mode: .clean)
-                    self?.whitelistedIds.insert(item.id)
-                    self?.checked.remove(item.id)
-                }
-            } catch {
-                // 静默保持原状：按钮状态未变即"没成"，可重试；不弹阻断错误。
+            await self?.whitelistRoundtrip(item, removing: removing)
+        }
+    }
+
+    /// 单次白名单往返（调用前需已置 busy；结束必清 busy）。
+    /// 成功才改状态；失败静默保持原状——按钮状态未变即"没成"，可重试。
+    private func whitelistRoundtrip(_ item: RobotItem, removing: Bool) async {
+        defer { whitelistBusyIds.remove(item.id) }
+        guard let path = item.path ?? (item.label.isEmpty ? nil : item.label) else { return }
+        do {
+            let client = WhitelistClient()
+            if removing {
+                _ = try await client.remove(pattern: path, mode: .clean)
+                whitelistedIds.remove(item.id)
+            } else {
+                _ = try await client.add(pattern: path, mode: .clean)
+                whitelistedIds.insert(item.id)
+                checked.remove(item.id)
             }
+        } catch {
+            // 静默保持原状（可重试），不弹阻断错误。
         }
     }
 

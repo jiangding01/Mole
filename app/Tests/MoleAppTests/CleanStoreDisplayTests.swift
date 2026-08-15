@@ -120,6 +120,53 @@ final class CleanStoreDisplayTests: XCTestCase {
             forAbbreviatedPath: "~/Library/Caches/com.unknown.vendor.tool"))
     }
 
+    /// 同父目录聚合（r3 §P5）：非共享父目录 ≥2 子项折聚合节点；
+    /// 共享位置（拒绝表）与孤子项保持单行；父行三态与批量勾选联动。
+    func testAggregationNodes() {
+        func pathItem(_ id: String, _ path: String, bytes: Int64) -> RobotItem {
+            let json = """
+            {"id":"\(id)","section":"s","label":"\(path)","path":"\(path)",
+             "bytes":\(bytes),"kind":"cache","reversible":true,
+             "default_selected":true,"risk":"safe"}
+            """
+            return try! JSONDecoder().decode(RobotItem.self, from: Data(json.utf8))
+        }
+        let home = NSHomeDirectory()
+        let store = CleanStore()
+        store.ingestPlanForTesting(planId: "pl_test", items: [
+            // 同一应用容器下三个子项 → 聚合
+            pathItem("a1", "\(home)/Library/Caches/TestApp/Cache", bytes: 300),
+            pathItem("a2", "\(home)/Library/Caches/TestApp/Code Cache", bytes: 200),
+            pathItem("a3", "\(home)/Library/Caches/TestApp/GPUCache", bytes: 100),
+            // 共享位置（~/Library/Caches 直接子项）→ 拒绝聚合，保持单行
+            pathItem("s1", "\(home)/Library/Caches/com.vendor.one", bytes: 500),
+            pathItem("s2", "\(home)/Library/Caches/com.vendor.two", bytes: 400),
+        ], insights: [])
+        let group = store.groups[0]
+        let nodes = store.displayNodes(group)
+        XCTAssertEqual(nodes.count, 3) // 聚合 ×1 + 单行 ×2
+        // 聚合节点位于其最大子项（300B）的展示序位置：500/400 之后
+        guard case let .aggregate(parent, children) = nodes[2] else {
+            return XCTFail("第三个节点应为聚合，实际 \(nodes[2])")
+        }
+        XCTAssertTrue(parent.hasSuffix("/Library/Caches/TestApp"))
+        XCTAssertEqual(children.map(\.id), ["a1", "a2", "a3"]) // 子项保持体积降序
+        XCTAssertEqual(store.aggregateBytes(children), 600)
+        // 三态联动：默认全选 → 摘一个成半选 → toggleAggregate 勾满 → 再 toggle 全清
+        XCTAssertTrue(store.aggregateAllChecked(children))
+        store.toggle(children[1])
+        XCTAssertFalse(store.aggregateAllChecked(children))
+        XCTAssertTrue(store.aggregateAnyChecked(children))
+        store.toggleAggregate(children)
+        XCTAssertTrue(store.aggregateAllChecked(children))
+        store.toggleAggregate(children)
+        XCTAssertFalse(store.aggregateAnyChecked(children))
+        // 默认收起
+        XCTAssertFalse(store.isAggregateExpanded(nodes[2]))
+        // 分页单位是节点
+        XCTAssertEqual(store.visibleCount(group), 3)
+    }
+
     /// 折叠/展开默认与重置：ingest 后全折叠。
     func testCollapsedByDefaultAndGroupStats() {
         let (store, group) = makeStore([100, 0, nil])

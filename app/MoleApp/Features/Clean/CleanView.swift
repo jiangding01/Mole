@@ -277,30 +277,79 @@ struct CleanView: View {
         .overlay(RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1))
     }
 
-    /// 展开区（§P1.3）：首屏 12 项（必然是组内 Top 大项）+「再显示 50 项」渐进；
-    /// 0 B 长尾分隔而不聚合（§P1.4）。未展开的组完全不构建行。
+    /// 展开区（§P1.3 + r3 §P5）：分页单位是展示节点（聚合父行算一行），
+    /// 首屏 12 + 「再显示 50」渐进；0 B 长尾分隔而不跨语义聚合（§P1.4）。
+    /// 未展开的组完全不构建行。
     @ViewBuilder
     private func expandedRows(_ group: CleanStore.Group) -> some View {
-        let sorted = store.sortedItems(group)
+        let nodes = store.displayNodes(group)
         let visible = store.visibleCount(group)
-        let shown = Array(sorted.prefix(visible))
+        let shown = Array(nodes.prefix(visible))
         let zeros = store.zeroCount(group)
-        let firstZeroShownIndex = shown.firstIndex { $0.bytes == 0 }
+        let firstZeroShownIndex = shown.firstIndex { node in
+            if case let .single(item) = node { return item.bytes == 0 }
+            return false
+        }
         // 普通 VStack：行数已被分页封顶（首屏 12/每次 +50），有界；
         // 嵌套在外层 LazyVStack item 里的 LazyVStack 拿不到滚动视口，
         // 会退化成全量物化——这是"展开大组即卡死"的另一半原因。
         VStack(spacing: 0) {
-            ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
+            ForEach(Array(shown.enumerated()), id: \.element.id) { index, node in
                 if index == firstZeroShownIndex, !store.isAllZero(group) {
                     zeroSeparator(count: zeros)
                 }
-                itemRow(item, dimmed: item.bytes == 0)
+                nodeRow(node)
             }
-            if visible < sorted.count {
-                revealMoreButton(group, remaining: sorted.count - visible)
+            if visible < nodes.count {
+                revealMoreButton(group, remaining: nodes.count - visible)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// 节点渲染（r3 §P5）：单项直出；聚合 = 父行表头 + 展开后一级缩进子行。
+    @ViewBuilder
+    private func nodeRow(_ node: CleanStore.DisplayNode) -> some View {
+        switch node {
+        case let .single(item):
+            itemRow(item, dimmed: item.bytes == 0)
+        case let .aggregate(parent, items):
+            aggregateRow(node, parent: parent, items: items)
+            if store.isAggregateExpanded(node) {
+                // 子行一级缩进 22px（§P5.3），各自体积、各自行内动作
+                VStack(spacing: 0) {
+                    ForEach(items, id: \.id) { item in
+                        itemRow(item, dimmed: item.bytes == 0)
+                    }
+                }
+                .padding(.leading, 22)
+            }
+        }
+    }
+
+    /// 聚合父行（§P5）：三态复选框 + 语义名/父路径 + 「N 项」 + 总量 + 动作簇。
+    /// 父行本身不参与体积统计（总量由子行汇总）；默认收起。
+    private func aggregateRow(
+        _ node: CleanStore.DisplayNode, parent: String, items: [RobotItem]
+    ) -> some View {
+        CleanAggregateRow(
+            parent: parent,
+            count: items.count,
+            bytes: store.aggregateBytes(items),
+            allChecked: store.aggregateAllChecked(items),
+            anyChecked: store.aggregateAnyChecked(items),
+            expanded: store.isAggregateExpanded(node),
+            whitelisted: store.aggregateWhitelisted(items),
+            whitelistBusy: store.aggregateWhitelistBusy(items),
+            look: look,
+            accent: accent,
+            onToggle: { store.toggleAggregate(items) },
+            onExpand: {
+                withAnimation(.easeOut(duration: 0.15)) { store.toggleAggregateExpand(node) }
+            },
+            onReveal: { store.revealPath(parent) },
+            onWhitelist: { store.toggleAggregateWhitelist(items) }
+        )
     }
 
     /// 0 B 分隔线（§P1.4）：只计真 0 B；「大小未知」行排在此线之前，不受其陈述。
@@ -776,25 +825,32 @@ struct CleanView: View {
 }
 
 /// 清理页复选框（与软件页 CheckBox 同款式样；组件抽公用留待清理页稳定后）。
+/// `indeterminate`：聚合父行半选态（r3 §P5.4），横杠替代对勾。
 private struct CleanCheckBox: View {
     var checked: Bool
+    var indeterminate: Bool = false
     var accent: ModuleAccent
     var look: Look
     var size: CGFloat
     var onToggle: () -> Void
 
     var body: some View {
+        let filled = checked || indeterminate
         Button(action: onToggle) {
             RoundedRectangle(cornerRadius: size * 0.29)
-                .fill(checked ? AnyShapeStyle(accent.gradient) : AnyShapeStyle(.clear))
+                .fill(filled ? AnyShapeStyle(accent.gradient) : AnyShapeStyle(.clear))
                 .frame(width: size, height: size)
                 .overlay(
                     RoundedRectangle(cornerRadius: size * 0.29)
-                        .stroke(checked ? accent.a : look.lineStrong, lineWidth: 1.5)
+                        .stroke(filled ? accent.a : look.lineStrong, lineWidth: 1.5)
                 )
                 .overlay {
                     if checked {
                         Image(systemName: "checkmark")
+                            .font(.system(size: size * 0.52, weight: .bold))
+                            .foregroundStyle(accent.onAccent)
+                    } else if indeterminate {
+                        Image(systemName: "minus")
                             .font(.system(size: size * 0.52, weight: .bold))
                             .foregroundStyle(accent.onAccent)
                     }
@@ -803,6 +859,120 @@ private struct CleanCheckBox: View {
         }
         .buttonStyle(.plain)
         .pointingCursor()
+    }
+}
+
+// MARK: - 聚合父行（r3 §P5）
+
+/// 同父目录子项的可折叠表头：三态复选框、语义名或父路径、子项数 + 总量、
+/// 行内动作（Finder 显示父目录 / 盾牌批量加白）。父行 size 不参与统计。
+/// 独立结构体、42px 定高，与条目行同一套性能约束。
+private struct CleanAggregateRow: View {
+    var parent: String
+    var count: Int
+    var bytes: Int64
+    var allChecked: Bool
+    var anyChecked: Bool
+    var expanded: Bool
+    var whitelisted: Bool
+    var whitelistBusy: Bool
+    var look: Look
+    var accent: ModuleAccent
+    var onToggle: () -> Void
+    var onExpand: () -> Void
+    var onReveal: () -> Void
+    var onWhitelist: () -> Void
+
+    @State private var hoveringActions = false
+
+    private static let wlTint = Color(red: 0.616, green: 0.690, blue: 0.776)
+
+    var body: some View {
+        let name = CleanPathNames.semanticName(forAbbreviatedPath: parent)
+        HStack(spacing: 11) {
+            CleanCheckBox(
+                checked: allChecked,
+                indeterminate: !allChecked && anyChecked,
+                accent: accent, look: look, size: 17, onToggle: onToggle
+            )
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(look.textMute)
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    // 命名走同一张映射表；映射不到用父路径本身——绝不编造（§P2/§P5）
+                    if let name {
+                        Text(name)
+                            .font(Fonts.ui(12.5, .medium))
+                            .foregroundStyle(look.text)
+                    } else {
+                        Text(parent)
+                            .font(Fonts.mono(12))
+                            .foregroundStyle(look.text)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    Text(L("clean.agg.count", Int64(count)))
+                        .font(Fonts.mono(10.5))
+                        .foregroundStyle(look.textMute)
+                }
+                if name != nil {
+                    Text(parent)
+                        .font(Fonts.mono(10.5))
+                        .foregroundStyle(look.textMute)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .help(parent)
+                }
+            }
+            Spacer(minLength: 8)
+            if whitelisted {
+                Text(L("clean.badge.whitelisted"))
+                    .font(Fonts.ui(10, .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Self.wlTint.opacity(0.14)))
+                    .foregroundStyle(Self.wlTint)
+            }
+            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                .font(Fonts.mono(11.5))
+                .foregroundStyle(look.textDim)
+                .frame(width: 74, alignment: .trailing)
+            actionsCluster
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .opacity(whitelisted ? 0.5 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onExpand)
+    }
+
+    private var actionsCluster: some View {
+        HStack(spacing: 4) {
+            Button(action: onReveal) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(look.textDim)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L("clean.action.reveal.help"))
+            Button(action: onWhitelist) {
+                Image(systemName: whitelisted ? "shield.fill" : "shield")
+                    .font(.system(size: 11))
+                    .foregroundStyle(whitelisted ? Self.wlTint : look.textDim)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(whitelistBusy)
+            .help(whitelisted
+                ? L("clean.action.unwhitelist.help")
+                : L("clean.action.whitelist.agg.help"))
+        }
+        .opacity(hoveringActions ? 1 : 0.45)
+        .onHover { hoveringActions = $0 }
     }
 }
 

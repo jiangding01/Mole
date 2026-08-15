@@ -10,9 +10,11 @@ import XCTest
 final class CleanConfirmLayoutPerfTests: XCTestCase {
     private func item(_ id: String, bytes: Int64?) -> RobotItem {
         let bytesJSON = bytes.map(String.init) ?? "null"
+        // 每项独立父目录：避免 r3 §P5 聚合把 349 行折成一个节点——
+        // 本测试要量的是"全部平铺行"的最坏布局成本。
         let json = """
         {"id":"\(id)","section":"developer_tools","label":"\(id)",
-         "path":"/Users/x/.cache/tool/\(id)","bytes":\(bytesJSON),
+         "path":"/Users/x/.cache/tool-\(id)/data","bytes":\(bytesJSON),
          "kind":"cache","reversible":true,"default_selected":true,"risk":"safe"}
         """
         return try! JSONDecoder().decode(RobotItem.self, from: Data(json.utf8))

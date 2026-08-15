@@ -1613,6 +1613,22 @@
         }
       }
     },
+    "clean.action.whitelist.agg.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add all items in this group to the whitelist · All future scans (CLI and GUI) will skip these paths"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将本组全部子项加入白名单 · CLI 与 GUI 的所有后续扫描都会跳过这些路径"
+          }
+        }
+      }
+    },
     "clean.action.whitelist.help" : {
       "localizations" : {
         "en" : {
@@ -1625,6 +1641,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "加入白名单 · CLI 与 GUI 的所有后续扫描都会跳过此路径"
+          }
+        }
+      }
+    },
+    "clean.agg.count" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld items"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 项"
           }
         }
       }
