@@ -39,9 +39,20 @@ struct SettingsView: View {
             .opacity(appeared ? 1 : 0)
             .offset(y: appeared || reduceMotion ? 0 : 5)
         }
+        // toast 是全局层：挂在根容器底部，不嵌进 content 的 ScrollView（设计 §3.2）。
+        .overlay(alignment: .bottom) {
+            DiagnosticsToast(store: store, look: look, accent: accent)
+                .padding(.bottom, 20)
+        }
         .frame(width: 860, height: 620)
         .onAppear {
             store.refreshLaunchAtLoginStatus()
+            // 菜单栏「运行诊断」一次性信号：直接跳到高级分区并开始导出。
+            if DiagnosticsMenuBridge.pendingAutoExport {
+                DiagnosticsMenuBridge.pendingAutoExport = false
+                store.section = .advanced
+                store.startDiagnosticsExport()
+            }
             if reduceMotion {
                 appeared = true
             } else {
@@ -171,6 +182,7 @@ struct SettingsView: View {
                     store.skipIntro.toggle()
                 }
             }
+            HotkeyRow(store: store, look: look, accent: accent)
             SettingsRow(
                 look: look,
                 title: L("settings.general.reduceMotion"),

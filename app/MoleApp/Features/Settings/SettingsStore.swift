@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import MoleKit
 import Observation
 import ServiceManagement
@@ -245,6 +246,118 @@ final class SettingsStore {
         skipIntro = false
         reduceMotion = false
         L10n.shared.language = .system
+    }
+
+    // MARK: - 全局快捷键（设计 CHANGELOG §3.1）
+
+    /// 录制态状态机：idle（展示已保存组合或「未设置」）/ recording（等待按键，esc 取消）。
+    enum HotkeyRecordingState: Equatable {
+        case idle, recording
+    }
+
+    private(set) var hotkeyRecording: HotkeyRecordingState = .idle
+    /// 捕获后若与系统快捷键冲突，行下方展示琥珀提示；仍允许保存，提示不阻断。
+    private(set) var hotkeyConflictMessage: String?
+    private var hotkeyMonitor: Any?
+
+    /// 已保存的快捷键（真相源 = HotkeyManager，其自带 UserDefaults 持久化）。
+    var currentHotkey: HotkeyCombo? { HotkeyManager.shared.current }
+
+    /// 进入录制态：挂一个仅录制期存在的本地按键监听，捕获后立即移除。
+    func startHotkeyRecording() {
+        guard hotkeyRecording == .idle else { return }
+        hotkeyRecording = .recording
+        hotkeyConflictMessage = nil
+        hotkeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if event.keyCode == UInt16(kVK_Escape) {
+                cancelHotkeyRecording()
+                return nil
+            }
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            // 必须包含至少一个修饰键，否则忽略此次按键（继续等待下一次）。
+            guard !modifiers.isEmpty else { return nil }
+            applyHotkey(HotkeyCombo(keyCode: Int(event.keyCode), modifierFlags: modifiers))
+            return nil
+        }
+    }
+
+    /// esc 取消录制，不改动已保存的快捷键。
+    func cancelHotkeyRecording() {
+        stopHotkeyMonitor()
+        hotkeyRecording = .idle
+    }
+
+    /// 清除已保存的快捷键（行内 × 按钮），即时注销 Carbon 注册。
+    func clearHotkey() {
+        stopHotkeyMonitor()
+        hotkeyRecording = .idle
+        hotkeyConflictMessage = nil
+        HotkeyManager.shared.update(nil)
+    }
+
+    private func applyHotkey(_ combo: HotkeyCombo) {
+        stopHotkeyMonitor()
+        hotkeyRecording = .idle
+        HotkeyManager.shared.update(combo)
+        hotkeyConflictMessage = HotkeyConflicts.conflict(for: combo).map {
+            L("settings.general.hotkey.conflict", $0.localizedName)
+        }
+    }
+
+    private func stopHotkeyMonitor() {
+        if let hotkeyMonitor { NSEvent.removeMonitor(hotkeyMonitor) }
+        hotkeyMonitor = nil
+    }
+
+    // MARK: - 诊断日志导出（设计 CHANGELOG §3.2）
+
+    enum DiagnosticsExportPhase: Equatable {
+        case idle, exporting
+        case succeeded(URL)
+        case failed(String)
+    }
+
+    private(set) var diagnosticsPhase: DiagnosticsExportPhase = .idle
+    private var diagnosticsToastTask: Task<Void, Never>?
+    private let diagnosticsExporter = DiagnosticsExporter()
+
+    /// 「导出…」按钮触发；进行中不重入（重试按钮走同一入口）。
+    func startDiagnosticsExport() {
+        guard diagnosticsPhase != .exporting else { return }
+        diagnosticsToastTask?.cancel()
+        diagnosticsPhase = .exporting
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let url = try await diagnosticsExporter.exportReport()
+                diagnosticsPhase = .succeeded(url)
+                scheduleDiagnosticsToastAutoDismiss()
+            } catch {
+                diagnosticsPhase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// toast 关闭按钮（成功/失败态均可手动关闭）。
+    func dismissDiagnosticsToast() {
+        diagnosticsToastTask?.cancel()
+        diagnosticsPhase = .idle
+    }
+
+    /// 「在 Finder 中显示」。
+    func revealDiagnosticsExport() {
+        guard case let .succeeded(url) = diagnosticsPhase else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// 成功态 6 秒后自动消失（设计 §3.2）。
+    private func scheduleDiagnosticsToastAutoDismiss() {
+        diagnosticsToastTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            self?.diagnosticsPhase = .idle
+        }
     }
 
     // MARK: - 关于

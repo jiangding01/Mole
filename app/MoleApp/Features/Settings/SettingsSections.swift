@@ -342,6 +342,9 @@ struct AdvancedSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            SettingsRow(look: look, title: L("settings.advanced.diagnostics"), subtitle: L("settings.advanced.diagnostics.desc")) {
+                diagnosticsExportControl
+            }
             SettingsRow(look: look, title: L("settings.advanced.log"), subtitle: L("settings.advanced.log.desc")) {
                 PillButton(
                     look: look, accent: accent,
@@ -387,6 +390,29 @@ struct AdvancedSection: View {
             Button(L("settings.common.cancel"), role: .cancel) {}
         } message: {
             Text(L("settings.advanced.reset.confirm.msg"))
+        }
+    }
+
+    /// 进行中态（按钮内 spinner +「导出中…」文字转 accent 色）/ 常态导出按钮（设计 §3.2）。
+    @ViewBuilder
+    private var diagnosticsExportControl: some View {
+        if store.diagnosticsPhase == .exporting {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(L("settings.advanced.diagnostics.exporting"))
+                    .font(Fonts.ui(12.5, .semibold))
+                    .foregroundStyle(accent.a)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+        } else {
+            PillButton(
+                look: look, accent: accent,
+                title: L("settings.advanced.diagnostics.action"),
+                style: .outline,
+                horizontalPadding: 16, verticalPadding: 8,
+                action: { store.startDiagnosticsExport() }
+            )
         }
     }
 }

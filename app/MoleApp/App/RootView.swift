@@ -85,6 +85,11 @@ struct RootView: View {
         .onAppear {
             onboardingStore.presentIfFirstLaunch()
             fdaBannerStore.probe()
+            HotkeyManager.shared.activateAtLaunch()
+        }
+        // 菜单栏「运行诊断」：打开设置 sheet；sheet 内 onAppear 消费自动导出信号（§3.2）。
+        .onReceive(NotificationCenter.default.publisher(for: .moleOpenSettings)) { _ in
+            showsSettings = true
         }
         // App 回到前台时复测 FDA：授权在系统设置里完成（期间本 App 失焦），
         // 切回来即刷新横幅；只测启动一刻会让横幅永远停在旧结果上。
