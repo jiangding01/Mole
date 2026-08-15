@@ -1811,6 +1811,51 @@ EOF
     [[ "$output" == *"TIMEOUTS=4"* ]] || return 1
 }
 
+@test "safe_clean survives a hung du-batch binary (wall-clock bound, pool fallback)" {
+    local base="$HOME/safe_clean_batch_hung"
+    mkdir -p "$base/a" "$base/b" "$base/c" "$base/d"
+    # 卡死的批量器：模拟 stalled SMB/FUSE 上阻塞的 syscall——协作式 deadline
+    # 打不断它，必须由外层 run_with_timeout 硬杀，扫描不得表现为挂死
+    cat > "$BATS_TEST_TMPDIR/hung-batch" << 'FAKE'
+#!/bin/bash
+exec sleep 300
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/hung-batch"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 \
+        MOLE_ANALYZE_GO_BIN="$BATS_TEST_TMPDIR/hung-batch" \
+        MOLE_TIMEOUT_DISK_VERIFY_SEC=1 /bin/bash --noprofile --norc << EOF
+set -euo pipefail
+source "\$PROJECT_ROOT/lib/core/common.sh"
+source "\$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=false
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+note_activity() { :; }
+is_path_whitelisted() { return 1; }
+get_cleanup_path_size_kb() { echo "POOL_USED" >&2; echo 3; }
+safe_remove() { echo "REMOVE:\$1"; /bin/rm -rf "\$1"; }
+
+rc=0
+safe_clean "$base/a" "$base/b" "$base/c" "$base/d" "Hung batch" || rc=\$?
+echo "RC=\$rc"
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    # 有界返回后回退池路径，清理照常完成
+    [[ "$output" == *"POOL_USED"* ]] || return 1
+    [[ "$output" == *"REMOVE:$base/a"* ]] || return 1
+    [[ "$output" == *"RC=0"* ]] || return 1
+}
+
 @test "safe_clean falls back to the pool when the du-batch binary is missing" {
     local base="$HOME/safe_clean_batch_fallback"
     mkdir -p "$base/a" "$base/b" "$base/c" "$base/d"

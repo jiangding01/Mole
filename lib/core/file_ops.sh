@@ -3072,9 +3072,16 @@ mole_size_batch() {
     [[ -x "$bin" ]] || return 1
     local out_file
     out_file=$(mktemp "${TMPDIR:-/tmp}/mole_size_batch.XXXXXX") || return 1
+    # 墙钟硬界：Go 的 per-path deadline 是协作式检查，阻塞在卡死文件系统
+    # （stalled SMB/FUSE）lstat 上的 goroutine 无法被它打断——没有外层
+    # run_with_timeout 的话整个扫描会表现为挂死（旧池路径的 du 是被
+    # run_with_timeout 硬杀的，这个保证不能丢）。预算按批内并发 8 折算，
+    # 与旧池最坏界同量级；rc124 沿调用方回退链落到逐路径有界测量。
+    local per_budget="${MOLE_TIMEOUT_DISK_VERIFY_SEC:-30}"
+    local overall_budget=$((($# / 8 + 1) * per_budget))
     local batch_rc=0
-    printf '%s\0' "$@" | "$bin" --du-batch \
-        --du-batch-timeout "${MOLE_TIMEOUT_DISK_VERIFY_SEC:-30}" \
+    printf '%s\0' "$@" | run_with_timeout "$overall_budget" "$bin" --du-batch \
+        --du-batch-timeout "$per_budget" \
         > "$out_file" 2> /dev/null || batch_rc=$?
     if [[ $batch_rc -ne 0 ]]; then
         rm -f "$out_file" # SAFE: removes the mktemp scratch file this function created
