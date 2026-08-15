@@ -55,6 +55,31 @@ require_jq() {
     [ "$(robot_human_to_bytes '97 KB')" = "97000" ] || return 1
     # Garbage degrades to 0, never breaks the stream
     [ "$(robot_human_to_bytes 'n/a')" = "0" ] || return 1
+    # Pure-bash fixed-point path: exact decimal math (the old awk float
+    # implementation truncated 65.1MB to 65099999), lowercase units accepted.
+    [ "$(robot_human_to_bytes '65.1MB')" = "65100000" ] || return 1
+    [ "$(robot_human_to_bytes '3.09 GB')" = "3090000000" ] || return 1
+    [ "$(robot_human_to_bytes '1.5 TB')" = "1500000000000" ] || return 1
+    [ "$(robot_human_to_bytes '88.8kb')" = "88800" ] || return 1
+    [ "$(robot_human_to_bytes '0.5GB')" = "500000000" ] || return 1
+}
+
+@test "robot_batch_item_hashes matches per-path cksum byte for byte" {
+    # Item ids are pinned by golden contracts and must survive the batch
+    # hasher (single perl process) replacing per-path cksum. Tricky bytes:
+    # spaces, UTF-8, emoji, empty line, tab.
+    local input=$'/Users/x/Library/Caches\n/path/with spaces/x\n/路径/中文 🚀\n\n/tab\there'
+    local batch expected p
+    batch=$(printf '%s\n' "$input" | robot_batch_item_hashes)
+    expected=""
+    while IFS= read -r p; do
+        expected+="$(printf '%s' "$p" | cksum | awk '{printf "%08x", $1}')"$'\n'
+    done <<< "$input"
+    [ "$batch" = "${expected%$'\n'}" ] || {
+        echo "batch:    $batch"
+        echo "expected: $expected"
+        return 1
+    }
 }
 
 @test "robot_section_slug produces stable machine keys" {

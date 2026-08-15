@@ -26,14 +26,26 @@ robot_active() {
 # Escape a string for embedding in a JSON string literal.
 # Handles backslash, double quote, newline, tab, CR. Paths containing other
 # control bytes are rejected at collect time (robot_plan_append).
-robot_json_escape() {
+#
+# Two forms: `_robot_escape_to_var` writes the result into the global
+# ROBOT_ESCAPED (bash 3.2 has no namerefs) so hot emit paths avoid one
+# subshell fork per field — a 1650-item plan used to pay ~10k command
+# substitutions in its emission tail. `robot_json_escape` stays as the
+# stdout wrapper for cold call sites and tests.
+ROBOT_ESCAPED=""
+_robot_escape_to_var() {
     local s="$1"
     s=${s//\\/\\\\}
     s=${s//\"/\\\"}
     s=${s//$'\n'/\\n}
     s=${s//$'\t'/\\t}
     s=${s//$'\r'/\\r}
-    printf '%s' "$s"
+    ROBOT_ESCAPED="$s"
+}
+
+robot_json_escape() {
+    _robot_escape_to_var "$1"
+    printf '%s' "$ROBOT_ESCAPED"
 }
 
 # Emit one NDJSON event line. Callers pass pre-built JSON body fragments
@@ -49,19 +61,33 @@ robot_emit() {
 
 robot_emit_progress() {
     # $1 phase, $2 section, $3 current, $4 done, $5 total, $6 bytes_found
-    robot_emit "progress" "$(printf '"phase":"%s","section":"%s","current":"%s","done":%s,"total":%s,"bytes_found":%s' \
-        "$(robot_json_escape "$1")" "$(robot_json_escape "$2")" "$(robot_json_escape "$3")" \
-        "${4:-0}" "${5:--1}" "${6:-0}")"
+    local e_phase e_section e_current
+    _robot_escape_to_var "$1"
+    e_phase="$ROBOT_ESCAPED"
+    _robot_escape_to_var "$2"
+    e_section="$ROBOT_ESCAPED"
+    _robot_escape_to_var "$3"
+    e_current="$ROBOT_ESCAPED"
+    robot_emit "progress" "\"phase\":\"$e_phase\",\"section\":\"$e_section\",\"current\":\"$e_current\",\"done\":${4:-0},\"total\":${5:--1},\"bytes_found\":${6:-0}"
 }
 
 robot_emit_item() {
     # $1 id, $2 section, $3 label, $4 path, $5 bytes, $6 risk, $7 default_selected,
     # $8 detail (optional; task 说明等，GUI 未知 id 时的回退文案)
-    local body
-    body=$(printf '"id":"%s","section":"%s","label":"%s","path":"%s","bytes":%s,"kind":"cache","reversible":true,"default_selected":%s,"risk":"%s"' \
-        "$(robot_json_escape "$1")" "$(robot_json_escape "$2")" "$(robot_json_escape "$3")" \
-        "$(robot_json_escape "$4")" "${5:-0}" "${7:-true}" "${6:-safe}")
-    [[ -n "${8:-}" ]] && body="$body,\"detail\":\"$(robot_json_escape "$8")\""
+    local e_id e_section e_label e_path body
+    _robot_escape_to_var "$1"
+    e_id="$ROBOT_ESCAPED"
+    _robot_escape_to_var "$2"
+    e_section="$ROBOT_ESCAPED"
+    _robot_escape_to_var "$3"
+    e_label="$ROBOT_ESCAPED"
+    _robot_escape_to_var "$4"
+    e_path="$ROBOT_ESCAPED"
+    body="\"id\":\"$e_id\",\"section\":\"$e_section\",\"label\":\"$e_label\",\"path\":\"$e_path\",\"bytes\":${5:-0},\"kind\":\"cache\",\"reversible\":true,\"default_selected\":${7:-true},\"risk\":\"${6:-safe}\""
+    if [[ -n "${8:-}" ]]; then
+        _robot_escape_to_var "$8"
+        body="$body,\"detail\":\"$ROBOT_ESCAPED\""
+    fi
     robot_emit "item" "$body"
 }
 
@@ -78,14 +104,22 @@ robot_emit_task_status() {
 
 robot_emit_insight() {
     # $1 section, $2 label, $3 bytes
-    robot_emit "insight" "$(printf '"section":"%s","label":"%s","bytes":%s' \
-        "$(robot_json_escape "$1")" "$(robot_json_escape "$2")" "${3:-0}")"
+    local e_section e_label
+    _robot_escape_to_var "$1"
+    e_section="$ROBOT_ESCAPED"
+    _robot_escape_to_var "$2"
+    e_label="$ROBOT_ESCAPED"
+    robot_emit "insight" "\"section\":\"$e_section\",\"label\":\"$e_label\",\"bytes\":${3:-0}"
 }
 
 robot_emit_result() {
     # $1 id, $2 status, $3 freed_bytes
-    robot_emit "result" "$(printf '"id":"%s","status":"%s","freed_bytes":%s' \
-        "$(robot_json_escape "$1")" "$(robot_json_escape "$2")" "${3:-0}")"
+    local e_id e_status
+    _robot_escape_to_var "$1"
+    e_id="$ROBOT_ESCAPED"
+    _robot_escape_to_var "$2"
+    e_status="$ROBOT_ESCAPED"
+    robot_emit "result" "\"id\":\"$e_id\",\"status\":\"$e_status\",\"freed_bytes\":${3:-0}"
 }
 
 robot_emit_done() {
@@ -107,22 +141,46 @@ robot_emit_error() {
 # Convert human sizes from the dry-run export back to approximate bytes.
 # bytes_to_human (lib/core/base.sh) emits compact 1000-base values with no
 # space ("198.5MB", "743KB", "1.20GB", "545B"); accept spaced input too.
+# Pure bash on purpose: the old sed+tr+awk pipeline cost ~6 process spawns
+# per call, and the plan emission tail calls this once per item (1650 calls
+# on a real scan). Fixed-point math keeps the exact truncation semantics of
+# the awk version; 64-bit shell arithmetic holds through TB with 6 fraction
+# digits.
 robot_human_to_bytes() {
-    local value="$1" number unit
-    number=$(printf '%s' "$value" | sed 's/[^0-9.].*$//')
-    unit=$(printf '%s' "$value" | sed 's/^[0-9. ]*//' | tr '[:lower:]' '[:upper:]')
+    local value="$1"
+    local number="${value%%[!0-9.]*}"
     [[ -n "$number" ]] || {
         printf '0'
         return 0
     }
+    local unit="${value#"$number"}"
+    unit="${unit//[!A-Za-z]/}"
+    local mult
     case "$unit" in
-        B | "") awk "BEGIN {printf \"%d\", $number}" ;;
-        KB) awk "BEGIN {printf \"%d\", $number * 1000}" ;;
-        MB) awk "BEGIN {printf \"%d\", $number * 1000 * 1000}" ;;
-        GB) awk "BEGIN {printf \"%d\", $number * 1000 * 1000 * 1000}" ;;
-        TB) awk "BEGIN {printf \"%d\", $number * 1000 * 1000 * 1000 * 1000}" ;;
-        *) printf '0' ;;
+        [Bb] | "") mult=1 ;;
+        [Kk][Bb]) mult=1000 ;;
+        [Mm][Bb]) mult=1000000 ;;
+        [Gg][Bb]) mult=1000000000 ;;
+        [Tt][Bb]) mult=1000000000000 ;;
+        *)
+            printf '0'
+            return 0
+            ;;
     esac
+    local int_part="${number%%.*}" frac_part=""
+    [[ "$number" == *.* ]] && frac_part="${number#*.}"
+    frac_part="${frac_part%%.*}"
+    frac_part="${frac_part:0:6}"
+    [[ -n "$int_part" ]] || int_part=0
+    local total=$((10#$int_part * mult))
+    if [[ -n "$frac_part" ]]; then
+        local scale=1 _i
+        for ((_i = 0; _i < ${#frac_part}; _i++)); do
+            scale=$((scale * 10))
+        done
+        total=$((total + 10#$frac_part * mult / scale))
+    fi
+    printf '%d' "$total"
 }
 
 # Section display name -> stable machine slug (§4.3 i18n contract).
@@ -167,6 +225,51 @@ robot_item_id() {
     local prefix="$1" section="$2" path="$3" sum
     sum=$(printf '%s' "$path" | cksum | awk '{printf "%08x", $1}')
     printf '%s.%s.%s' "$prefix" "$section" "$sum"
+}
+
+# Batch form of the id hash: stdin one path per line, stdout one 8-hex hash
+# per line. One perl process replaces three processes per path — the clean
+# plan emission tail used to spend ~5k forks here on a 1650-item scan.
+# Output must stay byte-identical to `cksum | awk '{printf "%08x", $1}'`
+# (POSIX cksum CRC: poly 0x04C11DB7, MSB-first, length bytes appended,
+# final complement): item ids are pinned by contracts/robot_v1 goldens and
+# regression-tested against real cksum. Paths reaching this point never
+# contain \n (they came from line-split parsing), so line framing is exact.
+# No perl → per-path cksum fallback, same output.
+robot_batch_item_hashes() {
+    if command -v perl > /dev/null 2>&1; then
+        perl -e '
+            my @t;
+            for my $i (0..255) {
+                my $c = $i << 24;
+                for (1..8) {
+                    $c = ($c & 0x80000000)
+                        ? ((($c << 1) & 0xFFFFFFFF) ^ 0x04C11DB7)
+                        : (($c << 1) & 0xFFFFFFFF);
+                }
+                $t[$i] = $c;
+            }
+            while (defined(my $line = <STDIN>)) {
+                chomp $line;
+                my $crc = 0;
+                for my $b (unpack "C*", $line) {
+                    $crc = ((($crc << 8) & 0xFFFFFFFF) ^ $t[(($crc >> 24) ^ $b) & 0xFF]);
+                }
+                my $n = length $line;
+                while ($n) {
+                    $crc = ((($crc << 8) & 0xFFFFFFFF) ^ $t[(($crc >> 24) ^ ($n & 0xFF)) & 0xFF]);
+                    $n >>= 8;
+                }
+                printf "%08x\n", (~$crc) & 0xFFFFFFFF;
+            }
+        '
+    else
+        local p sum
+        while IFS= read -r p; do
+            sum=$(printf '%s' "$p" | cksum | awk '{printf "%08x", $1}')
+            printf '%s\n' "$sum"
+        done
+    fi
 }
 
 robot_plan_append() {
@@ -217,6 +320,11 @@ robot_clean_plan_from_export() {
     local line section_name section_slug path size_part bytes item_id
     local items=0 bytes_total=0
 
+    # 两遍式：第一遍纯 bash 解析/过滤并收集记录，第二遍批量算 id 后按原序
+    # 发射。id 哈希批量化（robot_batch_item_hashes）把发射尾巴从每项 3 个
+    # 进程降到全程 1 个进程；记录重放保持 insight 与 item 的相对顺序不变。
+    local -a rec_type=() rec_section=() rec_path=() rec_bytes=() rec_bytes_json=()
+
     section_name=""
     section_slug=""
 
@@ -260,7 +368,11 @@ robot_clean_plan_from_export() {
 
         if robot_section_is_insight "$section_slug"; then
             # Insights carry the same unknown-size honesty: null, not 0.
-            robot_emit_insight "$section_slug" "$path" "$bytes_json"
+            rec_type+=("insight")
+            rec_section+=("$section_slug")
+            rec_path+=("$path")
+            rec_bytes+=("0")
+            rec_bytes_json+=("$bytes_json")
             continue
         fi
 
@@ -275,15 +387,57 @@ robot_clean_plan_from_export() {
             continue
         fi
 
-        item_id=$(robot_item_id "cl" "$section_slug" "$path")
+        rec_type+=("item")
+        rec_section+=("$section_slug")
+        rec_path+=("$path")
+        rec_bytes+=("$bytes")
+        rec_bytes_json+=("$bytes_json")
+    done < "$export_file"
+
+    # 批量 id：只对 item 记录取哈希，序与收集序一致。
+    local -a item_hashes=()
+    if [[ ${#rec_type[@]} -gt 0 ]]; then
+        local _idx
+        local hash_input=""
+        for ((_idx = 0; _idx < ${#rec_type[@]}; _idx++)); do
+            [[ "${rec_type[$_idx]}" == "item" ]] || continue
+            hash_input+="${rec_path[$_idx]}"$'\n'
+        done
+        if [[ -n "$hash_input" ]]; then
+            local hash_line
+            while IFS= read -r hash_line; do
+                item_hashes+=("$hash_line")
+            done < <(printf '%s' "$hash_input" | robot_batch_item_hashes)
+        fi
+    fi
+
+    # 重放：insight 与 item 按收集序发射；哈希游标只随 item 前进。
+    local hash_cursor=0
+    local _r
+    for ((_r = 0; _r < ${#rec_type[@]}; _r++)); do
+        section_slug="${rec_section[$_r]}"
+        path="${rec_path[$_r]}"
+        if [[ "${rec_type[$_r]}" == "insight" ]]; then
+            robot_emit_insight "$section_slug" "$path" "${rec_bytes_json[$_r]}"
+            continue
+        fi
+        # 批量哈希与 item 数必须一一对应；对不上说明哈希器异常，
+        # 回退逐项 cksum，绝不让 id 错位（id 错位 = apply 删错对象）。
+        if [[ $hash_cursor -lt ${#item_hashes[@]} ]]; then
+            item_id="cl.$section_slug.${item_hashes[$hash_cursor]}"
+        else
+            item_id=$(robot_item_id "cl" "$section_slug" "$path")
+        fi
+        hash_cursor=$((hash_cursor + 1))
+        bytes="${rec_bytes[$_r]}"
         if ! robot_plan_append "$plan_id" "$item_id" "$path" "$bytes"; then
             robot_emit_error "E_INTERNAL" "skipped unrepresentable path in section $section_slug" "false"
             continue
         fi
-        robot_emit_item "$item_id" "$section_slug" "$path" "$path" "$bytes_json" "safe" "true"
+        robot_emit_item "$item_id" "$section_slug" "$path" "$path" "${rec_bytes_json[$_r]}" "safe" "true"
         items=$((items + 1))
         bytes_total=$((bytes_total + bytes))
-    done < "$export_file"
+    done
 
     robot_emit_done "true" "$plan_id" "\"items\":$items,\"bytes_total\":$bytes_total"
 }
