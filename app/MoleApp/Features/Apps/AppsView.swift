@@ -370,20 +370,17 @@ struct AppsView: View {
 
     private var loadingState: some View {
         VStack(spacing: 0) {
-            ZStack {
-                RingSpinner(accent: accent, size: 200, lineWidth: 3)
-                Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(accent.b)
-            }
-            Fonts.eyebrow("Scanning Applications", size: 11)
+            // 线性光谱条（r2 §P3）：秒级扫描不套光谱环叙事，
+            // 用同家族的刻度采样语言。
+            LinearSpectrumBar(accent: accent)
+            Fonts.eyebrow("Reading Applications", size: 11)
                 .foregroundStyle(look.textMute)
                 .padding(.top, 38)
             Text(L("apps.loading.title"))
                 .font(Fonts.serif(30, .semibold))
                 .foregroundStyle(look.text)
                 .padding(.top, 12)
-            Text(L("apps.loading.sub"))
+            Text(L("apps.loading.reading"))
                 .font(Fonts.ui(13))
                 .foregroundStyle(look.textDim)
                 .padding(.top, 10)

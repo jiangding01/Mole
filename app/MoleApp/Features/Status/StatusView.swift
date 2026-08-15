@@ -486,7 +486,16 @@ struct StatusView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             sortHeader("PID", .pid).frame(width: 80, alignment: .trailing)
             sortHeader("CPU", .cpu).frame(width: 130, alignment: .trailing)
-            sortHeader(L("status.table.energy"), .energy).frame(width: 70, alignment: .trailing)
+            // 能耗列（r2 §P5 方案 2）：估算档位 + 显式"估算"标注——诚实原则
+            HStack(spacing: 4) {
+                sortHeader(L("status.table.energy"), .energy)
+                Text(L("status.energy.est"))
+                    .font(Fonts.ui(8, .semibold))
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Capsule().fill(look.text.opacity(0.07)))
+                    .help(L("status.energy.est.help"))
+            }
+            .frame(width: 70, alignment: .trailing)
             sortHeader(L("status.card.memory"), .memory).frame(width: 90, alignment: .trailing)
             Color.clear.frame(width: 36, height: 1)
         }
@@ -693,7 +702,7 @@ private struct ProcessRow: View {
                 Text(String(format: "%.1f", proc.cpu ?? 0)).frame(width: 50, alignment: .trailing)
             }
             .frame(width: 130, alignment: .trailing)
-            Text(verbatim: "--").frame(width: 70, alignment: .trailing)
+            energyTier.frame(width: 70, alignment: .trailing)
             Text(fmtMem(proc.memoryBytes)).frame(width: 90, alignment: .trailing)
             Menu {
                 Button(L("status.menu.detail"), action: onOpen)
@@ -718,6 +727,20 @@ private struct ProcessRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen) // 设计 §9.6：点击行弹进程详情
         .onHover { hovering = $0 }
+    }
+
+    /// 能耗档位（r2 §P5）：CPU 换算——≥50 很高 / ≥25 高 / ≥10 中 / 其余低，
+    /// 高档位语义配色让扫视有信息量；真实 Energy Impact 是私有 API，不假装。
+    private var energyTier: some View {
+        let cpu = proc.cpu ?? 0
+        let (key, color): (String, Color) = cpu >= 50
+            ? ("status.energy.veryHigh", Semantic.danger)
+            : cpu >= 25 ? ("status.energy.high", Semantic.warnAlt)
+            : cpu >= 10 ? ("status.energy.medium", look.textDim)
+            : ("status.energy.low", look.textMute)
+        return Text(L(key))
+            .font(Fonts.ui(11, cpu >= 25 ? .semibold : .regular))
+            .foregroundStyle(color)
         .pointingCursor()
     }
 
