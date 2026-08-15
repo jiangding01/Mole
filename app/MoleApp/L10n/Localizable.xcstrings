@@ -2023,13 +2023,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "These targets were never scanned, so no reclaimable size can be given — they count toward the total only after a rescan."
+            "value" : "These targets were never scanned, so no reclaimable size can be given — they count toward the total only after a rescan. Rows badged “App running” in the list are a different case: their sizes were measured, they just cannot be deleted right now."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这些目标未被扫描，因此无法给出可释放体积——重新扫描后才会计入总量。"
+            "value" : "这些目标未被扫描，因此无法给出可释放体积——重新扫描后才会计入总量。清单里标「应用打开中」的单行是另一回事：那些已经扫到体积，只是此刻不可删。"
           }
         }
       }
@@ -2040,13 +2040,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld apps are running — related cleanup was skipped · rescan after quitting them"
+            "value" : "%lld apps are running — their cleanup was not scanned at all · rescan after quitting them"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 个应用运行中，相关清理已跳过 · 退出后重新扫描可纳入"
+            "value" : "%lld 个应用运行中，相关清理整段未扫描 · 退出后重新扫描可纳入"
           }
         }
       }
@@ -2149,6 +2149,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "空间洞察"
+          }
+        }
+      }
+    },
+    "clean.lock.badge.app" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App running"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用打开中"
+          }
+        }
+      }
+    },
+    "clean.lock.badge.sys" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In use by system"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统占用"
+          }
+        }
+      }
+    },
+    "clean.lock.help.app" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Size measured, but %@ is running · quit it and rescan to clean"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已扫到体积，但 %@ 正在运行 · 退出后重新扫描即可清理"
+          }
+        }
+      }
+    },
+    "clean.lock.help.sys" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Size measured, but the system is using it right now · cannot be deleted yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已扫到体积，但系统此刻正在占用 · 暂不可删除"
           }
         }
       }

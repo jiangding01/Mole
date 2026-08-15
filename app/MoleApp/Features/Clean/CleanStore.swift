@@ -104,6 +104,10 @@ final class CleanStore {
     /// 置灰 + 徽标 + 取消勾选 + 除名统计；再点盾牌撤销。持久化在 CLI 侧
     /// （robot whitelist add --mode clean 即时落盘），下次扫描核心自动跳过。
     private(set) var whitelistedIds: Set<String> = []
+    /// 行级锁定项（r3 §P4：blocked_by 非空——"扫到了但此刻不可删"）。
+    /// 锁图标替代复选框、不可勾、不计入已选统计；体积照常显示（扫到了）。
+    /// 与守卫条的分工：守卫条 = 段级"整段未扫描"（无字节数），行级锁有字节数。
+    private(set) var lockedIds: Set<String> = []
     /// 白名单往返在途的项（防连点；成功/失败都会移除）。
     private(set) var whitelistBusyIds: Set<String> = []
     private(set) var confirmRevealStart = Date()
@@ -220,7 +224,11 @@ final class CleanStore {
             buckets[section, default: []].append(item)
         }
         groups = order.map { Group(section: $0, items: buckets[$0] ?? []) }
-        recommendedIds = Set(items.filter { $0.defaultSelected ?? true }.map(\.id))
+        lockedIds = Set(items.filter { Self.isBlocked($0) }.map(\.id))
+        // 锁定行不可勾（§P4）：推荐集在源头就把它除名，初始勾选随之干净
+        recommendedIds = Set(
+            items.filter { ($0.defaultSelected ?? true) && !Self.isBlocked($0) }.map(\.id)
+        )
         checked = recommendedIds
         // 折叠态初始化（自扫与会话复用两个入口共用本方法，状态必然归零）
         expandedGroups = []
@@ -342,9 +350,9 @@ final class CleanStore {
         }
     }
 
-    /// 父行三态（§P5.4）：全选 / 半选 / 未选。白名单子行除名（不可勾）。
+    /// 父行三态（§P5.4）：全选 / 半选 / 未选。白名单/锁定子行除名（不可勾）。
     func aggregateAllChecked(_ items: [RobotItem]) -> Bool {
-        let checkable = items.filter { !whitelistedIds.contains($0.id) }
+        let checkable = items.filter { selectable($0.id) }
         return !checkable.isEmpty && checkable.allSatisfy { checked.contains($0.id) }
     }
 
@@ -359,7 +367,7 @@ final class CleanStore {
                 checked.remove(item.id)
             }
         } else {
-            for item in items where !whitelistedIds.contains(item.id) {
+            for item in items where selectable(item.id) {
                 checked.insert(item.id)
             }
         }
@@ -445,6 +453,7 @@ final class CleanStore {
         checked = []
         recommendedIds = []
         whitelistedIds = []
+        lockedIds = []
         itemsById = [:]
         log = []
         freed = 0
@@ -463,13 +472,13 @@ final class CleanStore {
     // MARK: - 勾选
 
     func toggle(_ item: RobotItem) {
-        guard !whitelistedIds.contains(item.id) else { return } // 白名单行不可勾（§P3）
+        guard selectable(item.id) else { return } // 白名单/锁定行不可勾（§P3/§P4）
         if checked.contains(item.id) { checked.remove(item.id) } else { checked.insert(item.id) }
     }
 
-    /// 组全选态：白名单行除名——"全部可勾项已勾"即视为全选。
+    /// 组全选态：白名单/锁定行除名——"全部可勾项已勾"即视为全选。
     func groupChecked(_ group: Group) -> Bool {
-        group.items.allSatisfy { checked.contains($0.id) || whitelistedIds.contains($0.id) }
+        group.items.allSatisfy { checked.contains($0.id) || !selectable($0.id) }
     }
 
     func toggleGroup(_ group: Group) {
@@ -478,7 +487,7 @@ final class CleanStore {
                 checked.remove(item.id)
             }
         } else {
-            for item in group.items where !whitelistedIds.contains(item.id) {
+            for item in group.items where selectable(item.id) {
                 checked.insert(item.id)
             }
         }
@@ -487,7 +496,7 @@ final class CleanStore {
     // MARK: - 选择预设（r3 §P6：全选 · 清空 · 推荐）
 
     func selectAll() {
-        checked = Set(groups.flatMap(\.items).map(\.id)).subtracting(whitelistedIds)
+        checked = Set(groups.flatMap(\.items).map(\.id).filter(selectable))
     }
 
     func selectNone() {
@@ -504,8 +513,36 @@ final class CleanStore {
     }
 
     /// 推荐集扣除已加白的项：白名单行不可勾，「推荐」不应试图勾它。
+    /// （锁定行在 ingest 时已从推荐集除名。）
     private var effectiveRecommended: Set<String> {
         recommendedIds.subtracting(whitelistedIds)
+    }
+
+    /// 可勾选判定（§P3/§P4 汇合点）：白名单行与锁定行都不可勾。
+    private func selectable(_ id: String) -> Bool {
+        !whitelistedIds.contains(id) && !lockedIds.contains(id)
+    }
+
+    // MARK: - 行级锁定（r3 §P4）
+
+    static func isBlocked(_ item: RobotItem) -> Bool {
+        !(item.blockedBy ?? "").isEmpty
+    }
+
+    func isLocked(_ item: RobotItem) -> Bool {
+        lockedIds.contains(item.id)
+    }
+
+    /// blocked_by 解析："app:<应用名>" → 运行中应用；其余（"sys"）→ 系统占用。
+    static func lockAppName(_ blockedBy: String?) -> String? {
+        guard let blockedBy, blockedBy.hasPrefix("app:") else { return nil }
+        let name = String(blockedBy.dropFirst(4))
+        return name.isEmpty ? nil : name
+    }
+
+    /// 聚合父行锁定继承（§P4）：全部子行锁定时父行才呈现锁定态。
+    func aggregateLocked(_ items: [RobotItem]) -> Bool {
+        !items.isEmpty && items.allSatisfy { lockedIds.contains($0.id) }
     }
 
     // MARK: - 行内动作（r3 §P3）

@@ -341,6 +341,7 @@ struct CleanView: View {
             expanded: store.isAggregateExpanded(node),
             whitelisted: store.aggregateWhitelisted(items),
             whitelistBusy: store.aggregateWhitelistBusy(items),
+            lockedBy: store.aggregateLocked(items) ? items.first?.blockedBy : nil,
             look: look,
             accent: accent,
             onToggle: { store.toggleAggregate(items) },
@@ -397,6 +398,7 @@ struct CleanView: View {
             dimmed: dimmed,
             whitelisted: store.isWhitelisted(item),
             whitelistBusy: store.isWhitelistBusy(item),
+            locked: store.isLocked(item),
             look: look,
             accent: accent,
             onToggle: { store.toggle(item) },
@@ -876,6 +878,8 @@ private struct CleanAggregateRow: View {
     var expanded: Bool
     var whitelisted: Bool
     var whitelistBusy: Bool
+    /// 全部子行锁定时父行继承锁定态（r3 §P4 父子继承），值 = 首个子行的 blocked_by。
+    var lockedBy: String?
     var look: Look
     var accent: ModuleAccent
     var onToggle: () -> Void
@@ -890,11 +894,19 @@ private struct CleanAggregateRow: View {
     var body: some View {
         let name = CleanPathNames.semanticName(forAbbreviatedPath: parent)
         HStack(spacing: 11) {
-            CleanCheckBox(
-                checked: allChecked,
-                indeterminate: !allChecked && anyChecked,
-                accent: accent, look: look, size: 17, onToggle: onToggle
-            )
+            if lockedBy != nil {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CleanItemRow.lockTint)
+                    .frame(width: 17, height: 17)
+                    .help(lockHelp)
+            } else {
+                CleanCheckBox(
+                    checked: allChecked,
+                    indeterminate: !allChecked && anyChecked,
+                    accent: accent, look: look, size: 17, onToggle: onToggle
+                )
+            }
             Image(systemName: "chevron.right")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(look.textMute)
@@ -933,6 +945,17 @@ private struct CleanAggregateRow: View {
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(RoundedRectangle(cornerRadius: 5).fill(Self.wlTint.opacity(0.14)))
                     .foregroundStyle(Self.wlTint)
+            } else if lockedBy != nil {
+                Text(CleanStore.lockAppName(lockedBy) != nil
+                    ? L("clean.lock.badge.app") : L("clean.lock.badge.sys"))
+                    .font(Fonts.ui(10, .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(CleanItemRow.lockTint.opacity(0.13))
+                    )
+                    .foregroundStyle(CleanItemRow.lockTint)
+                    .help(lockHelp)
             }
             Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
                 .font(Fonts.mono(11.5))
@@ -942,9 +965,17 @@ private struct CleanAggregateRow: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 42)
-        .opacity(whitelisted ? 0.5 : 1)
+        .opacity(whitelisted ? 0.5 : (lockedBy != nil ? 0.72 : 1))
         .contentShape(Rectangle())
         .onTapGesture(perform: onExpand)
+    }
+
+    private var lockHelp: String {
+        if let app = CleanStore.lockAppName(lockedBy) {
+            L("clean.lock.help.app", app)
+        } else {
+            L("clean.lock.help.sys")
+        }
     }
 
     private var actionsCluster: some View {
@@ -989,6 +1020,7 @@ private struct CleanItemRow: View {
     var dimmed: Bool
     var whitelisted: Bool
     var whitelistBusy: Bool
+    var locked: Bool
     var look: Look
     var accent: ModuleAccent
     var onToggle: () -> Void
@@ -1001,12 +1033,26 @@ private struct CleanItemRow: View {
 
     /// 白名单徽标/守卫条同款冷灰蓝（#9DB0C6）。
     private static let wlTint = Color(red: 0.616, green: 0.690, blue: 0.776)
+    /// 行级锁定琥珀（r3 §P4 #E3B34E）。
+    static let lockTint = Color(red: 0.890, green: 0.702, blue: 0.306)
 
     var body: some View {
         let path = ((item.path ?? item.label) as NSString).abbreviatingWithTildeInPath
         let name = CleanPathNames.semanticName(forAbbreviatedPath: path)
         HStack(spacing: 11) {
-            CleanCheckBox(checked: checked, accent: accent, look: look, size: 17, onToggle: onToggle)
+            if locked {
+                // 锁图标替代复选框（§P4）：selectable() 在 Store 侧已排除，
+                // 这里连勾选入口一起拿掉，形态即语义。
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Self.lockTint)
+                    .frame(width: 17, height: 17)
+                    .help(lockHelp)
+            } else {
+                CleanCheckBox(
+                    checked: checked, accent: accent, look: look, size: 17, onToggle: onToggle
+                )
+            }
             if let name {
                 // 双行形态（r3 §P2）：语义名主行 + mono 路径副行。
                 // 副行从头部截断保尾段——尾段（profile 散列/子目录名）才是识别用的；
@@ -1039,6 +1085,15 @@ private struct CleanItemRow: View {
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(RoundedRectangle(cornerRadius: 5).fill(Self.wlTint.opacity(0.14)))
                     .foregroundStyle(Self.wlTint)
+            } else if locked {
+                // 行级锁定徽标（§P4）：应用打开中 / 系统占用——扫到了但此刻不可删
+                Text(CleanStore.lockAppName(item.blockedBy) != nil
+                    ? L("clean.lock.badge.app") : L("clean.lock.badge.sys"))
+                    .font(Fonts.ui(10, .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Self.lockTint.opacity(0.13)))
+                    .foregroundStyle(Self.lockTint)
+                    .help(lockHelp)
             } else if item.risk == "caution" {
                 Text(L("clean.badge.review"))
                     .font(Fonts.ui(10, .semibold))
@@ -1054,9 +1109,19 @@ private struct CleanItemRow: View {
         // 数百行 × 截断文本测量是布局风暴的单次成本大头。42px 居中行盒
         // 同时容纳双行与回退单行两种形态，两端各列天然成列（r3 §P2）。
         .frame(height: 42)
-        .opacity(whitelisted ? 0.5 : (dimmed ? 0.62 : 1))
+        // 透明度分档（§P4 定稿）：白名单 .5 / 锁定 .72 / 0B .62，彼此可区分
+        .opacity(whitelisted ? 0.5 : (locked ? 0.72 : (dimmed ? 0.62 : 1)))
         .contentShape(Rectangle())
         .onTapGesture(perform: onToggle)
+    }
+
+    /// 锁定行 hover 说明（§P4）：锁图标与徽标同一句。
+    private var lockHelp: String {
+        if let app = CleanStore.lockAppName(item.blockedBy) {
+            L("clean.lock.help.app", app)
+        } else {
+            L("clean.lock.help.sys")
+        }
     }
 
     /// 行内动作（r3 §P3）：Finder 显示 + 白名单盾牌。常驻 opacity .45，

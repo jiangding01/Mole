@@ -105,6 +105,45 @@ final class CleanStoreDisplayTests: XCTestCase {
         XCTAssertFalse(store.checked.contains("b"))
     }
 
+    /// 行级锁定（r3 §P4）：blocked_by 非空 → 不可勾、推荐集除名、组全选除名；
+    /// 体积照常计入组总量（扫到了）；blocked_by 解析两态。
+    func testLockedRows() {
+        func lockedItem(_ id: String, bytes: Int64, blockedBy: String) -> RobotItem {
+            let json = """
+            {"id":"\(id)","section":"s","label":"\(id)","path":"/tmp/\(id)",
+             "bytes":\(bytes),"kind":"cache","reversible":true,
+             "default_selected":true,"risk":"safe","blocked_by":"\(blockedBy)"}
+            """
+            return try! JSONDecoder().decode(RobotItem.self, from: Data(json.utf8))
+        }
+        let store = CleanStore()
+        let items = [
+            item("free", bytes: 100),
+            lockedItem("byapp", bytes: 200, blockedBy: "app:Google Chrome"),
+            lockedItem("bysys", bytes: 300, blockedBy: "sys"),
+        ]
+        store.ingestPlanForTesting(planId: "pl_test", items: items, insights: [])
+        // 锁定行从初始勾选与推荐集除名，且不可勾
+        XCTAssertEqual(store.checked, ["free"])
+        XCTAssertTrue(store.isRecommendedSelection)
+        store.toggle(items[1])
+        XCTAssertFalse(store.checked.contains("byapp"))
+        store.selectAll()
+        XCTAssertEqual(store.checked, ["free"])
+        // 组全选态把锁定行除名；组总量照常计入锁定行体积（扫到了）
+        let group = store.groups[0]
+        XCTAssertTrue(store.groupChecked(group))
+        XCTAssertEqual(group.bytes, 600)
+        XCTAssertEqual(store.checkedBytes, 100)
+        // blocked_by 解析
+        XCTAssertEqual(CleanStore.lockAppName("app:Google Chrome"), "Google Chrome")
+        XCTAssertNil(CleanStore.lockAppName("sys"))
+        XCTAssertNil(CleanStore.lockAppName(nil))
+        // 聚合父行继承：全锁才算锁
+        XCTAssertFalse(store.aggregateLocked(items))
+        XCTAssertTrue(store.aggregateLocked([items[1], items[2]]))
+    }
+
     /// 语义名映射（r3 §P2）：知名路径命中、具体规则优先、未知路径回退 nil。
     func testSemanticPathNames() {
         // 具体在前：ModuleCache 命中模块缓存而非 DerivedData 泛条目

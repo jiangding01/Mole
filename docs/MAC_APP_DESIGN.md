@@ -343,7 +343,7 @@ idle → scanning(progress) → review(items, 可勾选) → applying(results) �
 **外置卷清理（CLI 已有能力，v1.1 接入）**：CLI 支持 `mo clean --external <卷路径>`（`bin/clean.sh:1450`，含 `validate_external_volume_target` 目标校验）。GUI 在快速清理 tab 提供次要入口"清理外置卷…"——列出已挂载的非系统卷（来自 status 的 Disks 数组）供选择，plan/apply 走 `robot clean plan --external <path>`，校验与 section 逻辑完全复用 CLI。不自动扫描外置卷（尊重移动硬盘用户的预期）。
 
 **数据来源补充（参考图的两个派生特性）**：
-- **运行应用提示**：clean plan 对"因应用运行而无法完整清理"的项，emit 时带 `blocked_by:<app>` 字段；GUI 按 app 聚合出顶部副标题"关闭 X、Y… 后可再清理 N GB"。核心侧沿用现有"进程占用检测"逻辑，不新增判定。
+- **运行应用提示**：clean plan 对"因应用运行而无法完整清理"的项，emit 时带 `blocked_by:<app>` 字段；GUI 按 app 聚合出顶部副标题"关闭 X、Y… 后可再清理 N GB"。核心侧沿用现有"进程占用检测"逻辑，不新增判定。**现状（2026-08-15，设计 r3 §P4）**：GUI 渲染链已就绪——`blocked_by`（`app:<名>` / `sys` 两态）渲染为锁图标替代复选框 + 琥珀徽标「应用打开中 / 系统占用」，不可勾、不计入已选统计、体积照常显示，聚合父行全锁继承；与守卫条分工为"守卫条 = 段级整段未扫描（无字节数），行级锁 = 扫到了但此刻不可删（有字节数）"。**CLI 侧尚未 emit 此字段**（当前守卫是整族 defer，被挡目标不进 plan），数据源另立项调研——需评估"测量但标记"对守卫语义与 preview==real 的影响。
 - **分阶段执行**：clean apply 的 `progress`/`result` 事件带 `phase` 字段（如 `preparing` / `finalizing`，对应 clean 主流程的 section 顺序），GUI 据此把结果日志分阶段分组。
 
 **分类与保守默认（参考图确认，与 CLAUDE.md 一致）**：分类卡映射 §2.4 的 section（App 缓存 / 系统缓存 / 日志 / 开发工具 / AI 工具 / 浏览器 / 通信工具 / 废纸篓…）。默认勾选遵守保守原则：**AI 工具默认 0/0**（对话/项目/本地模型保留）、**通信工具默认不勾**（"过期内容无法找回"）、**浏览器默认部分勾**（登录态/历史保留）、**废纸篓清空默认不勾**（永久操作）。这些是安全默认，实现者不得改为默认全勾。
