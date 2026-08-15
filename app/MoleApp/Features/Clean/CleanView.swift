@@ -165,7 +165,9 @@ struct CleanView: View {
             // 右：分组清单 + 底部执行条
             VStack(spacing: 0) {
                 ScrollView {
-                    VStack(spacing: 10) {
+                    // Lazy 是硬要求：真实扫描 1854 项，普通 VStack 在 tab 再入时
+                    // 主线程同步重建全部行（含每行的 hover 追踪区），冻结数秒。
+                    LazyVStack(spacing: 10) {
                         ForEach(store.groups) { group in
                             groupCard(group)
                         }
@@ -209,7 +211,8 @@ struct CleanView: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             Divider().overlay(look.line)
-            VStack(spacing: 0) {
+            // 组内同样 lazy：最大组 761 行，viewport 外的行不物化。
+            LazyVStack(spacing: 0) {
                 ForEach(group.items, id: \.id) { item in
                     itemRow(item)
                 }
@@ -240,11 +243,20 @@ struct CleanView: View {
                     .foregroundStyle(Semantic.warn)
             }
             // bytes == nil 是协议里的"大小未知"（测量超时），不是 0 B——如实说。
-            Text(item.bytes.map(fmt) ?? L("clean.size.unknown"))
-                .font(Fonts.mono(11.5))
-                .foregroundStyle(look.textMute)
-                .frame(minWidth: 62, alignment: .trailing)
-                .help(item.bytes == nil ? L("clean.size.unknown.help") : "")
+            // .help 只挂在未知行：每个 .help 注册一个 tooltip 追踪区，
+            // 1854 行全挂（哪怕空字符串）是再入冻结的帮凶之一。
+            if item.bytes == nil {
+                Text(L("clean.size.unknown"))
+                    .font(Fonts.mono(11.5))
+                    .foregroundStyle(look.textMute)
+                    .frame(minWidth: 62, alignment: .trailing)
+                    .help(L("clean.size.unknown.help"))
+            } else {
+                Text(item.bytes.map(fmt) ?? "")
+                    .font(Fonts.mono(11.5))
+                    .foregroundStyle(look.textMute)
+                    .frame(minWidth: 62, alignment: .trailing)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
         .contentShape(Rectangle())
