@@ -77,6 +77,9 @@ final class CleanStore {
     var guardBarDismissed = false
     private(set) var insights: [RobotInsight] = []
     var checked: Set<String> = []
+    /// 协议推荐集（r3 §P6）：default_selected 为真的项（safe 勾 / caution 不勾）。
+    /// ingest 时算一次；「推荐」按钮回到这个集合，选择恰等时按钮高亮。
+    private(set) var recommendedIds: Set<String> = []
     private(set) var confirmRevealStart = Date()
 
     // MARK: 执行（result 事件驱动）
@@ -191,7 +194,8 @@ final class CleanStore {
             buckets[section, default: []].append(item)
         }
         groups = order.map { Group(section: $0, items: buckets[$0] ?? []) }
-        checked = Set(items.filter { $0.defaultSelected ?? true }.map(\.id))
+        recommendedIds = Set(items.filter { $0.defaultSelected ?? true }.map(\.id))
+        checked = recommendedIds
         // 折叠态初始化（自扫与会话复用两个入口共用本方法，状态必然归零）
         expandedGroups = []
         visibleCounts = [:]
@@ -280,6 +284,7 @@ final class CleanStore {
         groups = []
         insights = []
         checked = []
+        recommendedIds = []
         itemsById = [:]
         log = []
         freed = 0
@@ -313,6 +318,25 @@ final class CleanStore {
                 checked.insert(item.id)
             }
         }
+    }
+
+    // MARK: - 选择预设（r3 §P6：全选 · 清空 · 推荐）
+
+    func selectAll() {
+        checked = Set(groups.flatMap(\.items).map(\.id))
+    }
+
+    func selectNone() {
+        checked = []
+    }
+
+    func selectRecommended() {
+        checked = recommendedIds
+    }
+
+    /// 当前选择恰等推荐集：「推荐」字色高亮为 accent，作无声状态指示（§P6）。
+    var isRecommendedSelection: Bool {
+        checked == recommendedIds
     }
 
     var totalBytes: Int64 {

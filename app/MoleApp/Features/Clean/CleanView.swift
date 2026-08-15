@@ -499,6 +499,19 @@ struct CleanView: View {
                 .font(Fonts.ui(12.5, .semibold))
                 .foregroundStyle(look.textDim)
             Spacer()
+            // 选择预设三连（r3 §P6）：主操作左侧、弱化为文本按钮；
+            // 「推荐」= 协议 default_selected，选择恰等推荐集时字色高亮作状态指示。
+            HStack(spacing: 14) {
+                presetButton(L("clean.preset.all")) { store.selectAll() }
+                presetButton(L("clean.preset.none")) { store.selectNone() }
+                presetButton(
+                    L("clean.preset.recommended"),
+                    highlighted: store.isRecommendedSelection
+                ) { store.selectRecommended() }
+            }
+            Rectangle()
+                .fill(look.line)
+                .frame(width: 1, height: 16)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(L("clean.confirm.summary", Int64(store.checkedCount), fmt(store.checkedBytes)))
                     .font(Fonts.mono(12))
@@ -534,6 +547,16 @@ struct CleanView: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(look.surface))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(look.lineStrong, lineWidth: 1))
         .padding(.top, 12)
+    }
+
+    private func presetButton(
+        _ title: String, highlighted: Bool = false, action: @escaping () -> Void
+    ) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .pointingCursor()
+            .font(Fonts.ui(12, highlighted ? .semibold : .medium))
+            .foregroundStyle(highlighted ? accent.b : look.textDim)
     }
 
     // MARK: - executing（环放空 + 实时读数 + 打勾清单 + 停止）
@@ -795,13 +818,34 @@ private struct CleanItemRow: View {
     var onToggle: () -> Void
 
     var body: some View {
+        let path = ((item.path ?? item.label) as NSString).abbreviatingWithTildeInPath
+        let name = CleanPathNames.semanticName(forAbbreviatedPath: path)
         HStack(spacing: 11) {
             CleanCheckBox(checked: checked, accent: accent, look: look, size: 17, onToggle: onToggle)
-            Text(((item.path ?? item.label) as NSString).abbreviatingWithTildeInPath)
-                .font(Fonts.mono(11.5))
-                .foregroundStyle(checked ? look.text : look.textDim)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            if let name {
+                // 双行形态（r3 §P2）：语义名主行 + mono 路径副行。
+                // 副行从头部截断保尾段——尾段（profile 散列/子目录名）才是识别用的；
+                // 完整路径挂 tooltip。
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(Fonts.ui(12.5, .medium))
+                        .foregroundStyle(checked ? look.text : look.textDim)
+                    Text(path)
+                        .font(Fonts.mono(10.5))
+                        .foregroundStyle(look.textMute)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .help(path)
+                }
+            } else {
+                // 回退单行（约 18% 长尾）：映射不到就只给路径，绝不编造名称；
+                // 路径此时是主信息，字号/色阶提一档（12px · textDim）。
+                Text(path)
+                    .font(Fonts.mono(12))
+                    .foregroundStyle(checked ? look.text : look.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Spacer(minLength: 8)
             if item.risk == "caution" {
                 Text(L("clean.badge.review"))
@@ -814,8 +858,9 @@ private struct CleanItemRow: View {
         }
         .padding(.horizontal, 14)
         // 定高行：弹性高度让 StackLayout 对每行做多轮 sizeThatFits，
-        // 数百行 × middle 截断文本测量是布局风暴的单次成本大头。
-        .frame(height: 28)
+        // 数百行 × 截断文本测量是布局风暴的单次成本大头。42px 居中行盒
+        // 同时容纳双行与回退单行两种形态，两端各列天然成列（r3 §P2）。
+        .frame(height: 42)
         .opacity(dimmed ? 0.62 : 1)
         .contentShape(Rectangle())
         .onTapGesture(perform: onToggle)
