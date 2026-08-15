@@ -887,8 +887,6 @@ private struct CleanAggregateRow: View {
     var onReveal: () -> Void
     var onWhitelist: () -> Void
 
-    @State private var hoveringActions = false
-
     private static let wlTint = Color(red: 0.616, green: 0.690, blue: 0.776)
 
     var body: some View {
@@ -935,7 +933,6 @@ private struct CleanAggregateRow: View {
                         .foregroundStyle(look.textMute)
                         .lineLimit(1)
                         .truncationMode(.head)
-                        .help(parent)
                 }
             }
             Spacer(minLength: 8)
@@ -978,6 +975,7 @@ private struct CleanAggregateRow: View {
         }
     }
 
+    /// 常驻 .55、无 hover 追踪区、tooltip 只留盾牌——理由见 CleanItemRow.actionsCluster。
     private var actionsCluster: some View {
         HStack(spacing: 4) {
             Button(action: onReveal) {
@@ -988,7 +986,6 @@ private struct CleanAggregateRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(L("clean.action.reveal.help"))
             Button(action: onWhitelist) {
                 Image(systemName: whitelisted ? "shield.fill" : "shield")
                     .font(.system(size: 11))
@@ -1002,8 +999,7 @@ private struct CleanAggregateRow: View {
                 ? L("clean.action.unwhitelist.help")
                 : L("clean.action.whitelist.agg.help"))
         }
-        .opacity(hoveringActions ? 1 : 0.45)
-        .onHover { hoveringActions = $0 }
+        .opacity(0.55)
     }
 }
 
@@ -1026,10 +1022,6 @@ private struct CleanItemRow: View {
     var onToggle: () -> Void
     var onReveal: () -> Void
     var onWhitelist: () -> Void
-
-    /// 行内动作簇 hover 态（r3 §P3：常驻 .45，hover 升 1）。
-    /// 一行一个追踪区、且只挂在动作簇上，行数受分页封顶——有界。
-    @State private var hoveringActions = false
 
     /// 白名单徽标/守卫条同款冷灰蓝（#9DB0C6）。
     private static let wlTint = Color(red: 0.616, green: 0.690, blue: 0.776)
@@ -1057,6 +1049,10 @@ private struct CleanItemRow: View {
                 // 双行形态（r3 §P2）：语义名主行 + mono 路径副行。
                 // 副行从头部截断保尾段——尾段（profile 散列/子目录名）才是识别用的；
                 // 完整路径挂 tooltip。
+                // 副行不挂完整路径 tooltip：262 可见行 × 每行多个 .help/onHover
+                // 响应区曾把 hover 机制推回布局风暴（2026-08-15 真机采样：
+                // enqueueHoverUpdateIfNeeded → 全行 responder 图 → 整树重排）。
+                // 全路径复核走行内"Finder 显示"。
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
                         .font(Fonts.ui(12.5, .medium))
@@ -1066,7 +1062,6 @@ private struct CleanItemRow: View {
                         .foregroundStyle(look.textMute)
                         .lineLimit(1)
                         .truncationMode(.head)
-                        .help(path)
                 }
             } else {
                 // 回退单行（约 18% 长尾）：映射不到就只给路径，绝不编造名称；
@@ -1124,8 +1119,11 @@ private struct CleanItemRow: View {
         }
     }
 
-    /// 行内动作（r3 §P3）：Finder 显示 + 白名单盾牌。常驻 opacity .45，
-    /// hover 升 1（追踪区只挂动作簇）。白名单态盾牌实心并染色，title 换两态后果说明。
+    /// 行内动作（r3 §P3）：Finder 显示 + 白名单盾牌，常驻 opacity .55。
+    /// 与设计稿的有意偏差（同 r2 去 pointingCursor 的先例）：不做 hover 升亮
+    /// ——每行 onHover 的 @State 翻转会让鼠标扫过清单时连发布局事务，
+    /// 叠加数百双行 Text 测量 = 布局风暴复发（真机采样实证）。tooltip 只留
+    /// 盾牌一处：白名单后果说明是设计红线，文件夹图标自明。
     private var actionsCluster: some View {
         HStack(spacing: 4) {
             Button(action: onReveal) {
@@ -1136,7 +1134,6 @@ private struct CleanItemRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(L("clean.action.reveal.help"))
             Button(action: onWhitelist) {
                 Image(systemName: whitelisted ? "shield.fill" : "shield")
                     .font(.system(size: 11))
@@ -1150,8 +1147,7 @@ private struct CleanItemRow: View {
                 ? L("clean.action.unwhitelist.help")
                 : L("clean.action.whitelist.help"))
         }
-        .opacity(hoveringActions ? 1 : 0.45)
-        .onHover { hoveringActions = $0 }
+        .opacity(0.55)
     }
 
     @ViewBuilder
