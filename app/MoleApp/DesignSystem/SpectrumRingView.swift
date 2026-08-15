@@ -31,6 +31,10 @@ struct SpectrumRingView: View {
     var accent: ModuleAccent
     var look: Look = .ink
     var tickCount: Int = 144
+    /// 停帧开关：内容已静止（如 confirm reveal 完成）时必须置 true——
+    /// 不限帧率的 TimelineView 会永远逐帧使宿主视图失效；确认页大清单场景
+    /// 下"每帧全窗重布局 > 帧预算"曾把主线程钉死 135 秒（活体采样证据）。
+    var paused: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -42,7 +46,7 @@ struct SpectrumRingView: View {
             }
             .frame(width: 340, height: 340)
         } else {
-            TimelineView(.animation) { timeline in
+            TimelineView(.animation(minimumInterval: nil, paused: paused)) { timeline in
                 Canvas { ctx, size in
                     let t = timeline.date.timeIntervalSinceReferenceDate
                     draw(ctx: &ctx, size: size, time: t, motion: true)

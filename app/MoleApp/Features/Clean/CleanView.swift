@@ -12,6 +12,8 @@ struct CleanView: View {
     @State private var showsHistory = false
     /// 守卫提示条"查看应用"展开态（视图态，不进 Store）。
     @State private var guardExpanded = false
+    /// 确认页结果环 reveal 完成标记：置位后两层 TimelineView 全部停帧。
+    @State private var confirmRingSettled = false
     private let look = Look.ink
     private let accent = ModuleAccent.clean
 
@@ -144,13 +146,16 @@ struct CleanView: View {
 
     private var confirmView: some View {
         HStack(alignment: .top, spacing: 18) {
-            // 左：结果环（reveal 750ms 缓入）
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+            // 左：结果环（reveal 750ms 缓入；收束后整条动画链停摆——
+            // 30fps 改 reveal 会让环子树每帧重建，叠加大清单布局曾致
+            // 全窗永久无响应，见 SpectrumRingView.paused 注释）
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: confirmRingSettled)) { timeline in
                 let reveal = min(1, timeline.date.timeIntervalSince(store.confirmRevealStart) / 0.75)
                 ZStack {
                     SpectrumRingView(
                         state: .results(segments: ringSegments, reveal: reveal),
-                        accent: accent
+                        accent: accent,
+                        paused: confirmRingSettled
                     )
                     VStack(spacing: 7) {
                         Fonts.eyebrow("Reclaimable", size: 11)
@@ -163,6 +168,13 @@ struct CleanView: View {
                 }
             }
             .frame(width: 340)
+            // 每份新 plan（confirmRevealStart 变化）重放一次 reveal，
+            // 850ms 后（750ms 动画 + 余量）停摆。
+            .task(id: store.confirmRevealStart) {
+                confirmRingSettled = false
+                try? await Task.sleep(for: .milliseconds(850))
+                if !Task.isCancelled { confirmRingSettled = true }
+            }
 
             // 右：分组清单 + 底部执行条
             VStack(spacing: 0) {
@@ -800,7 +812,10 @@ private struct CleanItemRow: View {
             }
             sizeColumn
         }
-        .padding(.horizontal, 14).padding(.vertical, 6)
+        .padding(.horizontal, 14)
+        // 定高行：弹性高度让 StackLayout 对每行做多轮 sizeThatFits，
+        // 数百行 × middle 截断文本测量是布局风暴的单次成本大头。
+        .frame(height: 28)
         .opacity(dimmed ? 0.62 : 1)
         .contentShape(Rectangle())
         .onTapGesture(perform: onToggle)
@@ -813,20 +828,20 @@ private struct CleanItemRow: View {
             Text(L("clean.size.unknown"))
                 .font(Fonts.mono(11.5))
                 .foregroundStyle(look.textMute)
-                .frame(minWidth: 62, alignment: .trailing)
+                .frame(width: 74, alignment: .trailing)
                 .help(L("clean.size.unknown.help"))
         } else if dimmed {
             // 0 B 行（r2 §P1.4）：测量出来的零，与"大小未知"是两回事
             Text(verbatim: "0 B")
                 .font(Fonts.mono(11.5))
                 .foregroundStyle(look.textMute)
-                .frame(minWidth: 62, alignment: .trailing)
+                .frame(width: 74, alignment: .trailing)
                 .help(L("clean.zero.help"))
         } else {
             Text(ByteCountFormatter.string(fromByteCount: item.bytes ?? 0, countStyle: .file))
                 .font(Fonts.mono(11.5))
                 .foregroundStyle(look.textMute)
-                .frame(minWidth: 62, alignment: .trailing)
+                .frame(width: 74, alignment: .trailing)
         }
     }
 }
