@@ -669,11 +669,13 @@ struct CleanView: View {
     private func bigBytes(_ bytes: Int64) -> some View {
         let text = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         let parts = text.split(separator: " ", maxSplits: 1)
+        let number = parts.first.map(String.init) ?? "0"
         return HStack(alignment: .firstTextBaseline, spacing: 4) {
             // 定宽 cell（SerifTabularNumber）：扫描态 60fps 刷新时
             // Instrument Serif 无 tnum，普通 Text 会横向抖动（设计 §四）。
+            // MB/KB 段数字更长（"934.8"五字符），降一档字号防蹭环刻度。
             SerifTabularNumber(
-                text: parts.first.map(String.init) ?? "0", size: 44,
+                text: number, size: number.count > 4 ? 38 : 44,
                 weight: .semibold, color: look.text
             )
             Text(parts.count > 1 ? String(parts[1]) : "")
