@@ -748,6 +748,40 @@
         }
       }
     },
+    "apps.prescan.badge" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld leftovers · %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 项残留 · %@"
+          }
+        }
+      }
+    },
+    "apps.prescan.badge.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pre-scanned — expand to review item by item"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已预扫完成，展开即可逐项核对"
+          }
+        }
+      }
+    },
     "apps.remove.confirmTitle" : {
       "extractionState" : "manual",
       "localizations" : {

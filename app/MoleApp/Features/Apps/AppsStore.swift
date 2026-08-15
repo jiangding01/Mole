@@ -87,6 +87,7 @@ final class AppsStore {
                 guard let self, !Task.isCancelled else { return }
                 self.apps = apps
                 phase = .loaded
+                restartPrescan() // 清单就绪即后台预扫残留（r2 §P4）
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 if silent, phase == .loaded { return } // 静默失败：下次进页再试
@@ -184,22 +185,76 @@ final class AppsStore {
     }
 
     func fetchLeftovers(for app: InstalledApp) {
+        // 预扫失败的行按设计静默回退（r2 §P4.3）：展开即按需重试。
+        if case .failed = leftovers[app.id] { leftovers[app.id] = nil }
         guard leftovers[app.id] == nil else { return }
         leftovers[app.id] = .loading
         Task { [weak self] in
             do {
                 let plan = try await Self.runPlan(for: app)
                 guard let self else { return }
-                leftovers[app.id] = .loaded(plan)
-                // 勾选状态跟随本体：已选中 → 默认集（系统级需复核项不勾）；
-                // 未选中（纯展开预览）→ 全部不勾（设计稿：残留勾选与选中绑定）。
-                checkedLeftovers[app.id] = selection.contains(app.id)
-                    ? Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
-                    : []
+                ingestLeftoverPlan(plan, for: app)
             } catch {
                 self?.leftovers[app.id] = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// 摄入残留 plan（展开按需与后台预扫共用）：
+    /// 勾选状态跟随本体——已选中 → 默认集（系统级需复核项不勾）；
+    /// 未选中（纯展开预览）→ 全部不勾（设计稿：残留勾选与选中绑定）。
+    private func ingestLeftoverPlan(_ plan: AppPlan, for app: InstalledApp) {
+        leftovers[app.id] = .loaded(plan)
+        if checkedLeftovers[app.id] == nil {
+            checkedLeftovers[app.id] = selection.contains(app.id)
+                ? Set(plan.leftovers.filter { $0.defaultSelected ?? true }.map(\.id))
+                : []
+        }
+    }
+
+    // MARK: - 残留后台预扫（设计 r2 §P4）
+
+    private var prescanTask: Task<Void, Never>?
+
+    /// 清单加载后按列表序逐应用预扫（复用与展开完全相同的 runPlan 路径）。
+    /// 与移除流程互斥（进行中暂停轮询）；取消时清掉半途的 .loading 标记，
+    /// 避免行永远卡在等待态。预扫结果仅是展示缓存——apply 的 TTL 过期
+    /// 由 applyWithRetry 自愈，预扫不延长任何安全承诺。
+    func restartPrescan() {
+        prescanTask?.cancel()
+        let snapshot = apps
+        prescanTask = Task { [weak self] in
+            for app in snapshot {
+                guard let self, !Task.isCancelled else { return }
+                // 与移除互斥：卸载执行期间不抢 robot 进程
+                while removalPhase != .idle {
+                    try? await Task.sleep(for: .seconds(1))
+                    if Task.isCancelled { return }
+                }
+                guard leftovers[app.id] == nil else { continue }
+                leftovers[app.id] = .loading
+                do {
+                    let plan = try await Self.runPlan(for: app)
+                    if Task.isCancelled {
+                        leftovers[app.id] = nil // 取消不留 .loading 残骸
+                        return
+                    }
+                    ingestLeftoverPlan(plan, for: app)
+                } catch {
+                    // 预扫失败静默（§P4.3）：行上不显示，展开走按需重试
+                    leftovers[app.id] = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// 预扫完成徽标数据（§P4.1）：行尾「N 项残留 · X」。
+    /// 只计可执行残留（info. 展示项不入），体积只计已知。
+    func prescanBadge(for app: InstalledApp) -> (count: Int, bytes: Int64)? {
+        guard case let .loaded(plan) = leftovers[app.id] else { return nil }
+        let actionable = plan.leftovers.filter { !$0.id.hasPrefix("info.") }
+        guard !actionable.isEmpty else { return nil }
+        return (actionable.count, actionable.compactMap(\.bytes).reduce(0, +))
     }
 
     /// 跑一次 robot apps plan，要求流以 done（含 plan_id）收尾。

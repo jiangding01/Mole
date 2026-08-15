@@ -814,6 +814,13 @@ private struct AppRow: View {
 
     // MARK: 头行
 
+    /// 徽标体积（设计示例 "1.2 GB"）：GB 一位小数 / MB 取整 / 0 隐去数字部分意义不大，
+    /// 但残留恒 >0 才出徽标，这里只需两档。
+    private func fmtCompact(_ bytes: Int64) -> String {
+        if bytes >= 1 << 30 { return String(format: "%.1f GB", Double(bytes) / Double(1 << 30)) }
+        return "\(max(1, bytes / (1 << 20))) MB"
+    }
+
     private var headerRow: some View {
         HStack(spacing: 13) {
             CheckBox(checked: selected, accent: accent, look: look, size: 21) {
@@ -833,6 +840,20 @@ private struct AppRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
+            // 预扫完成徽标（r2 §P4.1）：展开前就预告残留规模。
+            // scanning 不在行上显示（等待态只在展开区），failed 静默。
+            if let badge = store.prescanBadge(for: app) {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                    Text(L("apps.prescan.badge", Int64(badge.count), fmtCompact(badge.bytes)))
+                        .font(Fonts.ui(10.5, .medium))
+                }
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(accent.a.opacity(0.1)))
+                .foregroundStyle(accent.b)
+                .help(L("apps.prescan.badge.help"))
+            }
             if app.source == "Homebrew" {
                 Text("Homebrew")
                     .font(Fonts.mono(10, .medium))
