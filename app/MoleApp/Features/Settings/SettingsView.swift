@@ -45,6 +45,9 @@ struct SettingsView: View {
                 .padding(.bottom, 20)
         }
         .frame(width: 860, height: 620)
+        // 录制态中途关闭 sheet 必须摘掉 NSEvent 本地监听：monitor 是 app 级资源，
+        // store 随 @State 销毁但监听器不会自动移除，反复进录制→关 sheet 会累积泄漏。
+        .onDisappear { store.cancelHotkeyRecording() }
         .onAppear {
             store.refreshLaunchAtLoginStatus()
             // 菜单栏「运行诊断」一次性信号：直接跳到高级分区并开始导出。
