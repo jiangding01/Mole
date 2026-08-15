@@ -51,16 +51,42 @@ clean_service_worker_cache() {
     local cleaned_size=0
     local protected_count=0
     local guard_stopped=false
+    # 先收集再循环：一个 Chrome profile 的 CacheStorage 有数百个散列目录，
+    # 逐目录 run_with_timeout du（3 进程）+ basename|grep|head（4 进程）
+    # 曾是浏览器段扫描的最大单点（448 目录 ≈ 3000+ fork）。收集后批量测量
+    # （mole_size_batch，一进程并发，du -skP 同基准；失败回退逐目录 du），
+    # 域名提取改纯 bash。保护/白名单/守卫判定仍逐目录进行，顺序不变。
+    local -a sw_cache_dirs=()
+    local cache_dir
     # shellcheck disable=SC2016
     while IFS= read -r cache_dir; do
-        [[ ! -d "$cache_dir" ]] && continue
-        # Extract a best-effort domain name from cache folder.
-        local domain=$(basename "$cache_dir" | grep -oE '[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}' | head -1 || echo "")
+        [[ -d "$cache_dir" ]] && sw_cache_dirs+=("$cache_dir")
+    done < <(run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" sh -c 'find "$1" -type d -depth 2 2>/dev/null || true' _ "$cache_path")
+
+    local sw_batch_ok=0
+    if [[ ${#sw_cache_dirs[@]} -gt 1 ]] && mole_size_batch "${sw_cache_dirs[@]}"; then
+        sw_batch_ok=1
+    fi
+
+    local _swi
+    for ((_swi = 0; _swi < ${#sw_cache_dirs[@]}; _swi++)); do
+        cache_dir="${sw_cache_dirs[$_swi]}"
+        # Extract a best-effort domain name from cache folder (pure bash:
+        # =~ finds the same leftmost ERE match grep -oE | head -1 did).
+        local domain=""
+        local _sw_base="${cache_dir##*/}"
+        [[ "$_sw_base" =~ [a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,} ]] && domain="${BASH_REMATCH[0]}"
         local size=0
-        local _du_out
-        if _du_out=$(run_with_timeout "$MOLE_TIMEOUT_MEDIUM_PROBE_SEC" du -skP "$cache_dir" 2> /dev/null); then
-            local _sz="${_du_out%%[^0-9]*}"
-            [[ "$_sz" =~ ^[0-9]+$ ]] && size="$_sz"
+        if [[ $sw_batch_ok -eq 1 ]]; then
+            # unknown/error 记 0——与旧逐目录 du 失败时保持 size=0 一致
+            local _bsz="${MOLE_SIZE_BATCH_KB[$_swi]}"
+            [[ "$_bsz" =~ ^[0-9]+$ ]] && size="$_bsz"
+        else
+            local _du_out
+            if _du_out=$(run_with_timeout "$MOLE_TIMEOUT_MEDIUM_PROBE_SEC" du -skP "$cache_dir" 2> /dev/null); then
+                local _sz="${_du_out%%[^0-9]*}"
+                [[ "$_sz" =~ ^[0-9]+$ ]] && size="$_sz"
+            fi
         fi
         local is_protected=false
         for protected_domain in "${PROTECTED_SW_DOMAINS[@]}"; do
@@ -92,7 +118,7 @@ clean_service_worker_cache() {
             fi
             cleaned_size=$((cleaned_size + size))
         fi
-    done < <(run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" sh -c 'find "$1" -type d -depth 2 2>/dev/null || true' _ "$cache_path")
+    done
     if [[ $cleaned_size -gt 0 ]]; then
         local spinner_was_running=false
         if [[ -t 1 && -n "${INLINE_SPINNER_PID:-}" ]]; then

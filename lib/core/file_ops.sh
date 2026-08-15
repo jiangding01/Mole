@@ -3023,6 +3023,9 @@ get_path_size_kb() {
 # (they need the mdls physical-size basis, #1404).
 MOLE_SIZE_BATCH_KB=()
 mole_size_batch() {
+    # 总开关：置 1 时所有调用点回退各自的逐路径测量（测试仪表化用，
+    # 也是现场兜底），一处生效，无需每个调用点自查。
+    [[ "${MOLE_SIZE_BATCH_DISABLE:-0}" != "1" ]] || return 1
     [[ $# -gt 0 ]] || return 0
     MOLE_SIZE_BATCH_KB=()
     local bin="${MOLE_ANALYZE_GO_BIN:-}"

@@ -134,6 +134,7 @@ setup() {
     mkdir -p "$test_cache/def456hash_other"
 
     run /bin/bash -c "
+        export MOLE_SIZE_BATCH_DISABLE=1
         export DRY_RUN=false
         export PROTECTED_SW_DOMAINS=(nomatch.invalid)
         source '$PROJECT_ROOT/lib/core/common.sh'
