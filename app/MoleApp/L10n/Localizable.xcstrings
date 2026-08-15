@@ -1602,13 +1602,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remove from whitelist · Future scans will include this path again"
+            "value" : "Remove from whitelist — future scans include it again"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从白名单移除 · 后续扫描将重新纳入此路径"
+            "value" : "移出白名单，后续扫描将重新纳入"
           }
         }
       }
@@ -1618,13 +1618,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add all items in this group to the whitelist · All future scans (CLI and GUI) will skip these paths"
+            "value" : "Whitelist all items in this group — future scans skip them"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将本组全部子项加入白名单 · CLI 与 GUI 的所有后续扫描都会跳过这些路径"
+            "value" : "将本组子项全部加入白名单，后续扫描将跳过"
           }
         }
       }
@@ -1634,13 +1634,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add to whitelist · All future scans (CLI and GUI) will skip this path"
+            "value" : "Add to whitelist — future scans skip this path"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "加入白名单 · CLI 与 GUI 的所有后续扫描都会跳过此路径"
+            "value" : "加入白名单，后续扫描将跳过此路径"
           }
         }
       }
