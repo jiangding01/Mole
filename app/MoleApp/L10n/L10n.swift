@@ -65,6 +65,14 @@ final class L10n {
         _ = language // 注册观察：语言变化时所有读取过文案的视图自动重渲
         return bundle.localizedString(forKey: key, value: key, table: nil)
     }
+
+    /// 键不存在时返回 nil（string() 的回退语义是"显示 key"，
+    /// 对动态拼接的键——如 optimize.task.<id>.result——需要可探测的缺失）。
+    func optionalString(_ key: String) -> String? {
+        _ = language
+        let value = bundle.localizedString(forKey: key, value: "\u{0}", table: nil)
+        return value == "\u{0}" ? nil : value
+    }
 }
 
 /// 全局便捷函数：`L("apps.tab.uninstall")`。
@@ -75,4 +83,9 @@ func L(_ key: String) -> String {
 /// 带插值：`L("apps.header.count", Int64(n))`。整数一律传 Int64 配 %lld。
 func L(_ key: String, _ args: CVarArg...) -> String {
     String(format: L10n.shared.string(key), arguments: args)
+}
+
+/// 键可能不存在的动态查表（如 `optimize.task.<id>.result`）：缺失返回 nil。
+func LOpt(_ key: String) -> String? {
+    L10n.shared.optionalString(key)
 }

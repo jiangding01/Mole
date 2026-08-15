@@ -201,12 +201,15 @@ final class OptimizeStore {
 
     // MARK: - 分组表（闭合枚举，与 lib/optimize/tasks.sh 的 case 表对齐）
 
+    /// 只读任务（设计 CHANGELOG-2026-08-15 §1.1）：冷灰"只读"徽标，
+    /// 不做任何修改。协议不携带此标记，与分类一样是 GUI 侧闭合查表。
+    nonisolated static let readOnlyTasks: Set<String> = ["login_items_audit", "disk_verify"]
+
     // 纯查表，与主线程无关；nonisolated 使 TaskRow（非隔离上下文）可同步调用
     nonisolated static func category(of action: String) -> Category {
         switch action {
         case "cache_refresh", "saved_state_cleanup", "sqlite_vacuum",
-             "memory_pressure_relief", "dock_refresh", "notification_cleanup",
-             "coreduet_cleanup":
+             "notification_cleanup", "coreduet_cleanup":
             return .routine
         case "fix_broken_configs", "launch_services_rebuild", "shared_file_list_repair",
              "quarantine_cleanup", "prevent_network_dsstore", "spotlight_orphan_rules_cleanup",

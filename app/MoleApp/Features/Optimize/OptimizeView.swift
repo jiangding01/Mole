@@ -153,9 +153,14 @@ struct OptimizeView: View {
                 store.toggle(task)
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(task.name)
-                    .font(Fonts.ui(12.5, .medium))
-                    .foregroundStyle(checked ? look.text : look.textDim)
+                HStack(spacing: 6) {
+                    Text(task.name)
+                        .font(Fonts.ui(12.5, .medium))
+                        .foregroundStyle(checked ? look.text : look.textDim)
+                    if OptimizeStore.readOnlyTasks.contains(task.id) {
+                        readOnlyBadge
+                    }
+                }
                 Text(task.desc)
                     .font(Fonts.ui(11))
                     .foregroundStyle(look.textMute)
@@ -224,7 +229,7 @@ struct OptimizeView: View {
                 .foregroundStyle(look.textDim)
                 .lineLimit(1)
             Spacer()
-            statusTrailing(state)
+            statusTrailing(state, taskId: task.id)
         }
         .padding(.horizontal, 14).padding(.vertical, 5)
     }
@@ -251,13 +256,38 @@ struct OptimizeView: View {
         }
     }
 
+    /// 只读徽标（设计：冷灰胶囊 + 眼睛，title 说明"不会做任何修改"）。
+    private var readOnlyBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "eye")
+                .font(.system(size: 8, weight: .semibold))
+            Text(L("optimize.badge.readonly"))
+                .font(Fonts.ui(9, .semibold))
+        }
+        .foregroundStyle(Color(red: 0.616, green: 0.690, blue: 0.776)) // #9DB0C6
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(Capsule().fill(Color(red: 0.486, green: 0.565, blue: 0.659).opacity(0.14)))
+        .help(L("optimize.badge.readonly.help"))
+    }
+
     @ViewBuilder
-    private func statusTrailing(_ state: OptimizeStore.TaskState) -> some View {
+    private func statusTrailing(_ state: OptimizeStore.TaskState, taskId: String) -> some View {
         switch state {
-        case let .done(ms?):
-            Text(ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "<1s")
-                .font(Fonts.mono(10.5))
-                .foregroundStyle(look.textMute)
+        case let .done(ms):
+            // 设计（CHANGELOG §1.1）：完成行显示该任务的 result 真实措辞；
+            // 未知 id 无对应文案时回退为耗时。
+            if let result = LOpt("optimize.task.\(taskId).result") {
+                Text(result)
+                    .font(Fonts.ui(10.5))
+                    .foregroundStyle(look.textMute)
+                    .lineLimit(1)
+            } else if let ms {
+                Text(ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "<1s")
+                    .font(Fonts.mono(10.5))
+                    .foregroundStyle(look.textMute)
+            } else {
+                EmptyView()
+            }
         case .skipped:
             Text(L("optimize.status.whitelisted"))
                 .font(Fonts.ui(10, .semibold))
