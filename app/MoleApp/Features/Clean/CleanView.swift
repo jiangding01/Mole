@@ -390,8 +390,8 @@ struct CleanView: View {
         case "large_files": "doc.zipper"
         case "system_maintenance": "gearshape.2"
         case "external_volumes": "externaldrive"
-        case "apps_utilities": "square.grid.2x2"
-        case "cloud_office": "cloud"
+        case "apps_and_utilities": "square.grid.2x2"
+        case "cloud_and_office": "cloud"
         default: "folder"
         }
     }

@@ -436,9 +436,10 @@ final class CleanStore {
             "installers": "安装包",
             "app_leftovers": "卸载残留",
             "leftovers": "卸载残留",
-            "apps_utilities": "应用与工具",
+            // slug 规则（robot_section_slug）："&" → "and"，非字母数字折叠为 "_"
+            "apps_and_utilities": "应用与工具",
             "application_support": "应用支持文件",
-            "cloud_office": "云盘与 Office",
+            "cloud_and_office": "云盘与 Office",
             "large_files": "大文件",
             "system_maintenance": "系统维护",
             "external_volumes": "外置卷",
