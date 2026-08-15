@@ -270,6 +270,11 @@
               <sc-if value="{{ hasUnknown }}" hint-placeholder-val="{{ false }}"><span title="这些项目测量超时，删除后按实际释放量记录" style="font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text-mute);cursor:help">{{ unknownNote }}</span></sc-if>
             </div>
             <div style="display:flex;align-items:center;gap:10px">
+              <div style="display:flex;align-items:center;gap:1px;margin-right:2px">
+                <sc-for list="{{ cleanPresets }}" as="p" hint-placeholder-count="3">
+                  <div onClick="{{ p.onClick }}" style="padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600;color:{{ p.color }};transition:color .15s" style-hover="background:rgba(243,236,224,.05)">{{ p.label }}</div>
+                </sc-for>
+              </div>
               <button onClick="{{ onResetClean }}" style="padding:9px 16px;border-radius:999px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text-dim);background:transparent;border:1px solid var(--line)" style-hover="color:var(--text);border-color:var(--line-strong)">{{ t.cleanReclean }}</button>
               <button onClick="{{ onDoClean }}" style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border-radius:999px;border:none;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--ink);background:linear-gradient(180deg,var(--accent2),var(--accent));box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 10px 24px -10px rgba(var(--accent-rgb),.5)" style-hover="filter:brightness(1.05)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m19 11-1.4 6.3a2 2 0 0 1-2 1.7H8.4a2 2 0 0 1-2-1.7L5 11"/><path d="M4 7h16"/></svg>{{ t.cleanDoSel }}</button>
             </div>
@@ -328,20 +333,28 @@
                   <div style="border-top:1px solid var(--line);padding:5px 10px 9px 10px;display:flex;flex-direction:column;gap:2px">
                     <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="3">
                       <sc-if value="{{ it.zeroHead }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:9px;padding:9px 8px 5px"><span style="height:1px;flex:none;width:14px;background:var(--line-strong)"></span><span style="font-size:10.5px;font-weight:600;letter-spacing:.06em;color:var(--text-mute)">{{ it.zeroNote }}</span><span style="height:1px;flex:1;background:var(--line)"></span></div></sc-if>
-                      <div onClick="{{ it.onToggle }}" style="display:flex;align-items:center;gap:12px;padding:9px 8px;border-radius:9px;cursor:pointer;opacity:{{ it.rowOpacity }};transition:background .15s" style-hover="background:rgba(243,236,224,.03)">
-                        <div style="width:19px;height:19px;flex:none;border-radius:6px;border:1.5px solid {{ it.boxLine }};background:{{ it.boxBg }};display:flex;align-items:center;justify-content:center;color:var(--ink)">
+                                            <div onClick="{{ it.onToggle }}" style="display:flex;align-items:center;gap:11px;padding:5px 8px;margin-left:{{ it.indent }};border-radius:9px;cursor:{{ it.cursor }};min-height:42px;opacity:{{ it.rowOpacity }};transition:background .15s" style-hover="background:rgba(243,236,224,.03)">
+                        <sc-if value="{{ it.locked }}" hint-placeholder-val="{{ false }}"><span title="{{ it.lockTip }}" style="width:19px;height:19px;flex:none;display:flex;align-items:center;justify-content:center;color:#E3B34E;cursor:help"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span></sc-if>
+                        <sc-if value="{{ it.showBox }}" hint-placeholder-val="{{ true }}"><div style="width:19px;height:19px;flex:none;border-radius:6px;border:1.5px solid {{ it.boxLine }};background:{{ it.boxBg }};display:flex;align-items:center;justify-content:center;color:var(--ink)">
                           <sc-if value="{{ it.checked }}" hint-placeholder-val="{{ true }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></sc-if>
-                          <sc-if value="{{ it.isProtected }}" hint-placeholder-val="{{ true }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-mute)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></sc-if>
+                          <sc-if value="{{ it.some }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"><path d="M6 12h12"/></svg></sc-if>
+                          <sc-if value="{{ it.isProtected }}" hint-placeholder-val="{{ false }}"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-mute)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></sc-if>
+                        </div></sc-if>
+                        <sc-if value="{{ it.isAgg }}" hint-placeholder-val="{{ false }}"><span onClick="{{ it.onAgg }}" style="flex:none;display:flex;color:var(--text-mute);cursor:pointer;transform:{{ it.aggChevron }};transition:transform .2s"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></sc-if>
+                        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                          <sc-if value="{{ it.hasName }}" hint-placeholder-val="{{ true }}"><div style="display:flex;align-items:center;gap:7px;min-width:0"><span style="font-size:12.5px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ it.name }}</span><sc-if value="{{ it.isAgg }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-family:var(--mono);font-size:10.5px;color:var(--text-mute)">{{ it.aggMeta }}</span></sc-if></div></sc-if>
+                          <div title="{{ it.pathStr }}" style="font-family:var(--mono);font-size:{{ it.pathSize }};line-height:1.42;color:{{ it.pathColor }};direction:rtl;unicode-bidi:plaintext;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ it.pathStr }}</div>
                         </div>
-                        <div style="flex:1;min-width:0">
-                          <div style="font-size:12.5px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ it.name }}</div>
-                          <div style="font-size:11px;color:var(--text-dim);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ it.desc }}</div>
-                        </div>
+                        <sc-if value="{{ it.locked }}" hint-placeholder-val="{{ false }}"><span title="{{ it.lockTip }}" style="flex:none;display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;background:rgba(227,179,78,.12);color:#E3B34E;cursor:help"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>{{ it.lockLabel }}</span></sc-if>
+                        <sc-if value="{{ it.wl }}" hint-placeholder-val="{{ false }}"><span style="flex:none;display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;background:rgba(124,144,168,.14);color:#9DB0C6"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v6c0 4.2 2.9 7.6 7 9 4.1-1.4 7-4.8 7-9V6Z"/></svg>{{ it.wlLabel }}</span></sc-if>
                         <sc-if value="{{ it.isCaution }}" hint-placeholder-val="{{ true }}"><span title="{{ it.reason }}" style="flex:none;display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:6px;background:rgba(227,179,78,.12);color:#E3B34E"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h0"/></svg>需确认</span></sc-if>
                         <sc-if value="{{ it.known }}" hint-placeholder-val="{{ true }}"><span style="flex:none;font-family:var(--mono);font-size:12px;color:var(--text-dim);min-width:64px;text-align:right">{{ it.sizeStr }}</span></sc-if>
                         <sc-if value="{{ it.isZero }}" hint-placeholder-val="{{ false }}"><span title="目录为空或已被系统清空，删除不释放空间" style="flex:none;font-family:var(--mono);font-size:11.5px;color:var(--text-mute);min-width:64px;text-align:right;cursor:help">0 B</span></sc-if>
                         <sc-if value="{{ it.unknown }}" hint-placeholder-val="{{ false }}"><span title="测量超时，删除后按实际释放量记录" style="flex:none;font-family:var(--mono);font-size:10.5px;letter-spacing:.02em;color:var(--text-mute);min-width:64px;text-align:right;cursor:help">大小未知</span></sc-if>
-                        <span style="flex:none;display:flex;color:var(--text-mute);cursor:pointer" style-hover="color:var(--text)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></span>
+                        <div style="flex:none;display:flex;align-items:center;gap:1px">
+                          <span onClick="{{ it.onFinder }}" title="{{ it.finderTip }}" style="display:flex;padding:4px;border-radius:6px;color:var(--text-mute);opacity:.45;cursor:pointer;transition:opacity .15s" style-hover="opacity:1;color:var(--text);background:rgba(243,236,224,.06)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></span>
+                          <span onClick="{{ it.onWl }}" title="{{ it.wlTip }}" style="display:flex;padding:4px;border-radius:6px;color:{{ it.wlColor }};opacity:{{ it.wlOpacity }};cursor:pointer;transition:opacity .15s" style-hover="opacity:1;background:rgba(243,236,224,.06)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v6c0 4.2 2.9 7.6 7 9 4.1-1.4 7-4.8 7-9V6Z"/></svg></span>
+                        </div>
                       </div>
                     </sc-for>
                     <sc-if value="{{ g.hasMore }}" hint-placeholder-val="{{ false }}">
@@ -1753,19 +1766,19 @@ class Component extends DCLogic {
       {name:'1Password 本地数据',desc:'关键应用，已保护',size:0}]},
   ];
 
-  // ---- quick tab · 真实规模数据（1854 项 / 230 项 0 B），按真机扫描分布生成 ----
+  // ---- quick tab · 真实规模数据（r3：0B 目标不再入清理计划，1854 → 1624 项），按真机扫描分布生成 ----
   QSPEC=[
-    {id:'apps-util',name:'应用与工具',en:'Apps & Utilities',risk:'safe',n:761,zero:5,cap:0.006,
+    {id:'apps-util',name:'应用与工具',en:'Apps & Utilities',risk:'safe',n:761,zero:5,cap:0.006,agg:3,
       top:[['Adobe Creative Cloud 媒体缓存','~/Library/Caches/Adobe/Common/Media Cache Files',3.42],
            ['Microsoft Teams 缓存','~/Library/Application Support/Microsoft/Teams/Cache',1.18],
            ['Spotify 离线缓存','~/Library/Caches/com.spotify.client',2.10],
            ['Slack 附件缓存','~/Library/Application Support/Slack/Cache',0.88]]},
-    {id:'browsers',name:'浏览器',en:'Browsers',risk:'caution',n:492,zero:0,cap:0.006,
+    {id:'browsers',name:'浏览器',en:'Browsers',risk:'caution',n:492,zero:0,cap:0.006,agg:2,
       top:[['Chrome 缓存','~/Library/Caches/Google/Chrome/Default/Cache',2.86,'清理后首次访问站点会变慢'],
            ['Safari WebKit 缓存','~/Library/Caches/com.apple.Safari/WebKitCache',1.24],
            ['Chrome Service Worker','~/Library/Application Support/Google/Chrome/Service Worker',0.94],
            ['Chrome Cookie（非登录站点）','~/Library/Application Support/Google/Chrome/Cookies',0.04,'会登出未加入白名单的站点']]},
-    {id:'devtools',name:'开发者工具',en:'Developer Tools',risk:'safe',n:349,zero:177,cap:0.006,
+    {id:'devtools',name:'开发者工具',en:'Developer Tools',risk:'safe',n:349,zero:177,cap:0.006,agg:2,
       top:[['Xcode DerivedData','~/Library/Developer/Xcode/DerivedData',4.80],
            ['Xcode iOS DeviceSupport','~/Library/Developer/Xcode/iOS DeviceSupport',2.92],
            ['npm 缓存','~/.npm/_cacache',1.20],
@@ -1774,7 +1787,7 @@ class Component extends DCLogic {
       top:[['iPhone 备份（2025-11-02）','~/Library/Application Support/MobileSync/Backup',3.20,'删除后无法从该时间点恢复'],
            ['Docker 悬空镜像与卷','~/Library/Containers/com.docker.docker/Data',2.10,'需要时会重新拉取镜像'],
            ['Sketch 支持文件','~/Library/Application Support/com.bohemiancoding.sketch3',0.36,'若重新安装需重新配置']]},
-    {id:'app-caches',name:'应用缓存',en:'App Caches',risk:'safe',n:75,zero:20,cap:0.006,
+    {id:'app-caches',name:'应用缓存',en:'App Caches',risk:'safe',n:75,zero:20,cap:0.006,agg:2,
       top:[['照片分析缓存','~/Library/Caches/com.apple.photoanalysisd',1.34],
            ['Figma 字体与文件缓存','~/Library/Caches/com.figma.Desktop',0.62],
            ['邮件附件缓存','~/Library/Containers/com.apple.mail/Data/Library/Caches',0.58]]},
@@ -1788,18 +1801,42 @@ class Component extends DCLogic {
   VEND=['Chrome','Safari','Firefox','Slack','Notion','Figma','Zoom','Spotify','Teams','Xcode','Docker','Postman','VS Code','iTerm2','Discord','Telegram','Dropbox','1Password','Obsidian','Arc','Sketch','Affinity','DaVinci','Logic Pro','Keynote','Numbers','Pixelmator','Bear','Craft','Raycast','Alfred','CleanShot','Bartender','IINA','Transmit','Cyberduck','TablePlus','Insomnia','Sequel Ace','OrbStack'];
   KIND=[['缓存','Caches'],['日志','Logs'],['临时文件','Temp'],['旧版本残留','Old versions'],['崩溃报告','Crash reports'],['索引数据','Index data'],['预览缓存','Preview cache'],['会话数据','Session data'],['下载片段','Partial downloads'],['构建产物','Build output']];
   rng(seed){ let s=seed>>>0; return ()=>{ s=(s+0x6D2B79F5)>>>0; let t=s; t=Math.imul(t^(t>>>15),t|1); t^=t+Math.imul(t^(t>>>7),t|61); return ((t^(t>>>14))>>>0)/4294967296; }; }
+  // r3 · P1：0B 目标不再进入 GUI 清理计划（分隔线/置灰/全 0B 组变体降级为兜底态，置 true 可重新点亮）
+  ZERO_IN_GUI=false;
+  // r3 · P4：CLI 按项上报 blocked_by 后点亮的行级锁定（运行中应用 / 系统占用）
+  RUNNING={'Chrome':'Google Chrome','Docker':'Docker Desktop','Xcode':'Xcode','Slack':'Slack'};
+  hex(R,n){ let s=''; for(let i=0;i<n;i++)s+='0123456789abcdef'[Math.floor(R()*16)]; return s; }
   buildQuick(){
     const out=[];
     this.QSPEC.forEach((spec,gi)=>{
       const R=this.rng(9973+gi*131), items=[];
       (spec.top||[]).forEach(t=>items.push({name:t[0],desc:t[1],size:t[2],reason:t[3]||'',unknown:!!t[4],risk:t[3]?'caution':undefined}));
+      // r3 · P5：同容器同类子项聚合（父行 + 一级缩进子行）
+      const aggUsed=new Set();
+      for(let a=0;a<(spec.agg||0);a++){
+        let v=this.VEND[Math.floor(R()*this.VEND.length)];
+        let guard=0; while(aggUsed.has(v)&&guard++<40) v=this.VEND[Math.floor(R()*this.VEND.length)];
+        aggUsed.add(v);
+        const slug=v.toLowerCase().replace(/[^a-z]/g,'');
+        const base='~/Library/Containers/com.'+slug+'/Data/Library/Caches';
+        const blk=this.RUNNING[v]?('app:'+this.RUNNING[v]):'';
+        const aid='agg-'+gi+'-'+a, kn=3+Math.floor(R()*2);
+        items.push({agg:true,aid,name:v+' 缓存',en:v+' cache',desc:base,size:0,kidN:kn,blk});
+        for(let k=0;k<kn;k++){ const kk=this.KIND[Math.floor(R()*this.KIND.length)];
+          items.push({name:v+' '+kk[0],en:v+' '+kk[1],desc:base+'/'+kk[1].toLowerCase().replace(/ /g,'-'),
+            size:+(Math.pow(R(),1.5)*(spec.cap||0.006)*2+0.0015).toFixed(4),pid:aid,blk}); }
+      }
       const filler=Math.max(0,spec.n-items.length-spec.zero);
       for(let i=0;i<filler;i++){
         const v=this.VEND[Math.floor(R()*this.VEND.length)], k=this.KIND[Math.floor(R()*this.KIND.length)];
         const slug=v.toLowerCase().replace(/[^a-z]/g,'');
-        items.push({name:v+' '+k[0],en:v+' '+k[1],desc:'~/Library/Caches/com.'+slug+'/'+k[1].toLowerCase().replace(/ /g,'-'),size:+(Math.pow(R(),2.2)*(spec.cap||0.006)+0.0004).toFixed(4)});
+        const size=+(Math.pow(R(),2.2)*(spec.cap||0.006)+0.0004).toFixed(4);
+        let blk=this.RUNNING[v]?('app:'+this.RUNNING[v]):''; if(!blk&&R()<0.012)blk='sys';
+        // r3 · P2：映射不到知名路径的目标回退为纯路径单行（绝不编造名称）
+        if(R()<0.18) items.push({desc:'~/Library/Application Support/'+slug+'/'+this.hex(R,8)+'/'+this.hex(R,12),size,blk});
+        else items.push({name:v+' '+k[0],en:v+' '+k[1],desc:'~/Library/Caches/com.'+slug+'/'+k[1].toLowerCase().replace(/ /g,'-'),size,blk});
       }
-      for(let i=0;i<spec.zero;i++){
+      if(this.ZERO_IN_GUI) for(let i=0;i<spec.zero;i++){
         const v=this.VEND[Math.floor(R()*this.VEND.length)], slug=v.toLowerCase().replace(/[^a-z]/g,'');
         items.push({name:v+' 空目录',en:v+' empty folder',desc:'~/Library/Caches/com.'+slug+'/empty-'+(i+1),size:0,zero:true});
       }
@@ -1813,19 +1850,36 @@ class Component extends DCLogic {
   moreItems(gid,total){ if(!this._shownN)this._shownN={}; this._shownN[gid]=Math.min(total,this.groupShown(gid)+50); this.forceUpdate(); }
   ensureClean(){
     if(this._cg) return;
-    this._cg=this.buildQuick().concat(this.CLEAN_GROUPS).map(g=>({...g, tab:g.tab||'quick', items:g.items.map((it,i)=>({...it, _i:i, _risk:it.risk||g.risk, checked:(it.risk||g.risk)==='safe'}))}));
-    this._cg.forEach(g=>{ g._sorted=g.items.slice().sort((a,b)=>{ const az=a.size===0,bz=b.size===0; if(az!==bz)return az?1:-1; return b.size-a.size; }); });
+    this._cg=this.buildQuick().concat(this.CLEAN_GROUPS).map(g=>({...g, tab:g.tab||'quick', items:g.items.map((it,i)=>({...it, _i:i, _risk:it.risk||g.risk, _blk:it.blk||'', checked:(it.risk||g.risk)==='safe'&&!it.blk&&!it.agg}))}));
+    this._cg.forEach(g=>{
+      g._kids={}; g.items.forEach(it=>{ if(it.pid)(g._kids[it.pid]=g._kids[it.pid]||[]).push(it); });
+      g.items.forEach(it=>{ if(it.agg)it._aggSize=(g._kids[it.aid]||[]).reduce((s,k)=>s+k.size,0); });
+      g._sorted=g.items.filter(it=>!it.pid).sort((a,b)=>{ const av=a.agg?a._aggSize:a.size, bv=b.agg?b._aggSize:b.size; const az=av===0,bz=bv===0; if(az!==bz)return az?1:-1; return bv-av; });
+    });
     this._sel='apps-util';
   }
   cleanGroupSize(g){ return g.items.reduce((s,it)=>s+(it._risk==='protected'?0:it.size),0); }
   tabGroups(){ const t=this.state.cleanTab||'quick'; return this._cg.filter(g=>(g.tab||'quick')===t); }
   setCleanTab(t){ this.setState({cleanTab:t}); requestAnimationFrame(()=>{ this._shownSel=this.cleanSummary().sel; this.forceUpdate(); }); }
-  cleanSummary(){ let sel=0,total=0; for(const g of this.tabGroups()) for(const it of g.items){ if(it._risk==='protected')continue; total+=it.size; if(it.checked)sel+=it.size; } return {sel,total}; }
-  groupCheck(g){ const sel=g.items.filter(it=>it._risk!=='protected'); if(!sel.length)return 'prot'; const c=sel.filter(it=>it.checked).length; return c===0?'none':(c===sel.length?'all':'some'); }
+  // r3：可勾选 = 非受保护 · 非聚合父行 · 未被行级锁定 · 未加白名单
+  selectable(it){ return it._risk!=='protected' && !it.agg && !it._blk && !it._wl; }
+  cleanSummary(){ let sel=0,total=0; for(const g of this.tabGroups()) for(const it of g.items){ if(it._risk==='protected'||it.agg)continue; total+=it.size; if(it.checked&&this.selectable(it))sel+=it.size; } return {sel,total}; }
+  groupCheck(g){ const sel=g.items.filter(it=>this.selectable(it)); if(!sel.length)return 'prot'; const c=sel.filter(it=>it.checked).length; return c===0?'none':(c===sel.length?'all':'some'); }
   selectGroup(id){ this._sel=id; this.forceUpdate(); }
   toggleExpand(gid){ if(!this._exp)this._exp={}; this._exp[gid]=!this._exp[gid]; this.forceUpdate(); }
-  toggleItem(gid,idx){ const g=this._cg.find(x=>x.id===gid); const it=g.items[idx]; if(it._risk==='protected')return; it.checked=!it.checked; this.forceUpdate(); this.tweenSel(); }
-  toggleGroup(gid){ const g=this._cg.find(x=>x.id===gid); const sel=g.items.filter(it=>it._risk!=='protected'); if(!sel.length)return; const allOn=sel.every(it=>it.checked); sel.forEach(it=>it.checked=!allOn); this.forceUpdate(); this.tweenSel(); }
+  toggleItem(gid,idx){ const g=this._cg.find(x=>x.id===gid); const it=g.items[idx]; if(!this.selectable(it))return; it.checked=!it.checked; this.forceUpdate(); this.tweenSel(); }
+  toggleGroup(gid){ const g=this._cg.find(x=>x.id===gid); const sel=g.items.filter(it=>this.selectable(it)); if(!sel.length)return; const allOn=sel.every(it=>it.checked); sel.forEach(it=>it.checked=!allOn); this.forceUpdate(); this.tweenSel(); }
+  // r3 · P5：聚合父行勾选 = 全部子行联动
+  toggleAgg(gid,aid){ const g=this._cg.find(x=>x.id===gid); const kids=(g._kids[aid]||[]).filter(it=>this.selectable(it)); if(!kids.length)return; const allOn=kids.every(it=>it.checked); kids.forEach(it=>it.checked=!allOn); this.forceUpdate(); this.tweenSel(); }
+  aggState(g,it){ const kids=(g._kids[it.aid]||[]).filter(k=>this.selectable(k)); if(!kids.length)return 'none'; const c=kids.filter(k=>k.checked).length; return c===0?'none':(c===kids.length?'all':'some'); }
+  // r3 · P3：加入白名单 = 灰置 + 徽标（可撤销），影响 CLI 与 GUI 的所有后续扫描
+  toggleWl(gid,idx){ const g=this._cg.find(x=>x.id===gid); const it=g.items[idx]; if(it._risk==='protected')return;
+    it._wl=!it._wl; if(it._wl)it.checked=false; this.forceUpdate(); this.tweenSel(); }
+  // r3 · P6：全选 / 清空 / 推荐（推荐 = 协议 default_selected：safe 勾、caution 不勾）
+  cleanPreset(mode){ for(const g of this.tabGroups()) for(const it of g.items){ if(!this.selectable(it))continue;
+      it.checked = mode==='all' ? true : mode==='none' ? false : it._risk==='safe'; }
+    this.forceUpdate(); this.tweenSel(); }
+  isRecommended(){ for(const g of this.tabGroups()) for(const it of g.items){ if(!this.selectable(it))continue; if(it.checked!==(it._risk==='safe'))return false; } return true; }
   tweenSel(){ const el=this.selSizeRef.current; if(!el)return; const to=this.cleanSummary().sel; const from=this._shownSel!=null?this._shownSel:to; const t0=performance.now();
     const step=(now)=>{ const p=Math.min((now-t0)/420,1); const e=1-Math.pow(1-p,3); const v=from+(to-from)*e; el.textContent=v.toFixed(2); this._shownSel=v; if(p<1)requestAnimationFrame(step); else this._shownSel=to; }; requestAnimationFrame(step); }
   startClean(){ this._cleanScanTarget=this.cleanSummary().total; this._cleanScanStart=performance.now(); this._finA=false; this._cpi=-1; this.ripples=[]; this.setState({cleanState:'scanning'}); this.initOrb(this.cleanCanvasRef); }
@@ -2160,6 +2214,7 @@ class Component extends DCLogic {
     'Docker 悬空镜像与卷':'Docker dangling images & volumes','Figma 字体与文件缓存':'Figma font & file cache','字体缓存数据库':'Font cache database','照片分析缓存':'Photo analysis cache',
     '查看应用':'View apps','收起':'Collapse','不再提示':'Don’t show again',
     '浏览器缓存 · Service Worker':'Browser cache · service workers','容器镜像与卷':'Container images & volumes','DeviceSupport · 模拟器缓存':'DeviceSupport · simulator caches',
+    '这些目标整段没扫，因此无法给出可释放体积——重新扫描后才会计入总量。清单里标「应用打开中」的单行是另一回事：那些已经扫到体积，只是此刻不可删。':'These groups were never scanned, so no reclaimable size can be given — they count toward the total only after a rescan. Rows tagged “App open” are different: those were scanned and have a size, they just cannot be removed right now.',
     '这些目标未被扫描，因此无法给出可释放体积——重新扫描后才会计入总量。':'These targets were never scanned, so no reclaimable size can be given — they count toward the total only after a rescan.',
     '目录为空或已被系统清空，删除不释放空间':'Empty directory or already cleared by the system — deleting frees nothing',
     '正在读取已安装应用与残留分布':'Reading installed apps and leftover distribution',
@@ -2539,17 +2594,21 @@ class Component extends DCLogic {
                  {name:'Docker Desktop',initial:'Dk',color:'#2496ED',groups:'容器镜像与卷'},
                  {name:'Xcode',initial:'Xc',color:'#4C8FD8',groups:'DeviceSupport · 模拟器缓存'}];
     const guard={ show:!this._guardOff, open:!!this._guardOpen,
-      text:(_lang==='en'?(GUARD.length+' groups were skipped because their apps are running · quit them and rescan to include those targets')
-                        :(GUARD.length+' 个分组因应用运行中被跳过 · 退出对应应用后重新扫描可纳入')),
+      text:(_lang==='en'?(GUARD.length+' groups were never scanned because their apps are running · quit them and rescan to include those targets')
+                        :(GUARD.length+' 个分组因应用运行中整段未扫描 · 退出对应应用后重新扫描可纳入')),
       toggleLabel:this._guardOpen?this.tr('收起'):this.tr('查看应用'), chevron:this._guardOpen?'rotate(180deg)':'rotate(0deg)',
       apps:GUARD.map(a=>({...a, groups:this.tr(a.groups)})),
-      foot:this.tr('这些目标未被扫描，因此无法给出可释放体积——重新扫描后才会计入总量。'),
+      foot:this.tr('这些目标整段没扫，因此无法给出可释放体积——重新扫描后才会计入总量。清单里标「应用打开中」的单行是另一回事：那些已经扫到体积，只是此刻不可删。'),
       onToggle:()=>{ this._guardOpen=!this._guardOpen; this.forceUpdate(); },
       onDismiss:()=>{ this._guardOff=true; this.forceUpdate(); } };
+    // ---- r3 · P6：全选 / 清空 / 推荐 ----
+    const _isRec=this.isRecommended();
+    const cleanPresets=[['all',_lang==='en'?'Select all':'全选'],['none',_lang==='en'?'Clear':'清空'],['rec',_lang==='en'?'Recommended':'推荐']]
+      .map(([m,l])=>({ label:l, color:(m==='rec'&&_isRec)?'var(--accent)':'var(--text-dim)', onClick:()=>this.cleanPreset(m) }));
     const _tabGs=this.tabGroups();
     const _tabMax=Math.max(0.01,..._tabGs.map(g=>g.items.reduce((s,it)=>s+(it._risk==='protected'?0:it.size),0)));
     const cleanGroups=_tabGs.map(g=>{ const gc=this.groupCheck(g);
-      const selable=g.items.filter(it=>it._risk!=='protected'); const selN=selable.filter(it=>it.checked).length;
+      const selable=g.items.filter(it=>this.selectable(it)); const selN=selable.filter(it=>it.checked).length;
       const totS=g.items.reduce((s,it)=>s+(it._risk==='protected'?0:it.size),0);
       const selS=g.items.reduce((s,it)=>s+((it._risk!=='protected'&&it.checked)?it.size:0),0);
       const exp=!!this._exp[g.id];
@@ -2558,13 +2617,40 @@ class Component extends DCLogic {
       const sorted=g._sorted||g.items, shown=Math.min(sorted.length,this.groupShown(g.id));
       let items=[];
       if(exp){ let zeroMarked=false;
-        items=sorted.slice(0,shown).map(it=>{ const isZ=it.size===0&&!it.unknown; const head=isZ&&!zeroMarked; if(head)zeroMarked=true;
-          return { name:(_lang==='en'&&it.en)?it.en:this.tr(it.name), desc:this.tr(it.desc), sizeStr:this.fmtSize(it), known:!it.unknown&&!isZ, unknown:!!it.unknown, isZero:isZ, reason:this.tr(it.reason||''),
+        const mk=(it,child)=>{
+          const isZ=it.size===0&&!it.unknown&&!it.agg; const head=isZ&&!zeroMarked; if(head)zeroMarked=true;
+          const isAgg=!!it.agg, agst=isAgg?this.aggState(g,it):'';
+          const lock=it._blk?(it._blk.slice(0,4)==='app:'?'app':'sys'):'', lockApp=lock==='app'?it._blk.slice(4):'';
+          const checked=isAgg?(agst==='all'):(!!it.checked&&this.selectable(it));
+          return { name:it.name?((_lang==='en'&&it.en)?it.en:this.tr(it.name)):'', hasName:!!it.name, pathStr:it.desc,
+            pathSize:it.name?'10.5px':'12px', pathColor:it.name?'var(--text-mute)':'var(--text-dim)',
+            isAgg, aggMeta:isAgg?((_lang==='en'?(it.kidN+' items · '):(it.kidN+' 项 · '))+this.fmtGB(it._aggSize)):'',
+            aggChevron:(isAgg&&this._exp[it.aid])?'rotate(180deg)':'rotate(0deg)',
+            onAgg:isAgg?((e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.toggleExpand(it.aid); }):null,
+            child:!!child, indent:child?'22px':'0px',
+            sizeStr:this.fmtSize(it), known:!isAgg&&!it.unknown&&!isZ, unknown:!!it.unknown, isZero:isZ, reason:this.tr(it.reason||''),
             zeroHead:head, zeroNote:(_lang==='en'?('the following '+zeroN+' items are 0 B · empty or already cleared by the system'):('以下 '+zeroN+' 项为 0 B · 空目录或已被系统清空')),
-            isCaution:it._risk==='caution', isProtected:it._risk==='protected', checked:it.checked,
-            boxBg:it.checked?'var(--accent)':'transparent', boxLine:it.checked?'var(--accent)':'var(--line-strong)',
-            rowOpacity:it._risk==='protected'?'.55':(isZ?'.62':'1'),
-            onToggle:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.toggleItem(g.id,it._i); } }; }); }
+            isCaution:it._risk==='caution', isProtected:it._risk==='protected',
+            locked:!!lock, showBox:!lock,
+            lockLabel:lock==='app'?(_lang==='en'?'App open':'应用打开中'):(_lang==='en'?'System in use':'系统占用'),
+            lockTip:lock==='app'?(_lang==='en'?('Scanned, but '+lockApp+' is running · quit it and rescan to clean this item'):('已扫到体积，但 '+lockApp+' 正在运行 · 退出后重新扫描即可清理'))
+                                :(_lang==='en'?'Scanned, but the system is using it right now · cannot be removed':'已扫到体积，但系统此刻正在占用 · 暂不可删除'),
+            wl:!!it._wl, wlLabel:(_lang==='en'?'Whitelisted':'已加白名单'),
+            wlColor:it._wl?'#9DB0C6':'var(--text-mute)', wlOpacity:it._wl?'1':'.45',
+            wlTip:it._wl?(_lang==='en'?'Remove from whitelist · later scans will include this path again':'从白名单移除 · 后续扫描将重新纳入此路径')
+                        :(_lang==='en'?'Add to whitelist · every later CLI and GUI scan will skip this path':'加入白名单 · CLI 与 GUI 的所有后续扫描都会跳过此路径'),
+            finderTip:(_lang==='en'?'Reveal in Finder':'在 Finder 中显示'),
+            checked, some:isAgg&&agst==='some',
+            boxBg:checked?'var(--accent)':'transparent', boxLine:checked?'var(--accent)':'var(--line-strong)',
+            cursor:(isAgg||lock||it._wl||it._risk==='protected')?'default':'pointer',
+            rowOpacity:it._risk==='protected'?'.55':(it._wl?'.5':(lock?'.72':(isZ?'.62':'1'))),
+            onToggle:isAgg?((e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.toggleAgg(g.id,it.aid); })
+                          :((e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); this.toggleItem(g.id,it._i); }),
+            onFinder:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); },
+            onWl:(e)=>{ if(e&&e.stopPropagation)e.stopPropagation(); if(!isAgg)this.toggleWl(g.id,it._i); else (g._kids[it.aid]||[]).forEach(k=>this.toggleWl(g.id,k._i)); } };
+        };
+        sorted.slice(0,shown).forEach(it=>{ items.push(mk(it,false));
+          if(it.agg&&this._exp[it.aid]) (g._kids[it.aid]||[]).forEach(k=>items.push(mk(k,true))); }); }
       const restN=sorted.length-shown;
       return { id:g.id, name:(_lang==='en'?g.en:g.name), note:this.tr((g.items[0]&&g.items[0].desc)||''),
         checkAll:gc==='all', checkSome:gc==='some', isProtected:g.risk==='protected', notProtected:g.risk!=='protected',
@@ -2829,7 +2915,7 @@ class Component extends DCLogic {
       cleanCanvasRef:this.cleanCanvasRef, cleanNumRef:this.cleanNumRef, cleanPathRef:this.cleanPathRef, cleanScanPathInit:this.PATHS[0], cleanLog,
       freedStr:(this._freed||0).toFixed(2), freedCount:''+(this._freedCount||0), onDoClean:()=>this.doClean(),
       freedSuccess:''+(this._freedSuccess!=null?this._freedSuccess:(this._freedCount||0)), freedSkip:'0', freedFail:''+(this._freedFail||0), hasCleanFail:(this._freedFail||0)>0, failItem:this._failItem||{name:'',path:'',size:'',reason:''}, cleanFailOpen:!!this.state.cleanFailOpen, failChevron:this.state.cleanFailOpen?'rotate(180deg)':'rotate(0deg)', onToggleFail:()=>this.setState(s=>({cleanFailOpen:!s.cleanFailOpen})), onRetryFail:()=>{ this.setState({fdaOk:true,cleanFailOpen:false}); },
-      cleanTabs, cleanGroups, guard, selGroupName:sg.name, selGroupEn:sg.en, selItems, selGroupProtected:sg.risk==='protected',
+      cleanTabs, cleanGroups, guard, cleanPresets, selGroupName:sg.name, selGroupEn:sg.en, selItems, selGroupProtected:sg.risk==='protected',
       summaryTotal:sum.total.toFixed(2), summaryShown:(this._shownSel).toFixed(2), selCount:''+selCount, summaryMeta:(_lang==='en'?('/ of '+sum.total.toFixed(2)+' GB · '+selCount+' selected'):('/ 共 '+sum.total.toFixed(2)+' GB · 已选 '+selCount+' 项')),
       onStartClean:()=>this.startClean(), onResetClean:()=>this.resetClean(), onCleanCelebrate:()=>this.cleanCelebrate(),
       fdaShow: !this.state.fdaOk && ( (isSmart && st!=='results') || (isClean && this.state.cleanState==='idle') || (isAnalyze && anIntro) ),
