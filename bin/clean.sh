@@ -1145,6 +1145,73 @@ _safe_clean_impl() {
                 fi
             done
         else
+            # Batch-first sizing: one analyze-go --du-batch process measures
+            # every non-.app path concurrently on the du -skP basis, replacing
+            # ~5 process spawns per path in the worker pool below. The pool
+            # stays as the full fallback (binary missing, batch launcher
+            # failure, alignment gap). *.app bundles keep the mdls basis and
+            # are measured individually after the batch (#1404).
+            local batch_done=0
+            if [[ "${MOLE_SIZE_BATCH_DISABLE:-0}" != "1" ]]; then
+                local -a _batch_idx=()
+                local -a _batch_paths=()
+                local _bi
+                for ((_bi = 0; _bi < ${#existing_paths[@]}; _bi++)); do
+                    case "${existing_paths[$_bi]}" in
+                        *.app | *.app/) ;;
+                        *)
+                            _batch_idx+=("$_bi")
+                            _batch_paths+=("${existing_paths[$_bi]}")
+                            ;;
+                    esac
+                done
+                local batch_rc=0
+                if [[ ${#_batch_paths[@]} -gt 0 ]]; then
+                    mole_size_batch "${_batch_paths[@]}" || batch_rc=$?
+                    if [[ $batch_rc -ge 128 ]]; then
+                        cleanup_interrupt_rc=$batch_rc
+                    elif [[ $batch_rc -eq 0 && ${#MOLE_SIZE_BATCH_KB[@]} -eq ${#_batch_paths[@]} ]]; then
+                        batch_done=1
+                        local _bj _bval
+                        for ((_bj = 0; _bj < ${#_batch_idx[@]}; _bj++)); do
+                            _bval="${MOLE_SIZE_BATCH_KB[$_bj]}"
+                            case "$_bval" in
+                                unknown)
+                                    # 预算耗尽 = 尺寸未知，不是 0 字节：项保留，
+                                    # flag=1 由下方公共统计块计入超时数
+                                    # （与池内 rc124 同语义）
+                                    echo "0 0 1" > "$temp_dir/result_${_batch_idx[$_bj]}"
+                                    ;;
+                                error | 0)
+                                    echo "0 0 0" > "$temp_dir/result_${_batch_idx[$_bj]}"
+                                    ;;
+                                *)
+                                    echo "$_bval 1 0" > "$temp_dir/result_${_batch_idx[$_bj]}"
+                                    ;;
+                            esac
+                        done
+                        # .app 个别测量（mdls 物理尺寸基准），量少
+                        for ((_bj = 0; _bj < ${#existing_paths[@]}; _bj++)); do
+                            [[ -f "$temp_dir/result_${_bj}" ]] && continue
+                            local _asize=0 _asize_rc=0
+                            _asize=$(get_cleanup_path_size_kb "${existing_paths[$_bj]}") || _asize_rc=$?
+                            if [[ $_asize_rc -ge 128 ]]; then
+                                cleanup_interrupt_rc=$_asize_rc
+                                break
+                            fi
+                            local _aflag=0
+                            [[ $_asize_rc -eq 124 ]] && _aflag=1
+                            [[ "$_asize" =~ ^[0-9]+$ ]] || _asize=0
+                            if [[ "$_asize" -gt 0 ]]; then
+                                echo "$_asize 1 $_aflag" > "$temp_dir/result_${_bj}"
+                            else
+                                echo "0 0 $_aflag" > "$temp_dir/result_${_bj}"
+                            fi
+                        done
+                    fi
+                fi
+            fi
+
             local -a pids=()
             local idx=0
             local completed=0
@@ -1152,7 +1219,7 @@ _safe_clean_impl() {
             last_progress_update=$(get_epoch_seconds)
             local total_paths=${#existing_paths[@]}
 
-            if [[ ${#existing_paths[@]} -gt 0 ]]; then
+            if [[ $batch_done -eq 0 && $cleanup_interrupt_rc -eq 0 && ${#existing_paths[@]} -gt 0 ]]; then
                 for path in "${existing_paths[@]}"; do
                     (
                         local size=0 size_rc=0

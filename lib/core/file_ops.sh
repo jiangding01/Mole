@@ -3010,6 +3010,62 @@ get_path_size_kb() {
     fi
 }
 
+# Batch physical-size measurement through the bundled Go analyzer
+# (analyze-go --du-batch): one process measures N paths concurrently on the
+# same du -skP basis (st_blocks, no link following, per-path hardlink dedup),
+# replacing ~5 process spawns per path in sizing loops. Results land in the
+# global MOLE_SIZE_BATCH_KB indexed array (bash 3.2: no namerefs), one entry
+# per input path: decimal KB, "unknown" (per-path budget hit — rc124
+# semantics: keep the item, report size unknown), or "error" (unreadable;
+# matches the du-nonzero refusal). Returns nonzero when the binary is
+# missing or the batch output is unusable (launcher failure, alignment gap):
+# callers MUST fall back to per-path sizing then. Do not pass *.app bundles
+# (they need the mdls physical-size basis, #1404).
+MOLE_SIZE_BATCH_KB=()
+mole_size_batch() {
+    [[ $# -gt 0 ]] || return 0
+    MOLE_SIZE_BATCH_KB=()
+    local bin="${MOLE_ANALYZE_GO_BIN:-}"
+    if [[ -z "$bin" ]]; then
+        local lib_dir
+        lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        bin="$lib_dir/../../bin/analyze-go"
+    fi
+    [[ -x "$bin" ]] || return 1
+    local out_file
+    out_file=$(mktemp "${TMPDIR:-/tmp}/mole_size_batch.XXXXXX") || return 1
+    local batch_rc=0
+    printf '%s\0' "$@" | "$bin" --du-batch \
+        --du-batch-timeout "${MOLE_TIMEOUT_DISK_VERIFY_SEC:-30}" \
+        > "$out_file" 2> /dev/null || batch_rc=$?
+    if [[ $batch_rc -ne 0 ]]; then
+        rm -f "$out_file" # SAFE: removes the mktemp scratch file this function created
+        return "$batch_rc"
+    fi
+    local rec idx val expect=0
+    while IFS= read -r -d '' rec; do
+        idx="${rec%%$'\t'*}"
+        val="${rec#*$'\t'}"
+        if [[ "$idx" != "$expect" ]]; then
+            rm -f "$out_file" # SAFE: removes the mktemp scratch file this function created
+            return 1
+        fi
+        case "$val" in
+            T) MOLE_SIZE_BATCH_KB+=("unknown") ;;
+            E) MOLE_SIZE_BATCH_KB+=("error") ;;
+            *[!0-9]* | "")
+                rm -f "$out_file" # SAFE: removes the mktemp scratch file this function created
+                return 1
+                ;;
+            *) MOLE_SIZE_BATCH_KB+=("$val") ;;
+        esac
+        expect=$((expect + 1))
+    done < "$out_file"
+    rm -f "$out_file" # SAFE: removes the mktemp scratch file this function created
+    [[ $expect -eq $# ]] || return 1
+    return 0
+}
+
 # Calculate total size for multiple paths
 calculate_total_size() {
     local files="$1"

@@ -24,6 +24,10 @@ var (
 func main() {
 	flag.Parse()
 
+	if *duBatchMode {
+		os.Exit(runDuBatch(os.Stdin, os.Stdout))
+	}
+
 	if *serveMode {
 		runServe(os.Stdin, os.Stdout)
 		return

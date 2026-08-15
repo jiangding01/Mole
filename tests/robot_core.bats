@@ -224,8 +224,13 @@ setup_apply_plan() {
     setup_apply_plan
     # 模拟删除进行中收到 SIGTERM：bash 会等 mole_delete 返回后才跑 trap，
     # 所以当前项必须完整出账，其余项归入 cancelled，绝不半删。
+    # BASHPID 是 bash 4+ 才有的；macOS 自带 bash 3.2 下为空，信号要发给
+    # $( ) 捕获子壳（trap 在那里），用子进程 PPID 探测兜底（$$ 是错的——
+    # 它仍指向 bats 主进程，会把测试框架打死）。
     mole_delete() {
-        kill -TERM "$BASHPID"
+        local self="${BASHPID:-}"
+        [[ -n "$self" ]] || self=$(exec sh -c 'echo "$PPID"')
+        kill -TERM "$self"
         rm -f "$1"
     }
     output=$(printf 'cl.a.exists\ncl.a.missing\ncl.a.protected\n' | MOLE_DELETE_MODE=trash robot_clean_apply "$plan_id")

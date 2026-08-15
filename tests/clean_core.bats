@@ -171,6 +171,7 @@ EOF
 set -euo pipefail
 source "\$PROJECT_ROOT/lib/core/common.sh"
 source "\$PROJECT_ROOT/bin/clean.sh"
+MOLE_SIZE_BATCH_DISABLE=1
 DRY_RUN=false
 files_cleaned=0
 total_size_cleaned=0
@@ -328,6 +329,7 @@ EOF
 set -euo pipefail
 source "\$PROJECT_ROOT/lib/core/common.sh"
 source "\$PROJECT_ROOT/bin/clean.sh"
+MOLE_SIZE_BATCH_DISABLE=1
 DRY_RUN=false
 files_cleaned=0
 total_size_cleaned=0
@@ -481,6 +483,7 @@ EOF
 set -euo pipefail
 source "\$PROJECT_ROOT/lib/core/common.sh"
 source "\$PROJECT_ROOT/bin/clean.sh"
+MOLE_SIZE_BATCH_DISABLE=1
 DRY_RUN=false
 MOLE_CURRENT_COMMAND=clean
 MOLE_CLEAN_CANCEL_STATUS=0
@@ -1709,4 +1712,187 @@ EOF
         echo "$open_coded"
         return 1
     }
+}
+
+# --- batch sizing (analyze-go --du-batch) --------------------------------------
+# 批量测量走 Go 一进程并发；下面四个用例钉住它与池路径的行为等价契约：
+# 跳池、超时=尺寸未知不丢项、二进制缺失回退、测量后守卫复查。
+
+_write_fake_du_batch() {
+    # $1 target script path, $2 per-path value ("5"=5KB, "T"=timeout marker)
+    cat > "$1" << FAKE
+#!/bin/bash
+i=0
+while IFS= read -r -d '' _p; do
+    printf '%d\t%s' "\$i" "$2"
+    printf '\0'
+    i=\$((i+1))
+done
+FAKE
+    chmod +x "$1"
+}
+
+@test "safe_clean sizes via the du-batch binary and skips the per-path pool" {
+    local base="$HOME/safe_clean_batch"
+    mkdir -p "$base/a" "$base/b" "$base/c" "$base/d"
+    _write_fake_du_batch "$BATS_TEST_TMPDIR/fake-batch" "5"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 \
+        MOLE_ANALYZE_GO_BIN="$BATS_TEST_TMPDIR/fake-batch" /bin/bash --noprofile --norc << EOF
+set -euo pipefail
+source "\$PROJECT_ROOT/lib/core/common.sh"
+source "\$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=false
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+note_activity() { :; }
+is_path_whitelisted() { return 1; }
+get_cleanup_path_size_kb() { echo "POOL_USED:\$1"; echo 1; }
+safe_remove() { echo "REMOVE:\$1"; /bin/rm -rf "\$1"; }
+
+rc=0
+safe_clean "$base/a" "$base/b" "$base/c" "$base/d" "Batch sized" || rc=\$?
+echo "RC=\$rc SIZE=\$total_size_cleaned"
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" != *"POOL_USED"* ]] || return 1
+    [[ "$output" == *"REMOVE:$base/a"* ]] || return 1
+    [[ "$output" == *"RC=0"* ]] || return 1
+    # 4 项 × 5KB
+    [[ "$output" == *"SIZE=20"* ]] || return 1
+}
+
+@test "du-batch timeout marker keeps the item and counts size unknown" {
+    local base="$HOME/safe_clean_batch_timeout"
+    mkdir -p "$base/a" "$base/b" "$base/c" "$base/d"
+    _write_fake_du_batch "$BATS_TEST_TMPDIR/fake-batch-t" "T"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 \
+        MOLE_ANALYZE_GO_BIN="$BATS_TEST_TMPDIR/fake-batch-t" /bin/bash --noprofile --norc << EOF
+set -euo pipefail
+source "\$PROJECT_ROOT/lib/core/common.sh"
+source "\$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=false
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+unset MOLE_CLEAN_SIZING_TIMEOUTS
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+note_activity() { :; }
+is_path_whitelisted() { return 1; }
+get_cleanup_path_size_kb() { echo 1; }
+safe_remove() { echo "REMOVE:\$1"; /bin/rm -rf "\$1"; }
+
+rc=0
+safe_clean "$base/a" "$base/b" "$base/c" "$base/d" "Batch timeout" || rc=\$?
+printf 'RC=%s TIMEOUTS=%s\n' "\$rc" "\${MOLE_CLEAN_SIZING_TIMEOUTS:-0}"
+for path in "$base/a" "$base/b" "$base/c" "$base/d"; do
+    [[ ! -d "\$path" ]] || { echo "WRONG: kept \$path"; exit 1; }
+done
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == *"RC=0"* ]] || return 1
+    [[ "$output" == *"TIMEOUTS=4"* ]] || return 1
+}
+
+@test "safe_clean falls back to the pool when the du-batch binary is missing" {
+    local base="$HOME/safe_clean_batch_fallback"
+    mkdir -p "$base/a" "$base/b" "$base/c" "$base/d"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 \
+        MOLE_ANALYZE_GO_BIN="$BATS_TEST_TMPDIR/does-not-exist" /bin/bash --noprofile --norc << EOF
+set -euo pipefail
+source "\$PROJECT_ROOT/lib/core/common.sh"
+source "\$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=false
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+note_activity() { :; }
+is_path_whitelisted() { return 1; }
+get_cleanup_path_size_kb() { echo "POOL_USED:\$1" >&2; echo 2; }
+safe_remove() { echo "REMOVE:\$1"; /bin/rm -rf "\$1"; }
+
+rc=0
+safe_clean "$base/a" "$base/b" "$base/c" "$base/d" "Pool fallback" || rc=\$?
+echo "RC=\$rc"
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == *"POOL_USED"* ]] || return 1
+    [[ "$output" == *"RC=0"* ]] || return 1
+}
+
+@test "safe_clean_guarded rechecks the guard after du-batch sizing" {
+    local base="$HOME/safe_clean_batch_guard"
+    mkdir -p "$base/a" "$base/b" "$base/c" "$base/d"
+    # 假批量器在测量期间"启动了应用"（落 marker），守卫复查必须拦下删除
+    cat > "$BATS_TEST_TMPDIR/fake-batch-g" << FAKE
+#!/bin/bash
+touch "$base/process-started"
+i=0
+while IFS= read -r -d '' _p; do
+    printf '%d\t%s' "\$i" "5"
+    printf '\0'
+    i=\$((i+1))
+done
+FAKE
+    chmod +x "$BATS_TEST_TMPDIR/fake-batch-g"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 \
+        MOLE_ANALYZE_GO_BIN="$BATS_TEST_TMPDIR/fake-batch-g" /bin/bash --noprofile --norc << EOF
+set -euo pipefail
+source "\$PROJECT_ROOT/lib/core/common.sh"
+source "\$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=false
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+note_activity() { :; }
+is_path_whitelisted() { return 1; }
+delete_guard() { [[ ! -e "$base/process-started" ]]; }
+safe_remove() { echo "UNEXPECTED_REMOVE:\$1"; /bin/rm -rf "\$1"; }
+
+rc=0
+safe_clean_guarded delete_guard \
+    "$base/a" "$base/b" "$base/c" "$base/d" \
+    "Guarded batch" || rc=\$?
+[[ \$rc -eq 75 ]] || { echo "WRONG_RC:\$rc"; exit 1; }
+for path in "$base/a" "$base/b" "$base/c" "$base/d"; do
+    [[ -d "\$path" ]] || { echo "WRONG: removed \$path"; exit 1; }
+done
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" != *"UNEXPECTED_REMOVE"* ]]
 }
