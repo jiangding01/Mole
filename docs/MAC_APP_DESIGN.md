@@ -205,6 +205,8 @@ mole robot <domain> <verb> [options] [< request.json]
 | `robot history list [--limit n] [--deletions]` | 默认会话摘要（operations.log）；`--deletions` 逐项明细（deletions.log TSV） | item* → done | 否 |
 | `robot whitelist list/add/remove --mode clean\|optimize` | pattern + 模式（两套白名单文件，见 §5.7） | done（含更新后列表） | 否（改配置） |
 
+注：clean plan 对 dry-run 导出做一个**有文档记录的变换**：`bytes == 0` 的目标不进 plan（空目录零收益且会被应用重建，两百余条噪音行稀释复核质量；"大小未知"不受影响）。CLI TUI 行为不变——过滤只存在于 robot 层，apply 只删 plan id，因此 GUI 的预览与删除天然一致。
+
 注：`--sections` 是**协议层**的机器过滤参数（GUI 分 tab/分域调用用），不是复活已移除的用户向 `mo clean --select`（`bin/clean.sh:1463` 明确拒绝该 flag）——TUI 用户面保持不变，robot 过滤只存在于机器接口。
 
 ### 4.3 事件 Schema

@@ -261,6 +261,23 @@ setup_apply_plan() {
     [ "$(printf '%s' "$output" | cut -f4)" = "/tmp/evil ," ] || return 1
 }
 
+@test "clean plan drops zero-byte targets but keeps unknown-size ones" {
+    require_jq
+    {
+        printf '=== Logs ===\n'
+        printf '/Users/x/Library/Logs/empty-dir  # 0B\n'
+        printf '/Users/x/Library/Logs/slow-dir  # size unknown\n'
+        printf '/Users/x/Library/Logs/real-dir  # 5KB\n'
+    } > "$BATS_TEST_TMPDIR/export.txt"
+    plan_id=$(robot_plan_new "clean")
+    run robot_clean_plan_from_export "$BATS_TEST_TMPDIR/export.txt" "$plan_id"
+    [ "$status" -eq 0 ] || return 1
+    # 0B 项不进 plan；unknown 与有尺寸项保留；done 计数一致
+    echo "$output" | jq -se '[.[] | select(.event == "item")] | length == 2' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "item")] | all(.path | endswith("empty-dir") | not)' > /dev/null || return 1
+    echo "$output" | jq -se '[.[] | select(.event == "done")][0].summary.items == 2' > /dev/null || return 1
+}
+
 @test "clean plan emits null bytes for size-unknown entries, not zero" {
     require_jq
     {

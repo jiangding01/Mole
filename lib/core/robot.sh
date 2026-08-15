@@ -264,6 +264,17 @@ robot_clean_plan_from_export() {
             continue
         fi
 
+        # Zero-byte targets never enter the GUI plan (documented transform,
+        # MAC_APP_DESIGN §4.2): empty dirs free nothing, apps recreate them,
+        # and 200+ noise rows dilute the review the sized rows deserve.
+        # Filtered here — not in clean.sh — so the CLI keeps its own
+        # preview==real behavior and stays unforked from upstream; apply
+        # only ever deletes plan ids, so what leaves the plan leaves apply.
+        # "size unknown" (null) is NOT zero and always stays.
+        if [[ "$bytes_json" != "null" && "$bytes" -eq 0 ]]; then
+            continue
+        fi
+
         item_id=$(robot_item_id "cl" "$section_slug" "$path")
         if ! robot_plan_append "$plan_id" "$item_id" "$path" "$bytes"; then
             robot_emit_error "E_INTERNAL" "skipped unrepresentable path in section $section_slug" "false"
