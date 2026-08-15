@@ -215,6 +215,12 @@ final class CleanStore {
         groups.flatMap(\.items).filter { checked.contains($0.id) }.compactMap(\.bytes).reduce(0, +)
     }
 
+    /// 已勾选但尺寸未知（bytes == nil）的项数：总计只累加已知项，
+    /// 未知项在确认条上单独声明（设计 CHANGELOG-2026-08-15 §1.2）。
+    var checkedUnknownCount: Int {
+        groups.flatMap(\.items).filter { checked.contains($0.id) && $0.bytes == nil }.count
+    }
+
     // MARK: - 执行
 
     func execute() {

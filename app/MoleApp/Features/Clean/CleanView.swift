@@ -244,6 +244,7 @@ struct CleanView: View {
                 .font(Fonts.mono(11.5))
                 .foregroundStyle(look.textMute)
                 .frame(minWidth: 62, alignment: .trailing)
+                .help(item.bytes == nil ? L("clean.size.unknown.help") : "")
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
         .contentShape(Rectangle())
@@ -292,9 +293,19 @@ struct CleanView: View {
                 .font(Fonts.ui(12.5, .semibold))
                 .foregroundStyle(look.textDim)
             Spacer()
-            Text(L("clean.confirm.summary", Int64(store.checkedCount), fmt(store.checkedBytes)))
-                .font(Fonts.mono(12))
-                .foregroundStyle(look.textDim)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(L("clean.confirm.summary", Int64(store.checkedCount), fmt(store.checkedBytes)))
+                    .font(Fonts.mono(12))
+                    .foregroundStyle(look.textDim)
+                // 设计红线：总计只累加已知项，未知项单独如实声明（CHANGELOG §1.2）。
+                if store.checkedUnknownCount > 0 {
+                    Text(L("clean.confirm.unknown", Int64(store.checkedUnknownCount)))
+                        .font(Fonts.ui(10.5))
+                        .foregroundStyle(look.textMute)
+                        .textCase(.uppercase)
+                        .kerning(0.5)
+                }
+            }
             Button {
                 store.execute()
             } label: {

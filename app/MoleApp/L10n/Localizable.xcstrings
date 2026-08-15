@@ -1428,6 +1428,23 @@
         }
       }
     },
+    "clean.confirm.unknown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld more · size unknown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %lld 项大小未知"
+          }
+        }
+      }
+    },
     "clean.cta.clean" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1815,6 +1832,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "大小未知"
+          }
+        }
+      }
+    },
+    "clean.size.unknown.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Measurement timed out — space freed is recorded after deletion"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测量超时，删除后按实际释放量记录"
           }
         }
       }
