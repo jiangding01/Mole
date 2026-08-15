@@ -502,16 +502,26 @@ struct AppsView: View {
 
     private var updateList: some View {
         VStack(spacing: 0) {
-            // 列表头：可更新计数 + 「全部更新」（设计稿 space-between）
+            // 列表头（设计 §1.3）：可在 Mole 内更新 N · 另有 M 项需前往来源，
+            // 「全部更新」只作用于 Homebrew 项并带计数。nowrap + 省略防折行。
             HStack(alignment: .firstTextBaseline) {
-                Text(L("apps.update.header", Int64(updatesStore.visibleCount)))
-                    .font(Fonts.ui(13, .semibold))
-                    .foregroundStyle(look.text)
+                HStack(spacing: 0) {
+                    Text(L("apps.update.header", Int64(updatesStore.brewUpdates.count)))
+                    if updatesStore.jumpCount > 0 {
+                        Text(verbatim: " · ")
+                        Text(L("apps.update.header.jump", Int64(updatesStore.jumpCount)))
+                            .foregroundStyle(look.textDim)
+                    }
+                }
+                .font(Fonts.ui(13, .semibold))
+                .foregroundStyle(look.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 Spacer()
                 Button {
                     updatesStore.updateAll()
                 } label: {
-                    Text(L("apps.update.updateAll"))
+                    Text(L("apps.update.updateAll.count", Int64(updatesStore.brewUpdates.count)))
                         .font(Fonts.ui(12.5, .semibold))
                         .foregroundStyle(updatesStore.canUpdateAll ? accent.a : look.textMute)
                         .contentShape(Rectangle())
@@ -535,6 +545,8 @@ struct AppsView: View {
                     }
                 }
                 .padding(.trailing, 2)
+                // done 驻留 1s 后移除的行在此淡出（设计行内状态机收尾）。
+                .animation(.easeOut(duration: 0.25), value: updatesStore.visibleUpdates)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -1020,8 +1032,26 @@ private struct UpdateRow: View {
         return NSWorkspace.shared.icon(for: .applicationBundle)
     }
 
+    /// 来源徽标配色与 hover 说明（设计 §1.3 四来源表）。
+    private var sourceTint: Color {
+        switch item.sourceDisplay {
+        case "Homebrew": Color(hex: 0xC9862F)
+        case "App Store": Color(hex: 0x4C8FD8)
+        case "Sparkle": Color(hex: 0x8E72CE)
+        default: Color(hex: 0x7C90A8) // Electron 及未来来源
+        }
+    }
+
+    private var sourceHelp: String {
+        if item.isBrewManaged { return L("apps.update.src.brew.help") }
+        return item.sourceDisplay == "App Store"
+            ? L("apps.update.src.appstore.help")
+            : L("apps.update.src.inapp.help")
+    }
+
     var body: some View {
         let running = store.isRunning(item)
+        let done = store.isCompleted(item)
         let failure = store.failure(item)
         return HStack(spacing: 13) {
             Image(nsImage: icon)
@@ -1034,12 +1064,12 @@ private struct UpdateRow: View {
                         .font(Fonts.ui(13.5, .semibold))
                         .foregroundStyle(look.text)
                         .lineLimit(1)
-                    // 来源徽标（v1 恒为 Homebrew）
                     Text(verbatim: item.sourceDisplay)
-                        .font(Fonts.ui(10.5))
-                        .foregroundStyle(look.textMute)
+                        .font(Fonts.ui(10.5, .medium))
+                        .foregroundStyle(sourceTint)
                         .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(look.text.opacity(0.05)))
+                        .background(RoundedRectangle(cornerRadius: 5).fill(sourceTint.opacity(0.12)))
+                        .help(sourceHelp)
                 }
                 // 版本差：旧 → 新（mono 11.5，新版本橙红）
                 HStack(spacing: 0) {
@@ -1051,14 +1081,45 @@ private struct UpdateRow: View {
                 }
                 .font(Fonts.mono(11.5))
                 .lineLimit(1)
+                // 失败行内错误卡：brew stderr 摘要如实呈现（设计 §1.3）。
+                if let failure {
+                    Text(verbatim: failure)
+                        .font(Fonts.ui(11))
+                        .foregroundStyle(Semantic.danger)
+                        .lineLimit(2)
+                        .padding(.top, 2)
+                }
             }
             Spacer(minLength: 8)
-            if let failure {
-                Text(L("apps.update.failed"))
+            trailing(running: running, done: done, failure: failure)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 12).fill(look.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(
+            failure == nil ? look.line : Semantic.danger.opacity(0.45), lineWidth: 1
+        ))
+    }
+
+    /// 行尾动作区：idle（忽略+主/次按钮）→ running（spinner）→ done（绿色已更新）。
+    @ViewBuilder
+    private func trailing(running: Bool, done: Bool, failure: String?) -> some View {
+        if done {
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                Text(L("apps.update.done"))
+                    .font(Fonts.ui(12, .semibold))
+            }
+            .foregroundStyle(Semantic.success)
+        } else if running {
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(L("apps.update.running"))
                     .font(Fonts.ui(12))
-                    .foregroundStyle(Semantic.warn)
-                    .help(failure)
-            } else if !running {
+                    .foregroundStyle(look.textDim)
+            }
+        } else {
+            if failure == nil {
                 Button {
                     store.ignore(item)
                 } label: {
@@ -1070,27 +1131,51 @@ private struct UpdateRow: View {
                 .buttonStyle(.plain)
                 .pointingCursor()
             }
-            if running {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 60, height: 30)
-            } else {
+            if item.isBrewManaged {
+                // Homebrew：可执行动作 = 渐变主按钮（失败态转「重试」）
                 Button {
                     store.update(item)
                 } label: {
                     Text(failure == nil ? L("apps.update.button") : L("common.retry"))
                         .font(Fonts.ui(12.5, .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(accent.onAccent)
                         .padding(.horizontal, 18).padding(.vertical, 8)
-                        .background(Capsule().fill(Color(hex: 0xC86B49)))
+                        .background(Capsule().fill(accent.gradient))
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+            } else {
+                // 跳转类来源：描边次级按钮 + 外链箭头，视觉上与可执行动作分级
+                Button {
+                    openSource()
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(item.sourceDisplay == "App Store"
+                            ? L("apps.update.open.appstore")
+                            : L("apps.update.open.app"))
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .font(Fonts.ui(12, .semibold))
+                    .foregroundStyle(look.textDim)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .overlay(Capsule().stroke(look.lineStrong, lineWidth: 1))
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .pointingCursor()
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 11)
-        .background(RoundedRectangle(cornerRadius: 12).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(look.line, lineWidth: 1))
+    }
+
+    /// 跳转类来源的引导动作：App Store 打开商店更新页，其余激活目标应用
+    /// 让用户在应用内检查更新（v1.2+ 来源检测落地后才会出现这类行）。
+    private func openSource() {
+        if item.sourceDisplay == "App Store" {
+            NSWorkspace.shared.open(URL(string: "macappstore://showUpdatesPage")!)
+        } else if let app = matchedApp {
+            NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
+        }
     }
 }
 

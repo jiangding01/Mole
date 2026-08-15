@@ -1241,6 +1241,23 @@
         }
       }
     },
+    "apps.update.done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updated"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已更新"
+          }
+        }
+      }
+    },
     "apps.update.empty.note" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1309,6 +1326,23 @@
         }
       }
     },
+    "apps.update.header.jump" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld more need updating at the source"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %lld 项需前往来源更新"
+          }
+        }
+      }
+    },
     "apps.update.ignore" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1343,6 +1377,57 @@
         }
       }
     },
+    "apps.update.open.app" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check in the app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开应用检查更新"
+          }
+        }
+      }
+    },
+    "apps.update.open.appstore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open App Store"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前往 App Store"
+          }
+        }
+      }
+    },
+    "apps.update.running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updating…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新中…"
+          }
+        }
+      }
+    },
     "apps.update.sourceFilter" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1360,6 +1445,57 @@
         }
       }
     },
+    "apps.update.src.appstore.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update via the App Store"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需在 App Store 中更新"
+          }
+        }
+      }
+    },
+    "apps.update.src.brew.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mole can run brew upgrade for you"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mole 可代为执行 brew upgrade"
+          }
+        }
+      }
+    },
+    "apps.update.src.inapp.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check for updates inside the app"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需在应用内检查更新"
+          }
+        }
+      }
+    },
     "apps.update.updateAll" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1373,6 +1509,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部更新"
+          }
+        }
+      }
+    },
+    "apps.update.updateAll.count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update all (%lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部更新（%lld 项）"
           }
         }
       }

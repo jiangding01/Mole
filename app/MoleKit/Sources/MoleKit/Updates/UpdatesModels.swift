@@ -28,6 +28,12 @@ public struct AppUpdate: Sendable, Identifiable, Equatable {
         sourceRaw == "brew-cask" ? "Homebrew" : sourceRaw
     }
 
+    /// 能否在 Mole 内一键更新（委托 brew）。跳转类来源（App Store /
+    /// Sparkle / Electron，v1.2+ 检测）只做引导，Mole 不代为执行。
+    public var isBrewManaged: Bool {
+        sourceRaw == "brew-cask"
+    }
+
     /// 解析一条 robot item 为更新条目。字段缺失/格式异常时返回 nil（跳过，不崩）。
     /// detail 以 " · " 分三段；版本号本身不含 " · "，切分无歧义（与 HistoryReader 同姿态）。
     static func parse(_ item: RobotItem) -> AppUpdate? {

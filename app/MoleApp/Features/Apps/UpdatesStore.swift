@@ -24,6 +24,8 @@ final class UpdatesStore {
     private(set) var running: Set<String> = []
     /// 更新失败的 id → stderr 摘要（行内诚实呈现，按钮转「重试」）。
     private(set) var failures: [String: String] = [:]
+    /// 刚完成的 id：绿色「已更新」驻留 1s 后行淡出移除（设计 CHANGELOG §1.3）。
+    private(set) var completed: Set<String> = []
     /// 「全部更新」串行进行中（避免重入、按钮转进行态）。
     private(set) var bulkRunning = false
     /// 被忽略的 cask token（持久化，列表过滤）。
@@ -91,10 +93,11 @@ final class UpdatesStore {
         Task { await performUpdate(item) }
     }
 
-    /// 全部更新：对当前可见项串行逐个执行（core 侧 brew 本就串行，避免并发抢锁）。
+    /// 全部更新：只作用于 Homebrew 项（设计 §1.3），串行逐个执行
+    /// （core 侧 brew 本就串行，避免并发抢锁）。跳转类来源不代为执行。
     func updateAll() {
         guard !bulkRunning else { return }
-        let targets = visibleUpdates.filter { !running.contains($0.id) }
+        let targets = brewUpdates.filter { !running.contains($0.id) }
         guard !targets.isEmpty else { return }
         bulkRunning = true
         Task { [weak self] in
@@ -115,7 +118,11 @@ final class UpdatesStore {
         do {
             try await client.upgrade(id: item.id)
             running.remove(item.id)
-            updates.removeAll { $0.id == item.id }
+            // 设计行内状态机：done（绿色「已更新」）驻留 1s，随后行淡出。
+            completed.insert(item.id)
+            try? await Task.sleep(for: .seconds(1))
+            completed.remove(item.id)
+            updates.removeAll { $0.id == item.id } // 行淡出动画由列表侧 .animation 驱动
         } catch {
             running.remove(item.id)
             failures[item.id] = error.localizedDescription
@@ -133,6 +140,20 @@ final class UpdatesStore {
 
     func isRunning(_ item: AppUpdate) -> Bool {
         running.contains(item.id)
+    }
+
+    func isCompleted(_ item: AppUpdate) -> Bool {
+        completed.contains(item.id)
+    }
+
+    /// 可在 Mole 内一键更新的可见项（Homebrew）；跳转类来源不计入。
+    var brewUpdates: [AppUpdate] {
+        visibleUpdates.filter(\.isBrewManaged)
+    }
+
+    /// 需前往来源更新的可见项数（App Store / Sparkle / Electron 等）。
+    var jumpCount: Int {
+        visibleUpdates.count - brewUpdates.count
     }
 
     func failure(_ item: AppUpdate) -> String? {
