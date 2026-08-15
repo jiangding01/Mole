@@ -4,7 +4,7 @@ import SwiftUI
 /// 优化页（设计 §5.4 / 设计稿 optimize 页）：
 /// 清单（分组任务卡：日常维护 / 修复小毛病 / 深度维护）→ 执行
 /// （光谱环 tending 逐段点亮 + 任务状态流）→ 完成报告。
-/// 深度任务的管理员分支当前自动跳过（后台助手 Phase 3 前的诚实姿态）。
+/// 21 项全部免管理员执行，无需管理员提示（CHANGELOG-2026-08-15 §1.1）。
 struct OptimizeView: View {
     @Environment(OptimizeStore.self) private var store
     private let look = Look.ink
@@ -52,7 +52,6 @@ struct OptimizeView: View {
         VStack(spacing: 0) {
             listHeader
                 .padding(.bottom, 16)
-            adminNote
             ScrollView {
                 VStack(spacing: 12) {
                     ForEach(store.grouped(), id: \.category.id) { group in
@@ -106,72 +105,59 @@ struct OptimizeView: View {
         }
     }
 
-    /// 深度任务说明（颜色 + 图标 + 文字三通道，诚实告知 sudo 分支跳过）。
-    private var adminNote: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 10))
-                .foregroundStyle(Semantic.info)
-            Text(L("optimize.adminNote"))
-                .font(Fonts.ui(11.5))
-                .foregroundStyle(look.textDim)
-            Spacer()
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Semantic.info.opacity(0.07)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Semantic.info.opacity(0.22), lineWidth: 1))
-        .padding(.bottom, 12)
+    /// 双列卡片网格列定义（设计稿 optList，dc L780：grid-template-columns:1fr 1fr）。
+    private var taskGridColumns: [GridItem] {
+        [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
     }
 
+    /// 分类节（设计稿 g.sec：12px semibold text-mute 小标签 + 双列任务卡网格，
+    /// 无外层包裹卡、无计数）。
     private func groupCard(_ category: OptimizeStore.Category, _ rows: [OptimizeStore.TaskRow]) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Fonts.eyebrow(category.title, size: 10)
-                    .foregroundStyle(accent.b)
-                Text("\(rows.count)")
-                    .font(Fonts.mono(10))
-                    .foregroundStyle(look.textMute)
-                Spacer()
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            Divider().overlay(look.line)
-            VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(category.title)
+                .font(Fonts.ui(12, .semibold))
+                .foregroundStyle(look.textMute)
+                .padding(.horizontal, 2)
+            LazyVGrid(columns: taskGridColumns, spacing: 10) {
                 ForEach(rows) { task in
-                    taskRow(task)
+                    taskCard(task)
                 }
             }
-            .padding(.vertical, 4)
         }
-        .background(RoundedRectangle(cornerRadius: 13).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1))
     }
 
-    private func taskRow(_ task: OptimizeStore.TaskRow) -> some View {
+    /// 任务卡（设计稿 optList task 卡，dc L781-789）：勾选态用 accent 底 + 描边强调，
+    /// 描述左对齐到复选框内侧（19 宽 + 10 间距）。
+    private func taskCard(_ task: OptimizeStore.TaskRow) -> some View {
         let checked = store.checked.contains(task.id)
-        return HStack(spacing: 11) {
-            OptimizeCheckBox(checked: checked, accent: accent, look: look, size: 18) {
-                store.toggle(task)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(task.name)
-                        .font(Fonts.ui(12.5, .medium))
-                        .foregroundStyle(checked ? look.text : look.textDim)
-                    if OptimizeStore.readOnlyTasks.contains(task.id) {
-                        readOnlyBadge
-                    }
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                OptimizeCheckBox(checked: checked, accent: accent, look: look, size: 19) {
+                    store.toggle(task)
                 }
-                Text(task.desc)
-                    .font(Fonts.ui(11))
-                    .foregroundStyle(look.textMute)
+                Text(task.name)
+                    .font(Fonts.ui(12.5, .semibold))
+                    .foregroundStyle(look.text)
                     .lineLimit(1)
+                Spacer(minLength: 4)
+                if OptimizeStore.readOnlyTasks.contains(task.id) {
+                    readOnlyBadge
+                }
             }
-            Spacer(minLength: 8)
-            Text(task.id)
-                .font(Fonts.mono(9.5))
-                .foregroundStyle(look.textMute.opacity(0.7))
+            Text(task.desc)
+                .font(Fonts.ui(11))
+                .foregroundStyle(look.textMute)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .padding(.leading, 29)
         }
-        .padding(.horizontal, 14).padding(.vertical, 7)
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(checked ? AnyShapeStyle(accent.a.opacity(0.06)) : AnyShapeStyle(look.surface))
+        )
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(checked ? accent.a.opacity(0.4) : look.line, lineWidth: 1))
         .contentShape(Rectangle())
         .onTapGesture { store.toggle(task) }
         .pointingCursor()

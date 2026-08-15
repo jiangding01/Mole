@@ -220,6 +220,23 @@ final class StatusStore {
         NSRunningApplication(processIdentifier: pid_t(p.pid))
     }
 
+    /// 显示名去歧义（同一父应用的多个 Helper 子进程会被 ps comm 截断成同一个
+    /// 名字，如 Chrome 的 Renderer/GPU/Utility 都读作 "Google"）：
+    /// ① 精确 pid 命中的 NSRunningApplication.localizedName（Helper 子进程本身
+    ///   也是独立 bundle，能读到 "Google Chrome Helper (Renderer)" 这类全名）
+    /// ② 命中不到时用父应用 localizedName
+    /// ③ 都没有则回退现有 ps 名。与 `icon(for:)` 走同一套 pid → 父进程回退顺序。
+    func displayName(for p: MetricsSnapshot.ProcessInfo) -> String {
+        if let name = runningApp(for: p)?.localizedName {
+            return name
+        }
+        if let ppid = p.ppid, ppid > 1,
+           let name = NSRunningApplication(processIdentifier: pid_t(ppid))?.localizedName {
+            return name
+        }
+        return p.name ?? "?"
+    }
+
     /// 快照里的父进程（进程树行：parent > child）。
     func parent(of p: MetricsSnapshot.ProcessInfo) -> MetricsSnapshot.ProcessInfo? {
         guard let ppid = p.ppid, ppid > 0 else { return nil }

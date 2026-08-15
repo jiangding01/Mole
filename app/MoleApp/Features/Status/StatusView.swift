@@ -21,7 +21,7 @@ struct StatusView: View {
         .onAppear { store.start() }
         .onDisappear { store.stop() }
         .confirmationDialog(
-            L("status.kill.title", store.confirmKill?.name ?? ""),
+            L("status.kill.title", store.confirmKill.map { store.displayName(for: $0) } ?? ""),
             isPresented: Binding(get: { store.confirmKill != nil }, set: { if !$0 { store.confirmKill = nil } })
         ) {
             if let p = store.confirmKill {
@@ -314,7 +314,7 @@ struct StatusView: View {
                 if let top, let cpu = top.cpu {
                     HStack(spacing: 4) {
                         Image(systemName: "flame").font(.system(size: 8)).foregroundStyle(Semantic.warnAlt)
-                        Text(L("status.battery.top", top.name ?? "?", Int64(Int(cpu))))
+                        Text(L("status.battery.top", store.displayName(for: top), Int64(Int(cpu))))
                     }
                     .font(Fonts.mono(10))
                     .foregroundStyle(look.textMute)
@@ -439,6 +439,7 @@ struct StatusView: View {
                         ForEach(Array(store.sortedProcesses.prefix(50).enumerated()), id: \.element.pid) { index, proc in
                             ProcessRow(
                                 proc: proc,
+                                displayName: store.displayName(for: proc),
                                 icon: store.icon(for: proc),
                                 look: look,
                                 isSystem: store.isSystemProcess(proc),
@@ -647,6 +648,9 @@ private struct MetricCard<Content: View>: View {
 
 private struct ProcessRow: View {
     var proc: MetricsSnapshot.ProcessInfo
+    /// 去歧义后的显示名（`StatusStore.displayName(for:)`）——同名 Helper 子进程
+    /// 不再一律显示父应用截断名（如三行 "Google"）。
+    var displayName: String
     var icon: NSImage?
     var look: Look
     var isSystem: Bool
@@ -663,7 +667,7 @@ private struct ProcessRow: View {
         HStack(spacing: 0) {
             HStack(spacing: 8) {
                 iconView
-                Text(proc.name ?? "?").font(Fonts.ui(12, .medium)).lineLimit(1)
+                Text(displayName).font(Fonts.ui(12, .medium)).lineLimit(1)
                 // 火焰只绑定持续告警（阈值+窗口），瞬时高 CPU 不再点亮——
                 // 原 cpu>80 触发会闪烁（设计 CHANGELOG §二）。
                 if let alert {
@@ -876,7 +880,7 @@ private struct ProcessDetailSheet: View {
     private func header(titleSize: CGFloat) -> some View {
         HStack(spacing: 14) {
             iconBox
-            Text(proc.name ?? "?")
+            Text(store.displayName(for: proc))
                 .font(Fonts.ui(titleSize, .semibold))
                 .foregroundStyle(look.text)
             Spacer()
@@ -943,13 +947,13 @@ private struct ProcessDetailSheet: View {
             } else {
                 HStack(spacing: 7) {
                     let parent = store.parent(of: proc)
-                    Text(parent?.name ?? (proc.ppid == 1 ? "launchd" : "PPID"))
+                    Text(parent.map { store.displayName(for: $0) } ?? (proc.ppid == 1 ? "launchd" : "PPID"))
                         .foregroundStyle(look.textDim)
                     Text(verbatim: "\(proc.ppid ?? 0)").foregroundStyle(look.textMute)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(look.textMute)
-                    Text(proc.name ?? "?").foregroundStyle(look.text)
+                    Text(store.displayName(for: proc)).foregroundStyle(look.text)
                     Text(verbatim: "\(proc.pid)").foregroundStyle(look.textMute)
                 }
             }

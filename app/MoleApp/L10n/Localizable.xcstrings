@@ -3009,23 +3009,6 @@
         }
       }
     },
-    "optimize.adminNote" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Admin-only steps are skipped for now; they unlock with the background helper (Phase 3)."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "需要管理员权限的深度环节当前自动跳过；后台助手（Phase 3）上线后解锁。"
-          }
-        }
-      }
-    },
     "optimize.badge.readonly" : {
       "extractionState" : "manual",
       "localizations" : {
