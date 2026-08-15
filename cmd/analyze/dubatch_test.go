@@ -84,3 +84,29 @@ func TestRunDuBatchOrderAndFraming(t *testing.T) {
 		t.Errorf("missing path should be E, got %q", records[1])
 	}
 }
+
+func TestRunDuServeFraming(t *testing.T) {
+	root := t.TempDir()
+	a := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(a, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 帧形态：带预算前缀、裸路径、空路径（必须应答 E，不许沉默失同步）
+	in := strings.NewReader("5\t" + a + "\x00" + root + "\x00" + "\x00")
+	var out bytes.Buffer
+	if rc := runDuServe(in, &out); rc != 0 {
+		t.Fatalf("rc = %d", rc)
+	}
+	records := strings.Split(strings.TrimSuffix(out.String(), "\x00"), "\x00")
+	if len(records) != 3 {
+		t.Fatalf("want 3 responses, got %d: %q", len(records), records)
+	}
+	for i, rec := range records[:2] {
+		if rec == "" || strings.ContainsAny(rec, "TE") {
+			t.Errorf("response %d should be numeric KB, got %q", i, rec)
+		}
+	}
+	if records[2] != "E" {
+		t.Errorf("empty path must answer E, got %q", records[2])
+	}
+}

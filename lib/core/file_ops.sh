@@ -2944,6 +2944,41 @@ get_path_size_kb() {
     [[ $timeout_budget -gt 0 ]] || timeout_budget=1
     local size_deadline=$((SECONDS + timeout_budget))
 
+    # 常驻测量服务快路径：应答语义与本函数原路径一致——数字=KB，
+    # T=预算耗尽 → rc124（尺寸未知，项保留），E=不可读 → rc1（同 du 失败）。
+    # .app 不走服务（保持 mdls 物理尺寸基准）；任何一步异常立即整体降级
+    # 回原路径（fail-open 到慢路径，绝不 fail 成错误答案）。
+    # 降级标记走文件系统（$MOLE_SIZE_SERVER_DIR/down）：本函数几乎总在
+    # $( ) 子壳里被调用，子壳里改 MOLE_SIZE_SERVER_UP 传不回父进程，
+    # down 文件才能让"服务坏了"粘滞到后续所有调用。
+    if [[ "${MOLE_SIZE_SERVER_UP:-0}" == "1" && "${MOLE_SIZE_SERVER_DISABLE:-0}" != "1" &&
+        -n "${MOLE_SIZE_SERVER_DIR:-}" && ! -e "${MOLE_SIZE_SERVER_DIR}/down" &&
+        "$path" != *.app && "$path" != *.app/ ]]; then
+        local srv_val="" srv_ok=1
+        printf '%s\t%s\0' "$timeout_budget" "$path" >&8 2> /dev/null || srv_ok=0
+        if [[ $srv_ok -eq 1 ]]; then
+            IFS= read -r -d '' -t $((timeout_budget + 5)) -u 9 srv_val || srv_ok=0
+        fi
+        if [[ $srv_ok -eq 1 ]]; then
+            case "$srv_val" in
+                T) return 124 ;;
+                E) return 1 ;;
+                "" | *[!0-9]*)
+                    # 协议异常：置 down 标记停用服务，本次走原路径
+                    : > "${MOLE_SIZE_SERVER_DIR}/down" 2> /dev/null || true
+                    MOLE_SIZE_SERVER_UP=0
+                    ;;
+                *)
+                    echo "$srv_val"
+                    return 0
+                    ;;
+            esac
+        else
+            : > "${MOLE_SIZE_SERVER_DIR}/down" 2> /dev/null || true
+            MOLE_SIZE_SERVER_UP=0
+        fi
+    fi
+
     # Uninstall totals represent estimated disk occupancy. Keep .app bundles
     # on the same physical-size basis as the directory fallback; logical size
     # can be much larger for APFS-cloned bundles and must not be mixed into the
@@ -3066,6 +3101,59 @@ mole_size_batch() {
     done < "$out_file"
     rm -f "$out_file" # SAFE: removes the mktemp scratch file this function created
     [[ $expect -eq $# ]] || return 1
+    return 0
+}
+
+# --- 常驻测量服务 --------------------------------------------------------------
+# clean 扫描期间启动一次 analyze-go --du-serve，get_path_size_kb 经 FD 8/9
+# （请求/应答 FIFO，读写双向打开避免开启阻塞）走零 fork 快路径，覆盖各
+# section 内几十个顺序测量循环。协议严格一问一答（请求带每次调用的预算，
+# 服务端自限并必然应答），shell 侧读超时或任何异常都整体降级
+# （MOLE_SIZE_SERVER_UP=0，回到本文件的经典测量路径）。shell 进程退出后
+# FIFO 失去全部写端，服务端读到 EOF 自行退出——trap 没跑也不会留孤儿。
+# 回退池的并行工人会置 MOLE_SIZE_SERVER_DISABLE=1：FIFO 协议是串行的，
+# 并发请求会交错错位。
+MOLE_SIZE_SERVER_UP=0
+MOLE_SIZE_SERVER_PID=""
+MOLE_SIZE_SERVER_DIR=""
+
+mole_size_server_start() {
+    [[ "${MOLE_SIZE_BATCH_DISABLE:-0}" != "1" ]] || return 1
+    [[ "${MOLE_SIZE_SERVER_UP:-0}" != "1" ]] || return 0
+    local bin="${MOLE_ANALYZE_GO_BIN:-}"
+    if [[ -z "$bin" ]]; then
+        local lib_dir
+        lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        bin="$lib_dir/../../bin/analyze-go"
+    fi
+    [[ -x "$bin" ]] || return 1
+    local dir
+    dir=$(mktemp -d "${TMPDIR:-/tmp}/mole_size_server.XXXXXX") || return 1
+    if ! mkfifo "$dir/req" "$dir/resp" 2> /dev/null; then
+        rm -rf "$dir" # SAFE: removes the mktemp dir this function just created
+        return 1
+    fi
+    # 读写双向打开：无论对端是否就绪都不阻塞（FIFO 单向打开会挂起）
+    if ! exec 8<> "$dir/req" 9<> "$dir/resp"; then
+        rm -rf "$dir" # SAFE: removes the mktemp dir this function just created
+        return 1
+    fi
+    "$bin" --du-serve --du-batch-timeout "${MOLE_TIMEOUT_DISK_VERIFY_SEC:-30}" \
+        < "$dir/req" > "$dir/resp" 2> /dev/null &
+    MOLE_SIZE_SERVER_PID=$!
+    MOLE_SIZE_SERVER_DIR="$dir"
+    MOLE_SIZE_SERVER_UP=1
+    return 0
+}
+
+mole_size_server_stop() {
+    [[ -n "${MOLE_SIZE_SERVER_PID:-}${MOLE_SIZE_SERVER_DIR:-}" ]] || return 0
+    exec 8>&- 9>&- 2> /dev/null || true
+    [[ -z "${MOLE_SIZE_SERVER_PID:-}" ]] || kill "$MOLE_SIZE_SERVER_PID" 2> /dev/null || true
+    [[ -z "${MOLE_SIZE_SERVER_DIR:-}" ]] || rm -rf "$MOLE_SIZE_SERVER_DIR" # SAFE: removes the mktemp FIFO dir mole_size_server_start created
+    MOLE_SIZE_SERVER_PID=""
+    MOLE_SIZE_SERVER_DIR=""
+    MOLE_SIZE_SERVER_UP=0
     return 0
 }
 

@@ -35,7 +35,69 @@ import (
 var (
 	duBatchMode    = flag.Bool("du-batch", false, "batch size measurement: NUL paths on stdin, NUL records on stdout")
 	duBatchTimeout = flag.Int("du-batch-timeout", 30, "per-path measurement budget in seconds")
+	duServeMode    = flag.Bool("du-serve", false, "persistent size server: framed requests on stdin, responses on stdout")
 )
+
+// runDuServe answers one request at a time: "<budget>\t<path>\0" (budget in
+// seconds, optional — a frame without a tab is a bare path) with
+// "<kb>\0" / "T\0" / "E\0". Strictly serial and always exactly one response
+// per complete frame, so the shell never desyncs; it exits on stdin EOF,
+// which happens automatically when the owning shell dies and the FIFO loses
+// its last writer — no orphan process even if the cleanup trap never ran.
+func runDuServe(in io.Reader, out io.Writer) int {
+	reader := bufio.NewReaderSize(in, 64*1024)
+	writer := bufio.NewWriter(out)
+	for {
+		chunk, err := reader.ReadString(0)
+		if len(chunk) > 0 && chunk[len(chunk)-1] == 0 {
+			req := chunk[:len(chunk)-1]
+			budget := time.Duration(*duBatchTimeout) * time.Second
+			path := req
+			if i := indexByte(req, '\t'); i >= 0 {
+				if b, aerr := parseInt(req[:i]); aerr == nil && b > 0 {
+					budget = time.Duration(b) * time.Second
+				}
+				path = req[i+1:]
+			}
+			res := "E"
+			if path != "" {
+				res = measurePathKB(path, budget)
+			}
+			writer.WriteString(res)
+			writer.WriteByte(0)
+			writer.Flush()
+		}
+		if err != nil {
+			return 0
+		}
+	}
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+func parseInt(s string) (int, error) {
+	n := 0
+	if s == "" {
+		return 0, fmt.Errorf("empty")
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, fmt.Errorf("not a number: %q", s)
+		}
+		n = n*10 + int(s[i]-'0')
+		if n > 1<<20 {
+			return 0, fmt.Errorf("out of range")
+		}
+	}
+	return n, nil
+}
 
 func runDuBatch(in io.Reader, out io.Writer) int {
 	reader := bufio.NewReaderSize(in, 256*1024)

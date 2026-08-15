@@ -609,6 +609,9 @@ cleanup() {
 
     stop_inline_spinner 2> /dev/null || true
 
+    # 常驻测量服务收尸（未启动时为空操作）
+    declare -f mole_size_server_stop > /dev/null 2>&1 && mole_size_server_stop 2> /dev/null
+
     cleanup_temp_files
 
     stop_sudo_session
@@ -1222,6 +1225,9 @@ _safe_clean_impl() {
             if [[ $batch_done -eq 0 && $cleanup_interrupt_rc -eq 0 && ${#existing_paths[@]} -gt 0 ]]; then
                 for path in "${existing_paths[@]}"; do
                     (
+                        # FIFO 协议串行：并行工人必须绕开测量服务，
+                        # 并发请求会在应答流里交错错位
+                        MOLE_SIZE_SERVER_DISABLE=1
                         local size=0 size_rc=0
                         local size_unknown=0
                         size=$(get_cleanup_path_size_kb "$path") || size_rc=$?
@@ -1725,6 +1731,11 @@ perform_cleanup() {
         printf '\n'
         return 0
     fi
+
+    # 常驻测量服务：整个扫描期一个 analyze-go --du-serve 进程应答全部
+    # get_path_size_kb 调用（零 fork/次）；启动失败静默走经典路径。
+    # 测试模式在上方已 return，bats 直连各清理函数时保持完全默认行为。
+    mole_size_server_start 2> /dev/null || true
 
     # Pre-check TCC permissions to avoid mid-run prompts.
     if [[ -z "$EXTERNAL_VOLUME_TARGET" ]]; then

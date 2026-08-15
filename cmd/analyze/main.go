@@ -28,6 +28,10 @@ func main() {
 		os.Exit(runDuBatch(os.Stdin, os.Stdout))
 	}
 
+	if *duServeMode {
+		os.Exit(runDuServe(os.Stdin, os.Stdout))
+	}
+
 	if *serveMode {
 		runServe(os.Stdin, os.Stdout)
 		return
