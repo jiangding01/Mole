@@ -179,15 +179,24 @@ struct CleanView: View {
             // 右：分组清单 + 底部执行条
             VStack(spacing: 0) {
                 ScrollView {
-                    // Lazy 是硬要求：真实扫描 1854 项，普通 VStack 在 tab 再入时
-                    // 主线程同步重建全部行（含每行的 hover 追踪区），冻结数秒。
-                    LazyVStack(spacing: 10) {
+                    // 单层 LazyVStack 是硬要求，且清单必须**拍平**：组头、条目行、
+                    // 翻页按钮各自是顶层懒加载单元。曾经的形态是"卡片=一个 lazy
+                    // item、行区是卡片内普通 VStack"——展开+翻页后整卡数百行全部
+                    // 实体化，此后任何一次失效（滚动、勾选、展开动画的每一帧）都
+                    // 要整树重测数百个双行 Text，真机单遍数百毫秒、事务排队即
+                    // 无响应（2026-08-15 第三次卡死采样实证；嵌套 LazyVStack 拿
+                    // 不到视口会退化，见 git 史，唯一出路就是拍平）。
+                    LazyVStack(spacing: 0) {
                         // 守卫提示条（r2 §P2）：洞察卡之上、info 级、可关闭
                         if !store.guardBlockedApps.isEmpty, !store.guardBarDismissed {
-                            guardBar
+                            guardBar.padding(.bottom, 10)
                         }
                         ForEach(store.groups) { group in
-                            groupCard(group)
+                            groupHeader(group)
+                                .padding(.bottom, store.isExpanded(group) ? 0 : 10)
+                            if store.isExpanded(group) {
+                                expandedRows(group)
+                            }
                         }
                         if !store.insights.isEmpty { insightCard }
                     }
@@ -210,9 +219,11 @@ struct CleanView: View {
         }
     }
 
-    /// 摘要卡（r2 §P1.1）：默认折叠，组头一眼结论——复选框·图标·组名·
+    /// 摘要卡组头（r2 §P1.1）：默认折叠，一眼结论——复选框·图标·组名·
     /// 已选 X/Y·贡献条·已选/总体积·箭头。复选框与展开互相独立。
-    private func groupCard(_ group: CleanStore.Group) -> some View {
+    /// 拍平后组头是独立懒加载单元：折叠时整卡圆角+描边，展开时只圆上缘、
+    /// 行区元素各自续接卡底色（描边省略是性能重构的有意视觉简化）。
+    private func groupHeader(_ group: CleanStore.Group) -> some View {
         let expanded = store.isExpanded(group)
         let allZero = store.isAllZero(group)
         return VStack(spacing: 0) {
@@ -270,16 +281,29 @@ struct CleanView: View {
 
             if expanded {
                 Divider().overlay(look.line)
-                expandedRows(group)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 13).fill(look.surface))
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1))
+        .background(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 13,
+                bottomLeadingRadius: expanded ? 0 : 13,
+                bottomTrailingRadius: expanded ? 0 : 13,
+                topTrailingRadius: 13
+            )
+            .fill(look.surface)
+        )
+        .overlay {
+            if !expanded {
+                RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1)
+            }
+        }
     }
 
     /// 展开区（§P1.3 + r3 §P5）：分页单位是展示节点（聚合父行算一行），
     /// 首屏 12 + 「再显示 50」渐进；0 B 长尾分隔而不跨语义聚合（§P1.4）。
-    /// 未展开的组完全不构建行。
+    /// **不包 VStack**：每行直接作为外层 LazyVStack 的懒加载单元（拍平虚拟化，
+    /// 理由见 confirmView 注释），只有视口附近的行会实体化与参与布局。
+    /// 未展开的组连 ForEach 都不进入。
     @ViewBuilder
     private func expandedRows(_ group: CleanStore.Group) -> some View {
         let nodes = store.displayNodes(group)
@@ -290,21 +314,24 @@ struct CleanView: View {
             if case let .single(item) = node { return item.bytes == 0 }
             return false
         }
-        // 普通 VStack：行数已被分页封顶（首屏 12/每次 +50），有界；
-        // 嵌套在外层 LazyVStack item 里的 LazyVStack 拿不到滚动视口，
-        // 会退化成全量物化——这是"展开大组即卡死"的另一半原因。
-        VStack(spacing: 0) {
-            ForEach(Array(shown.enumerated()), id: \.element.id) { index, node in
-                if index == firstZeroShownIndex, !store.isAllZero(group) {
-                    zeroSeparator(count: zeros)
-                }
-                nodeRow(node)
+        ForEach(Array(shown.enumerated()), id: \.element.id) { index, node in
+            if index == firstZeroShownIndex, !store.isAllZero(group) {
+                zeroSeparator(count: zeros).background(look.surface)
             }
-            if visible < nodes.count {
-                revealMoreButton(group, remaining: nodes.count - visible)
-            }
+            nodeRow(node).background(look.surface)
         }
-        .padding(.vertical, 4)
+        if visible < nodes.count {
+            revealMoreButton(group, remaining: nodes.count - visible)
+                .background(look.surface)
+        }
+        // 底盖：无论行区最后一个元素是什么，展开卡都以圆角收尾
+        UnevenRoundedRectangle(
+            topLeadingRadius: 0, bottomLeadingRadius: 13,
+            bottomTrailingRadius: 13, topTrailingRadius: 0
+        )
+        .fill(look.surface)
+        .frame(height: 8)
+        .padding(.bottom, 10)
     }
 
     /// 节点渲染（r3 §P5）：单项直出；聚合 = 父行表头 + 展开后一级缩进子行。
