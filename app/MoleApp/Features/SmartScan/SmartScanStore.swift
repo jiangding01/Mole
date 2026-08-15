@@ -81,10 +81,18 @@ final class SmartScanStore {
     private var cancelRequested = false
 
     private static let lastScanKey = "smart.lastScanAt"
+    private static let lastDurationKey = "smart.lastScanDuration"
+
+    /// 上次完整扫描的真实用时（秒）。idle 文案用它替代设计 mock 的
+    /// "约需 30 秒"——真机是分钟量级，承诺要用真实历史说话（信任承诺①）。
+    private(set) var lastScanDuration: TimeInterval?
 
     init() {
         if let ts = UserDefaults.standard.object(forKey: Self.lastScanKey) as? Double {
             lastScan = Date(timeIntervalSince1970: ts)
+        }
+        if let dur = UserDefaults.standard.object(forKey: Self.lastDurationKey) as? Double, dur > 0 {
+            lastScanDuration = dur
         }
     }
 
@@ -189,6 +197,12 @@ final class SmartScanStore {
         let now = Date()
         UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.lastScanKey)
         lastScan = now
+        // 只有真实完整扫描记录用时（会话 plan 复用不走这里）。
+        let duration = now.timeIntervalSince(scanStartedAt)
+        if duration > 1 {
+            UserDefaults.standard.set(duration, forKey: Self.lastDurationKey)
+            lastScanDuration = duration
+        }
         resultsRevealStart = now
         phase = .results
     }

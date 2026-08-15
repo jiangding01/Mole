@@ -6375,6 +6375,40 @@
         }
       }
     },
+    "smart.duration.min" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lldm %llds"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 分 %lld 秒"
+          }
+        }
+      }
+    },
+    "smart.duration.sec" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%llds"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 秒"
+          }
+        }
+      }
+    },
     "smart.fda.grant" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6443,19 +6477,36 @@
         }
       }
     },
-    "smart.idle.sub" : {
+    "smart.idle.sub.first" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Full checkup ~30s · caches, app leftovers, installers & large-file insights"
+            "value" : "First scan usually takes a few minutes · caches, leftovers, installers & large-file insights"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "聚合体检约需 30 秒 · 缓存、卸载残留、安装包与大文件洞察"
+            "value" : "首次扫描通常需要几分钟 · 缓存、卸载残留、安装包与大文件洞察"
+          }
+        }
+      }
+    },
+    "smart.idle.sub.last" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last scan took %@ · caches, leftovers, installers & large-file insights"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次扫描用时 %@ · 缓存、卸载残留、安装包与大文件洞察"
           }
         }
       }

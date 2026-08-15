@@ -160,7 +160,7 @@ struct SmartScanView: View {
                 .padding(.top, 2)
             startButton
                 .padding(.top, 14)
-            Text(error ?? L("smart.idle.sub"))
+            Text(error ?? idleSub)
                 .font(Fonts.ui(13))
                 .foregroundStyle(error == nil ? look.textDim : Semantic.danger)
                 .multilineTextAlignment(.center)
@@ -382,6 +382,21 @@ struct SmartScanView: View {
 
     private func insightPathText(_ path: String) -> String {
         (path as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// idle 副文案：设计 mock 的"约需 30 秒"在真机是分钟量级，不诚实。
+    /// 冷启动说"通常需要几分钟"，之后用上次扫描的真实用时说话。
+    private var idleSub: String {
+        if let d = store.lastScanDuration {
+            return L("smart.idle.sub.last", durationText(d))
+        }
+        return L("smart.idle.sub.first")
+    }
+
+    private func durationText(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        if total < 60 { return L("smart.duration.sec", Int64(total)) }
+        return L("smart.duration.min", Int64(total / 60), Int64(total % 60))
     }
 
     private var lastScanText: String {
