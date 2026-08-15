@@ -79,6 +79,32 @@ final class CleanStoreDisplayTests: XCTestCase {
         XCTAssertTrue(store.isRecommendedSelection)
     }
 
+    /// 白名单行与选择的联动（r3 §P3）：不可勾、除名统计、组全选/推荐集除名。
+    func testWhitelistedSelectionInteraction() {
+        let store = CleanStore()
+        let items = [item("a", bytes: 100), item("b", bytes: 200), item("c", bytes: 300)]
+        store.ingestPlanForTesting(planId: "pl_test", items: items, insights: [])
+        store.markWhitelistedForTesting("b")
+        // 已加白：勾选被移除且不可再勾
+        XCTAssertFalse(store.checked.contains("b"))
+        store.toggle(items[1])
+        XCTAssertFalse(store.checked.contains("b"))
+        // 统计除名：checkedBytes 不含 b
+        XCTAssertEqual(store.checkedBytes, 400)
+        // 组全选态：全部可勾项已勾即视为全选；toggleGroup 不会勾进白名单行
+        let group = store.groups[0]
+        XCTAssertTrue(store.groupChecked(group))
+        store.toggleGroup(group) // 取消全选
+        store.toggleGroup(group) // 再全选
+        XCTAssertFalse(store.checked.contains("b"))
+        // 推荐集除名：恰等（扣除白名单后的）推荐集仍算"推荐"态
+        store.selectRecommended()
+        XCTAssertTrue(store.isRecommendedSelection)
+        XCTAssertFalse(store.checked.contains("b"))
+        store.selectAll()
+        XCTAssertFalse(store.checked.contains("b"))
+    }
+
     /// 语义名映射（r3 §P2）：知名路径命中、具体规则优先、未知路径回退 nil。
     func testSemanticPathNames() {
         // 具体在前：ModuleCache 命中模块缓存而非 DerivedData 泛条目

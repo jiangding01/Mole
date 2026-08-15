@@ -346,9 +346,13 @@ struct CleanView: View {
             item: item,
             checked: store.checked.contains(item.id),
             dimmed: dimmed,
+            whitelisted: store.isWhitelisted(item),
+            whitelistBusy: store.isWhitelistBusy(item),
             look: look,
             accent: accent,
-            onToggle: { store.toggle(item) }
+            onToggle: { store.toggle(item) },
+            onReveal: { store.revealInFinder(item) },
+            onWhitelist: { store.toggleWhitelist(item) }
         )
     }
 
@@ -813,9 +817,20 @@ private struct CleanItemRow: View {
     var item: RobotItem
     var checked: Bool
     var dimmed: Bool
+    var whitelisted: Bool
+    var whitelistBusy: Bool
     var look: Look
     var accent: ModuleAccent
     var onToggle: () -> Void
+    var onReveal: () -> Void
+    var onWhitelist: () -> Void
+
+    /// 行内动作簇 hover 态（r3 §P3：常驻 .45，hover 升 1）。
+    /// 一行一个追踪区、且只挂在动作簇上，行数受分页封顶——有界。
+    @State private var hoveringActions = false
+
+    /// 白名单徽标/守卫条同款冷灰蓝（#9DB0C6）。
+    private static let wlTint = Color(red: 0.616, green: 0.690, blue: 0.776)
 
     var body: some View {
         let path = ((item.path ?? item.label) as NSString).abbreviatingWithTildeInPath
@@ -847,7 +862,14 @@ private struct CleanItemRow: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
-            if item.risk == "caution" {
+            // 已加白名单徽标（r3 §P3 可撤销状态机）：不移除、可见后果、可撤销。
+            if whitelisted {
+                Text(L("clean.badge.whitelisted"))
+                    .font(Fonts.ui(10, .semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Self.wlTint.opacity(0.14)))
+                    .foregroundStyle(Self.wlTint)
+            } else if item.risk == "caution" {
                 Text(L("clean.badge.review"))
                     .font(Fonts.ui(10, .semibold))
                     .padding(.horizontal, 7).padding(.vertical, 2)
@@ -855,15 +877,46 @@ private struct CleanItemRow: View {
                     .foregroundStyle(Semantic.warn)
             }
             sizeColumn
+            actionsCluster
         }
         .padding(.horizontal, 14)
         // 定高行：弹性高度让 StackLayout 对每行做多轮 sizeThatFits，
         // 数百行 × 截断文本测量是布局风暴的单次成本大头。42px 居中行盒
         // 同时容纳双行与回退单行两种形态，两端各列天然成列（r3 §P2）。
         .frame(height: 42)
-        .opacity(dimmed ? 0.62 : 1)
+        .opacity(whitelisted ? 0.5 : (dimmed ? 0.62 : 1))
         .contentShape(Rectangle())
         .onTapGesture(perform: onToggle)
+    }
+
+    /// 行内动作（r3 §P3）：Finder 显示 + 白名单盾牌。常驻 opacity .45，
+    /// hover 升 1（追踪区只挂动作簇）。白名单态盾牌实心并染色，title 换两态后果说明。
+    private var actionsCluster: some View {
+        HStack(spacing: 4) {
+            Button(action: onReveal) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(look.textDim)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L("clean.action.reveal.help"))
+            Button(action: onWhitelist) {
+                Image(systemName: whitelisted ? "shield.fill" : "shield")
+                    .font(.system(size: 11))
+                    .foregroundStyle(whitelisted ? Self.wlTint : look.textDim)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(whitelistBusy)
+            .help(whitelisted
+                ? L("clean.action.unwhitelist.help")
+                : L("clean.action.whitelist.help"))
+        }
+        .opacity(hoveringActions ? 1 : 0.45)
+        .onHover { hoveringActions = $0 }
     }
 
     @ViewBuilder

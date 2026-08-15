@@ -1581,6 +1581,54 @@
         }
       }
     },
+    "clean.action.reveal.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reveal in Finder"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Finder 中显示"
+          }
+        }
+      }
+    },
+    "clean.action.unwhitelist.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from whitelist · Future scans will include this path again"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从白名单移除 · 后续扫描将重新纳入此路径"
+          }
+        }
+      }
+    },
+    "clean.action.whitelist.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to whitelist · All future scans (CLI and GUI) will skip this path"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入白名单 · CLI 与 GUI 的所有后续扫描都会跳过此路径"
+          }
+        }
+      }
+    },
     "clean.badge.review" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1594,6 +1642,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "需复核"
+          }
+        }
+      }
+    },
+    "clean.badge.whitelisted" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Whitelisted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已加白名单"
           }
         }
       }

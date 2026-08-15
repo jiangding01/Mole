@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MoleKit
 import Observation
@@ -80,6 +81,12 @@ final class CleanStore {
     /// 协议推荐集（r3 §P6）：default_selected 为真的项（safe 勾 / caution 不勾）。
     /// ingest 时算一次；「推荐」按钮回到这个集合，选择恰等时按钮高亮。
     private(set) var recommendedIds: Set<String> = []
+    /// 本次会话内已加白名单的项（r3 §P3 可撤销状态机）：不从清单移除，
+    /// 置灰 + 徽标 + 取消勾选 + 除名统计；再点盾牌撤销。持久化在 CLI 侧
+    /// （robot whitelist add --mode clean 即时落盘），下次扫描核心自动跳过。
+    private(set) var whitelistedIds: Set<String> = []
+    /// 白名单往返在途的项（防连点；成功/失败都会移除）。
+    private(set) var whitelistBusyIds: Set<String> = []
     private(set) var confirmRevealStart = Date()
 
     // MARK: 执行（result 事件驱动）
@@ -199,6 +206,7 @@ final class CleanStore {
         // 折叠态初始化（自扫与会话复用两个入口共用本方法，状态必然归零）
         expandedGroups = []
         visibleCounts = [:]
+        whitelistedIds = []
         sortedItemsByGroup = Dictionary(uniqueKeysWithValues: groups.map { group in
             (group.section, Self.displayOrder(group.items))
         })
@@ -277,6 +285,13 @@ final class CleanStore {
         func ingestPlanForTesting(planId: String, items: [RobotItem], insights: [RobotInsight]) {
             ingestPlan(planId: planId, items: items, insights: insights)
         }
+
+        /// 单测入口：真实 toggleWhitelist 走 robot 子进程往返，
+        /// 测试只验证加白后的选择联动，经此直接置位。
+        func markWhitelistedForTesting(_ id: String) {
+            whitelistedIds.insert(id)
+            checked.remove(id)
+        }
     #endif
 
     private func resetPlan() {
@@ -285,6 +300,7 @@ final class CleanStore {
         insights = []
         checked = []
         recommendedIds = []
+        whitelistedIds = []
         itemsById = [:]
         log = []
         freed = 0
@@ -301,11 +317,13 @@ final class CleanStore {
     // MARK: - 勾选
 
     func toggle(_ item: RobotItem) {
+        guard !whitelistedIds.contains(item.id) else { return } // 白名单行不可勾（§P3）
         if checked.contains(item.id) { checked.remove(item.id) } else { checked.insert(item.id) }
     }
 
+    /// 组全选态：白名单行除名——"全部可勾项已勾"即视为全选。
     func groupChecked(_ group: Group) -> Bool {
-        group.items.allSatisfy { checked.contains($0.id) }
+        group.items.allSatisfy { checked.contains($0.id) || whitelistedIds.contains($0.id) }
     }
 
     func toggleGroup(_ group: Group) {
@@ -314,7 +332,7 @@ final class CleanStore {
                 checked.remove(item.id)
             }
         } else {
-            for item in group.items {
+            for item in group.items where !whitelistedIds.contains(item.id) {
                 checked.insert(item.id)
             }
         }
@@ -323,7 +341,7 @@ final class CleanStore {
     // MARK: - 选择预设（r3 §P6：全选 · 清空 · 推荐）
 
     func selectAll() {
-        checked = Set(groups.flatMap(\.items).map(\.id))
+        checked = Set(groups.flatMap(\.items).map(\.id)).subtracting(whitelistedIds)
     }
 
     func selectNone() {
@@ -331,12 +349,59 @@ final class CleanStore {
     }
 
     func selectRecommended() {
-        checked = recommendedIds
+        checked = effectiveRecommended
     }
 
     /// 当前选择恰等推荐集：「推荐」字色高亮为 accent，作无声状态指示（§P6）。
     var isRecommendedSelection: Bool {
-        checked == recommendedIds
+        checked == effectiveRecommended
+    }
+
+    /// 推荐集扣除已加白的项：白名单行不可勾，「推荐」不应试图勾它。
+    private var effectiveRecommended: Set<String> {
+        recommendedIds.subtracting(whitelistedIds)
+    }
+
+    // MARK: - 行内动作（r3 §P3）
+
+    func isWhitelisted(_ item: RobotItem) -> Bool {
+        whitelistedIds.contains(item.id)
+    }
+
+    func isWhitelistBusy(_ item: RobotItem) -> Bool {
+        whitelistBusyIds.contains(item.id)
+    }
+
+    /// 在 Finder 中显示（只读动作，不动文件）。
+    func revealInFinder(_ item: RobotItem) {
+        guard let path = item.path ?? (item.label.isEmpty ? nil : item.label) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    /// 盾牌开关（§P3 可撤销状态机）：加白 = CLI 即时落盘 + 行灰置 + 取消勾选；
+    /// 再点 = 从白名单移除，行重新可勾（不自动回勾，由用户决定）。
+    /// 失败保持原状态不变（下次点击重试），不做乐观更新——落盘成败即真相。
+    func toggleWhitelist(_ item: RobotItem) {
+        guard let path = item.path ?? (item.label.isEmpty ? nil : item.label) else { return }
+        guard !whitelistBusyIds.contains(item.id) else { return }
+        whitelistBusyIds.insert(item.id)
+        let removing = whitelistedIds.contains(item.id)
+        Task { [weak self] in
+            defer { self?.whitelistBusyIds.remove(item.id) }
+            do {
+                let client = WhitelistClient()
+                if removing {
+                    _ = try await client.remove(pattern: path, mode: .clean)
+                    self?.whitelistedIds.remove(item.id)
+                } else {
+                    _ = try await client.add(pattern: path, mode: .clean)
+                    self?.whitelistedIds.insert(item.id)
+                    self?.checked.remove(item.id)
+                }
+            } catch {
+                // 静默保持原状：按钮状态未变即"没成"，可重试；不弹阻断错误。
+            }
+        }
     }
 
     var totalBytes: Int64 {
