@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // 设计 token —— 来源：design/mole-dc/Mole.dc.html（Claude Design 定稿）。
@@ -206,9 +207,19 @@ enum Fonts {
         .system(size: size, weight: weight, design: .monospaced)
     }
 
+    /// 内嵌 Instrument Serif 是否注册成功（ATSApplicationFontsPath 资源字体）。
+    /// 缺失时回退系统衬线（New York），开发期删资源不至于白屏。
+    private static let instrumentSerifAvailable: Bool =
+        NSFont(name: "InstrumentSerif-Regular", size: 12) != nil
+
     /// 英雄数字与大标题（"体检完成"、Freed GB、健康分）。
+    /// 设计定稿字体 Instrument Serif 仅有 Regular（400）一档，weight 参数
+    /// 只作用于回退链；高频跳动的数字必须配 SerifTabularNumber 使用
+    /// （该字体无 tnum，比例数字会横向抖动——设计 CHANGELOG §四）。
     static func serif(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
-        .system(size: size, weight: weight, design: .serif)
+        instrumentSerifAvailable
+            ? .custom("Instrument Serif", size: size)
+            : .system(size: size, weight: weight, design: .serif)
     }
 
     /// 中文标题与正文（系统默认 → 苹方）。

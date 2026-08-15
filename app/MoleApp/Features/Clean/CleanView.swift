@@ -523,11 +523,12 @@ struct CleanView: View {
         let text = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         let parts = text.split(separator: " ", maxSplits: 1)
         return HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(parts.first.map(String.init) ?? "0")
-                .font(Fonts.serif(44, .semibold))
-                .foregroundStyle(look.text)
-                .contentTransition(.numericText())
-                .animation(.easeOut(duration: 0.3), value: bytes)
+            // 定宽 cell（SerifTabularNumber）：扫描态 60fps 刷新时
+            // Instrument Serif 无 tnum，普通 Text 会横向抖动（设计 §四）。
+            SerifTabularNumber(
+                text: parts.first.map(String.init) ?? "0", size: 44,
+                weight: .semibold, color: look.text
+            )
             Text(parts.count > 1 ? String(parts[1]) : "")
                 .font(Fonts.mono(14))
                 .foregroundStyle(look.textDim)

@@ -110,11 +110,12 @@ struct SmartScanView: View {
             VStack(spacing: 6) {
                 eyebrow(L("smart.ring.reclaimable"), size: 10, em: 0.24, color: look.textMute)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(gb2(store.reclaimableBytes))
-                        .font(Fonts.mono(52, .bold))
-                        .kerning(-52 * 0.035)
-                        .monospacedDigit()
-                        .foregroundStyle(look.text)
+                    // 设计 CHANGELOG §四：扫描态计数器与结果态统一衬线（56px），
+                    // 定宽 cell 防比例数字抖动；单位 GB 保持 mono。
+                    SerifTabularNumber(
+                        text: gb2(store.reclaimableBytes), size: 56,
+                        color: look.text
+                    )
                     Text(verbatim: "GB")
                         .font(Fonts.mono(15, .medium))
                         .foregroundStyle(accent.a)
