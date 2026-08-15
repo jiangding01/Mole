@@ -1836,6 +1836,40 @@
         }
       }
     },
+    "clean.group.allZero" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld items · all 0 B, nothing to free"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 项 · 全部 0 B，无空间可释放"
+          }
+        }
+      }
+    },
+    "clean.group.selected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld / %lld selected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选 %lld / %lld"
+          }
+        }
+      }
+    },
     "clean.header.found" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1972,6 +2006,23 @@
         }
       }
     },
+    "clean.showMore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show %lld more · %lld remaining"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再显示 %lld 项 · 还有 %lld 项"
+          }
+        }
+      }
+    },
     "clean.size.unknown" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2019,6 +2070,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清理"
+          }
+        }
+      }
+    },
+    "clean.zero.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empty directory or already cleared by the system — deleting frees nothing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目录为空或已被系统清空，删除不释放空间"
+          }
+        }
+      }
+    },
+    "clean.zero.separator" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The %lld items below are 0 B · empty or already cleared"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以下 %lld 项为 0 B · 空目录或已被系统清空"
           }
         }
       }

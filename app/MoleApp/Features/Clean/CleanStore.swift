@@ -53,6 +53,23 @@ final class CleanStore {
 
     private(set) var planId: String?
     private(set) var groups: [Group] = []
+
+    // MARK: 确认页折叠态（设计 r2 §P1：千级条目的可复核形态）
+
+    /// 展开的组（默认全折叠——摘要卡先给"总量+每组贡献"的一眼结论）。
+    private(set) var expandedGroups: Set<String> = []
+    /// 每组当前可见条数（首屏 12，"再显示"每次 +50；未记录 = 首屏值）。
+    private(set) var visibleCounts: [String: Int] = [:]
+    /// 组内展示序缓存（ingest 时算一次，渲染只读）：有尺寸项体积降序 →
+    /// 大小未知 → 0 B 沉底。未知项排在 0 B 分隔线**之前**——原型把 size===0
+    /// 全部沉底，但"以下 N 项为 0 B · 空目录"对未知项是错误陈述（r2 §P1.4
+    /// 明确两者是两回事），这里按设计意图对原型代码做有意偏差。
+    private(set) var sortedItemsByGroup: [String: [RobotItem]] = [:]
+    /// 每组真 0 B 项数（分隔线文案与全 0 B 变体卡用；未知项不计入）。
+    private(set) var zeroCountByGroup: [String: Int] = [:]
+
+    static let initialVisible = 12
+    static let revealStep = 50
     private(set) var insights: [RobotInsight] = []
     var checked: Set<String> = []
     private(set) var confirmRevealStart = Date()
@@ -163,9 +180,88 @@ final class CleanStore {
         }
         groups = order.map { Group(section: $0, items: buckets[$0] ?? []) }
         checked = Set(items.filter { $0.defaultSelected ?? true }.map(\.id))
+        // 折叠态初始化（自扫与会话复用两个入口共用本方法，状态必然归零）
+        expandedGroups = []
+        visibleCounts = [:]
+        sortedItemsByGroup = Dictionary(uniqueKeysWithValues: groups.map { group in
+            (group.section, Self.displayOrder(group.items))
+        })
+        zeroCountByGroup = Dictionary(uniqueKeysWithValues: groups.map { group in
+            (group.section, group.items.count(where: { $0.bytes == 0 }))
+        })
         confirmRevealStart = Date()
         phase = items.isEmpty ? .empty : .confirm
     }
+
+    /// 展示序（r2 §P1.2）：有尺寸项体积降序 → 大小未知 → 0 B。
+    private static func displayOrder(_ items: [RobotItem]) -> [RobotItem] {
+        func rank(_ item: RobotItem) -> Int {
+            guard let bytes = item.bytes else { return 1 } // 未知：分隔线之前
+            return bytes == 0 ? 2 : 0
+        }
+        return items.enumerated().sorted { a, b in
+            let ra = rank(a.element), rb = rank(b.element)
+            if ra != rb { return ra < rb }
+            let ba = a.element.bytes ?? 0, bb = b.element.bytes ?? 0
+            if ba != bb { return ba > bb }
+            return a.offset < b.offset // 同值保持扫描序，排序稳定
+        }.map(\.element)
+    }
+
+    // MARK: - 折叠/分页（确认页摘要卡）
+
+    func isExpanded(_ group: Group) -> Bool {
+        expandedGroups.contains(group.section)
+    }
+
+    func toggleExpand(_ group: Group) {
+        if expandedGroups.contains(group.section) {
+            expandedGroups.remove(group.section)
+        } else {
+            expandedGroups.insert(group.section)
+        }
+    }
+
+    func visibleCount(_ group: Group) -> Int {
+        min(visibleCounts[group.section] ?? Self.initialVisible, group.items.count)
+    }
+
+    func revealMore(_ group: Group) {
+        visibleCounts[group.section] = visibleCount(group) + Self.revealStep
+    }
+
+    func sortedItems(_ group: Group) -> [RobotItem] {
+        sortedItemsByGroup[group.section] ?? group.items
+    }
+
+    func zeroCount(_ group: Group) -> Int {
+        zeroCountByGroup[group.section] ?? 0
+    }
+
+    /// 全 0 B 组（r2 §P1.5 边界态）：无贡献条，摘要卡直接告知无可释放。
+    func isAllZero(_ group: Group) -> Bool {
+        !group.items.isEmpty && zeroCount(group) == group.items.count
+    }
+
+    func groupSelectedCount(_ group: Group) -> Int {
+        group.items.count(where: { checked.contains($0.id) })
+    }
+
+    func groupSelectedBytes(_ group: Group) -> Int64 {
+        group.items.filter { checked.contains($0.id) }.compactMap(\.bytes).reduce(0, +)
+    }
+
+    /// 贡献条基准：最大组体积（已知项之和）。
+    var maxGroupBytes: Int64 {
+        groups.map(\.bytes).max() ?? 0
+    }
+
+    #if DEBUG
+        /// 单测入口：ingestPlan 是私有实现细节，测试经此走真实摄入路径。
+        func ingestPlanForTesting(planId: String, items: [RobotItem], insights: [RobotInsight]) {
+            ingestPlan(planId: planId, items: items, insights: insights)
+        }
+    #endif
 
     private func resetPlan() {
         planId = nil
@@ -179,6 +275,10 @@ final class CleanStore {
         scanBytesFound = 0
         scanCurrent = ""
         scanSection = ""
+        expandedGroups = []
+        visibleCounts = [:]
+        sortedItemsByGroup = [:]
+        zeroCountByGroup = [:]
     }
 
     // MARK: - 勾选
@@ -225,8 +325,9 @@ final class CleanStore {
 
     func execute() {
         guard let planId, phase == .confirm, !checked.isEmpty else { return }
-        // 保持组内顺序执行（结果清单与确认清单同序）
-        let ids = groups.flatMap(\.items).map(\.id).filter { checked.contains($0) }
+        // 与确认清单展示同序执行（体积降序）：结果日志与用户刚复核的顺序一致，
+        // 且大项先删——中途取消时已释放的空间最大化。
+        let ids = groups.flatMap { sortedItems($0) }.map(\.id).filter { checked.contains($0) }
         plannedBytes = checkedBytes
         log = []
         freed = 0

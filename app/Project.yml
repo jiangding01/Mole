@@ -42,8 +42,11 @@ targets:
         # Debug 构建改名 MoleDev：开发机上与已安装的正式版 Mole（App 名、
         # 进程名、Dock 标签均为 "Mole"）区分，避免 Cmd-Tab/菜单栏混淆与
         # pgrep 误伤。bundle id 不变（com.mole.mac），FDA/TCC 授权跨构建保持。
+        # PRODUCT_MODULE_NAME 钉在 MoleApp：模块名不随产品名漂移，
+        # 单测的 @testable import 跨配置稳定。
         Debug:
           PRODUCT_NAME: MoleDev
+          PRODUCT_MODULE_NAME: MoleApp
     info:
       path: MoleApp/Info.plist
       properties:
@@ -70,6 +73,16 @@ targets:
       - path: Tests/MoleAppTests
     dependencies:
       - target: MoleApp
+    settings:
+      base:
+        # 宿主随 PRODUCT_NAME 分配置（Debug=MoleDev / Release=Mole）；
+        # xcodegen 默认按目标名推 MoleApp.app，与产品名脱节即找不到宿主。
+        BUNDLE_LOADER: $(TEST_HOST)
+      configs:
+        Debug:
+          TEST_HOST: $(BUILT_PRODUCTS_DIR)/MoleDev.app/Contents/MacOS/MoleDev
+        Release:
+          TEST_HOST: $(BUILT_PRODUCTS_DIR)/Mole.app/Contents/MacOS/Mole
 
 schemes:
   Mole:

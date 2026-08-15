@@ -192,38 +192,135 @@ struct CleanView: View {
         }
     }
 
+    /// 摘要卡（r2 §P1.1）：默认折叠，组头一眼结论——复选框·图标·组名·
+    /// 已选 X/Y·贡献条·已选/总体积·箭头。复选框与展开互相独立。
     private func groupCard(_ group: CleanStore.Group) -> some View {
-        VStack(spacing: 0) {
+        let expanded = store.isExpanded(group)
+        let allZero = store.isAllZero(group)
+        return VStack(spacing: 0) {
             HStack(spacing: 11) {
                 CleanCheckBox(checked: store.groupChecked(group), accent: accent, look: look, size: 19) {
                     store.toggleGroup(group)
                 }
-                Text(CleanStore.sectionLabel(group.section))
-                    .font(Fonts.ui(13, .semibold))
-                    .foregroundStyle(look.text)
-                Text("\(group.items.count)")
-                    .font(Fonts.mono(10.5))
-                    .foregroundStyle(look.textMute)
-                Spacer()
-                Text(fmt(group.bytes))
-                    .font(Fonts.mono(12.5))
-                    .foregroundStyle(look.textDim)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            Divider().overlay(look.line)
-            // 组内同样 lazy：最大组 761 行，viewport 外的行不物化。
-            LazyVStack(spacing: 0) {
-                ForEach(group.items, id: \.id) { item in
-                    itemRow(item)
+                Image(systemName: Self.sectionIcon(group.section))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(accent.b)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(CleanStore.sectionLabel(group.section))
+                            .font(Fonts.ui(13, .semibold))
+                            .foregroundStyle(look.text)
+                        Text(L("clean.group.selected", Int64(store.groupSelectedCount(group)), Int64(group.items.count)))
+                            .font(Fonts.mono(10.5))
+                            .foregroundStyle(look.textMute)
+                    }
+                    // 全 0 B 组（§P1.5）：无贡献条，直接告知无可释放
+                    if allZero {
+                        Text(L("clean.group.allZero", Int64(group.items.count)))
+                            .font(Fonts.ui(10.5))
+                            .foregroundStyle(look.textMute)
+                    }
                 }
+                Spacer()
+                // 贡献条（§P1.1 关键元素）：3px，宽度 = 组体积/最大组体积
+                if !allZero, store.maxGroupBytes > 0 {
+                    Capsule()
+                        .fill(accent.gradient)
+                        .frame(
+                            width: max(6, 110 * CGFloat(group.bytes) / CGFloat(store.maxGroupBytes)),
+                            height: 3
+                        )
+                        .opacity(0.85)
+                }
+                Text(allZero
+                    ? verbatimSizePair(0, 0)
+                    : verbatimSizePair(store.groupSelectedBytes(group), group.bytes))
+                    .font(Fonts.mono(12))
+                    .foregroundStyle(look.textDim)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(look.textMute)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
             }
-            .padding(.vertical, 4)
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeOut(duration: 0.18)) { store.toggleExpand(group) }
+            }
+            .pointingCursor()
+
+            if expanded {
+                Divider().overlay(look.line)
+                expandedRows(group)
+            }
         }
         .background(RoundedRectangle(cornerRadius: 13).fill(look.surface))
         .overlay(RoundedRectangle(cornerRadius: 13).stroke(look.line, lineWidth: 1))
     }
 
-    private func itemRow(_ item: RobotItem) -> some View {
+    /// 展开区（§P1.3）：首屏 12 项（必然是组内 Top 大项）+「再显示 50 项」渐进；
+    /// 0 B 长尾分隔而不聚合（§P1.4）。未展开的组完全不构建行。
+    @ViewBuilder
+    private func expandedRows(_ group: CleanStore.Group) -> some View {
+        let sorted = store.sortedItems(group)
+        let visible = store.visibleCount(group)
+        let shown = Array(sorted.prefix(visible))
+        let zeros = store.zeroCount(group)
+        let firstZeroShownIndex = shown.firstIndex { $0.bytes == 0 }
+        LazyVStack(spacing: 0) {
+            ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
+                if index == firstZeroShownIndex, !store.isAllZero(group) {
+                    zeroSeparator(count: zeros)
+                }
+                itemRow(item, dimmed: item.bytes == 0)
+            }
+            if visible < sorted.count {
+                revealMoreButton(group, remaining: sorted.count - visible)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// 0 B 分隔线（§P1.4）：只计真 0 B；「大小未知」行排在此线之前，不受其陈述。
+    private func zeroSeparator(count: Int) -> some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(look.line).frame(height: 1)
+            Text(L("clean.zero.separator", Int64(count)))
+                .font(Fonts.ui(10))
+                .foregroundStyle(look.textMute)
+                .fixedSize()
+            Rectangle().fill(look.line).frame(height: 1)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 7)
+    }
+
+    private func revealMoreButton(_ group: CleanStore.Group, remaining: Int) -> some View {
+        Button {
+            store.revealMore(group)
+        } label: {
+            Text(L("clean.showMore", Int64(min(CleanStore.revealStep, remaining)), Int64(remaining)))
+                .font(Fonts.ui(11.5, .medium))
+                .foregroundStyle(look.textDim)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(look.lineStrong, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingCursor()
+        .padding(.horizontal, 14).padding(.vertical, 6)
+    }
+
+    /// "已选体积 / 总体积"（fmtGB 语义，§P1.1）。
+    private func verbatimSizePair(_ selected: Int64, _ total: Int64) -> String {
+        fmtGB(selected) + " / " + fmtGB(total)
+    }
+
+    private func itemRow(_ item: RobotItem, dimmed: Bool = false) -> some View {
         let checked = store.checked.contains(item.id)
         return HStack(spacing: 11) {
             CleanCheckBox(checked: checked, accent: accent, look: look, size: 17) {
@@ -251,6 +348,13 @@ struct CleanView: View {
                     .foregroundStyle(look.textMute)
                     .frame(minWidth: 62, alignment: .trailing)
                     .help(L("clean.size.unknown.help"))
+            } else if dimmed {
+                // 0 B 行（r2 §P1.4）：测量出来的零，与"大小未知"是两回事
+                Text(verbatim: "0 B")
+                    .font(Fonts.mono(11.5))
+                    .foregroundStyle(look.textMute)
+                    .frame(minWidth: 62, alignment: .trailing)
+                    .help(L("clean.zero.help"))
             } else {
                 Text(item.bytes.map(fmt) ?? "")
                     .font(Fonts.mono(11.5))
@@ -259,9 +363,40 @@ struct CleanView: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
+        .opacity(dimmed ? 0.62 : 1)
         .contentShape(Rectangle())
         .onTapGesture { store.toggle(item) }
         .pointingCursor()
+    }
+
+    /// 组头图标（原型语汇 → SF Symbols 映射，未知 slug 回退文件夹）。
+    private static func sectionIcon(_ slug: String) -> String {
+        switch slug {
+        case "user_essentials": "person.crop.circle"
+        case "app_caches", "application_support": "square.stack.3d.up"
+        case "browsers": "globe"
+        case "developer_tools", "development": "hammer"
+        case "logs", "system_logs": "doc.text"
+        case "trash": "trash"
+        case "downloads": "arrow.down.circle"
+        case "installers": "shippingbox"
+        case "app_leftovers", "leftovers": "puzzlepiece"
+        case "large_files": "doc.zipper"
+        case "system_maintenance": "gearshape.2"
+        case "external_volumes": "externaldrive"
+        case "apps_utilities": "square.grid.2x2"
+        case "cloud_office": "cloud"
+        default: "folder"
+        }
+    }
+
+    /// r2 fmtGB 语义：≥1 GB 两位小数 GB；≥1 MB 取整 MB；>0 取整 KB；零 = 0 B。
+    /// （长尾是 MB/KB 级，统一 GB 两位小数会全变 0.00——设计明确要改。）
+    private func fmtGB(_ bytes: Int64) -> String {
+        if bytes >= 1 << 30 { return String(format: "%.2f GB", Double(bytes) / Double(1 << 30)) }
+        if bytes >= 1 << 20 { return "\(bytes / (1 << 20)) MB" }
+        if bytes > 0 { return "\(max(1, bytes / (1 << 10))) KB" }
+        return "0 B"
     }
 
     /// 空间洞察（info 级，不可勾，仅提示，去分析页处理）。
