@@ -444,6 +444,7 @@ struct StatusView: View {
                                 isSystem: store.isSystemProcess(proc),
                                 maxCPU: store.sortedProcesses.first?.cpu ?? 100,
                                 zebra: index % 2 == 1,
+                                alert: store.activeAlertsByPid[proc.pid],
                                 onOpen: { store.detailProc = proc },
                                 onKill: { store.confirmKill = proc }
                             )
@@ -651,6 +652,8 @@ private struct ProcessRow: View {
     var isSystem: Bool
     var maxCPU: Double
     var zebra: Bool
+    /// 该进程的活跃持续告警（无则 nil）——火焰图标唯一的点亮来源。
+    var alert: MetricsSnapshot.ProcessAlert?
     var onOpen: () -> Void
     var onKill: () -> Void
 
@@ -661,9 +664,16 @@ private struct ProcessRow: View {
             HStack(spacing: 8) {
                 iconView
                 Text(proc.name ?? "?").font(Fonts.ui(12, .medium)).lineLimit(1)
-                if (proc.cpu ?? 0) > 80 {
+                // 火焰只绑定持续告警（阈值+窗口），瞬时高 CPU 不再点亮——
+                // 原 cpu>80 触发会闪烁（设计 CHANGELOG §二）。
+                if let alert {
                     Image(systemName: "flame.fill").font(.system(size: 9))
                         .foregroundStyle(Semantic.danger)
+                        .help(L(
+                            "status.alert.sustained",
+                            Int64(alert.sustainedMinutes ?? 0),
+                            Int64(Int(alert.threshold ?? 100))
+                        ))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -803,6 +813,30 @@ private struct ProcessDetailSheet: View {
         .task(id: proc.pid) { probe = store.probe(proc) }
     }
 
+    private func sustainedAlertBar(_ alert: MetricsSnapshot.ProcessAlert) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(Semantic.warn)
+            Text(L(
+                "status.alert.sustained",
+                Int64(alert.sustainedMinutes ?? 0),
+                Int64(Int(alert.threshold ?? 100))
+            ))
+            .font(Fonts.ui(12, .medium))
+            .foregroundStyle(Semantic.warn)
+            Spacer()
+            Text(verbatim: "ALERT")
+                .font(Fonts.mono(9, .semibold))
+                .kerning(1)
+                .foregroundStyle(Semantic.warn.opacity(0.8))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Semantic.warn.opacity(0.09)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Semantic.warn.opacity(0.25), lineWidth: 1))
+        .padding(.vertical, 10)
+    }
+
     /// 已退出：极简卡片 + 红字提示
     private var goneCard: some View {
         VStack(spacing: 0) {
@@ -824,6 +858,11 @@ private struct ProcessDetailSheet: View {
                     summaryLine
                     Divider().overlay(look.line)
                     processTree
+                    // 持续告警条（设计 CHANGELOG §二）：进程树下方、
+                    // 琥珀语义色，图标+文字+微标签三通道。
+                    if let alert = store.activeAlertsByPid[proc.pid] {
+                        sustainedAlertBar(alert)
+                    }
                     infoRows(isSystem: isSystem, app: app)
                 }
                 .padding(.horizontal, 24)

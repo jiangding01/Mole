@@ -37,6 +37,17 @@ final class StatusStore {
     /// 进程详情弹窗目标（设计 §9.6：点击行弹出，系统 / 用户 App / 已退出 三态）。
     var detailProc: MetricsSnapshot.ProcessInfo?
 
+    /// 活跃的持续高 CPU 告警按 pid 查表（设计 CHANGELOG §二：火焰只绑定
+    /// 持续告警，不再由瞬时 CPU 触发）。
+    var activeAlertsByPid: [Int: MetricsSnapshot.ProcessAlert] {
+        Dictionary(
+            (snapshot?.processAlerts ?? [])
+                .filter { $0.status == "active" }
+                .map { ($0.pid, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
     private var stream: StatusStream?
     private var subscription: Task<Void, Never>?
     private var lastSnapshotAt: Date?

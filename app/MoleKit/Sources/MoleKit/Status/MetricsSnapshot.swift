@@ -21,6 +21,8 @@ public struct MetricsSnapshot: Codable, Sendable {
     public var thermal: ThermalStatus?
     public var bluetooth: [BluetoothDevice]?
     public var topProcesses: [ProcessInfo]?
+    /// 持续高 CPU 告警（status-go --proc-cpu-alerts，默认开：阈值 100%、窗口 5 分钟）。
+    public var processAlerts: [ProcessAlert]?
 
     enum CodingKeys: String, CodingKey {
         case host, uptime, hardware, cpu, gpu, memory, disks, network, batteries, thermal, bluetooth
@@ -29,6 +31,53 @@ public struct MetricsSnapshot: Codable, Sendable {
         case trashSize = "trash_size"
         case diskIO = "disk_io"
         case topProcesses = "top_processes"
+        case processAlerts = "process_alerts"
+    }
+
+    /// 单条持续告警。`triggeredAt` 保持 RFC3339 字符串：快照解码器无日期策略，
+    /// 用 Date 会让整帧快照解码失败；换算持续时长由展示层惰性解析。
+    public struct ProcessAlert: Codable, Sendable {
+        public var pid: Int
+        public var name: String?
+        public var command: String?
+        public var cpu: Double?
+        public var threshold: Double?
+        public var window: String?
+        public var triggeredAt: String?
+        public var status: String?
+
+        public init(
+            pid: Int, name: String? = nil, command: String? = nil,
+            cpu: Double? = nil, threshold: Double? = nil, window: String? = nil,
+            triggeredAt: String? = nil, status: String? = nil
+        ) {
+            self.pid = pid
+            self.name = name
+            self.command = command
+            self.cpu = cpu
+            self.threshold = threshold
+            self.window = window
+            self.triggeredAt = triggeredAt
+            self.status = status
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case pid, name, command, cpu, threshold, window, status
+            case triggeredAt = "triggered_at"
+        }
+
+        /// 告警已持续的分钟数（triggered_at → 现在），解析失败返回 nil。
+        public var sustainedMinutes: Int? {
+            guard let triggeredAt else { return nil }
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let date = iso.date(from: triggeredAt) ?? {
+                iso.formatOptions = [.withInternetDateTime]
+                return iso.date(from: triggeredAt)
+            }()
+            guard let date else { return nil }
+            return max(0, Int(Date().timeIntervalSince(date) / 60))
+        }
     }
 
     public struct HardwareInfo: Codable, Sendable {

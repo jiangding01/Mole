@@ -6137,6 +6137,23 @@
         }
       }
     },
+    "status.alert.sustained" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sustained high CPU · %lld min above %lld%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "持续高 CPU · 已持续 %lld 分钟 > %lld%%"
+          }
+        }
+      }
+    },
     "status.battery.ac" : {
       "extractionState" : "manual",
       "localizations" : {
