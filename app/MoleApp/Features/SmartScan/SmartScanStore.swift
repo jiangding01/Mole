@@ -179,10 +179,13 @@ final class SmartScanStore {
                 r.safeBytes += bytes
             }
         }
-        if let top = insights.max(by: { ($0.bytes ?? 0) < ($1.bytes ?? 0) }) {
+        // 守卫事件（guard_skipped）不是空间洞察：它属于清理确认页的提示条，
+        // 混进结论卡会把"被挡应用名"当成最大目录展示。
+        let spaceInsights = insights.filter { $0.section != "guard_skipped" }
+        if let top = spaceInsights.max(by: { ($0.bytes ?? 0) < ($1.bytes ?? 0) }) {
             r.insight = Insight(path: top.label, bytes: top.bytes)
         }
-        r.insightCount = insights.count
+        r.insightCount = spaceInsights.count
         r.totalReclaimableBytes = r.safeBytes + r.leftoverBytes + r.installerBytes
         r.isEmpty = items.isEmpty
         results = r

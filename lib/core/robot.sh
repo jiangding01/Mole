@@ -287,6 +287,21 @@ robot_clean_plan_from_export() {
 # fails the six-read sextet and is picked up complete on the next tick.
 # Echoes: "<items>\t<bytes>\t<section_slug>\t<last_path>".
 
+# --- clean plan: guard-skipped families ---------------------------------------
+# clean 的进程守卫把"应用运行中被跳过"的家族名写进 NUL 分隔的 deferred 文件
+# （bin/clean.sh defer_cleanup_family，router 经 MOLE_CLEAN_DEFERRED_FILE 注入）。
+# 逐家族发 insight 事件：section=guard_skipped、label=应用名、bytes=null——
+# 未扫描的目标没有体积可言，诚实用 null（GUI 红线：不承诺任何字节数）。
+
+robot_emit_guard_insights() {
+    local file="$1" family
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r -d '' family; do
+        [[ -n "$family" ]] || continue
+        robot_emit_insight "guard_skipped" "$family" "null"
+    done < "$file"
+}
+
 robot_clean_ledger_snapshot() {
     local file="$1"
     local identity size_kb count size_known section path

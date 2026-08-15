@@ -239,6 +239,7 @@ mole robot <domain> <verb> [options] [< request.json]
 {"v":1,"event":"insight","section":"system_data_clues","label":"系统数据占用异常",
  "detail":"~/Library/Group Containers 占 21.4 GB","bytes":22975741952}
 ```
+- `section:"guard_skipped"`（r2 §P2）：clean 的进程守卫因应用运行跳过清理时逐应用发出，`label`=应用名、`bytes`=null（未扫描的目标不承诺体积）。GUI 渲染为确认页守卫提示条，不进空间洞察卡。
 
 **result** — apply 阶段逐项结果
 ```json

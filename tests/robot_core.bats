@@ -296,6 +296,21 @@ setup_apply_plan() {
     echo "$output" | jq -se '[.[] | select(.event == "item")][0].path | endswith("junk")' > /dev/null || return 1
 }
 
+@test "robot_emit_guard_insights emits guard_skipped with null bytes" {
+    require_jq
+    printf '%s\0' "Google Chrome" "Xcode" > "$BATS_TEST_TMPDIR/deferred"
+    run robot_emit_guard_insights "$BATS_TEST_TMPDIR/deferred"
+    [ "$status" -eq 0 ] || return 1
+    echo "$output" | jq -se 'length == 2 and all(.[]; .event == "insight" and .section == "guard_skipped" and .bytes == null)' > /dev/null || return 1
+    echo "$output" | jq -se '[.[].label] == ["Google Chrome", "Xcode"]' > /dev/null || return 1
+}
+
+@test "robot_emit_guard_insights on a missing file emits nothing" {
+    run robot_emit_guard_insights "$BATS_TEST_TMPDIR/absent-deferred"
+    [ "$status" -eq 0 ] || return 1
+    [ -z "$output" ] || return 1
+}
+
 @test "robot_clean_ledger_snapshot on a missing file reports zero progress" {
     run robot_clean_ledger_snapshot "$BATS_TEST_TMPDIR/absent-ledger"
     [ "$status" -eq 0 ] || return 1

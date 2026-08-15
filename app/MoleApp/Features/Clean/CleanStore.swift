@@ -70,6 +70,11 @@ final class CleanStore {
 
     static let initialVisible = 12
     static let revealStep = 50
+
+    /// 因应用运行被跳过的家族名（守卫提示条，r2 §P2）。红线：不承诺字节数。
+    private(set) var guardBlockedApps: [String] = []
+    /// × = 本次会话（本份 plan）不再提示；新扫描重置。
+    var guardBarDismissed = false
     private(set) var insights: [RobotInsight] = []
     var checked: Set<String> = []
     private(set) var confirmRevealStart = Date()
@@ -166,8 +171,15 @@ final class CleanStore {
         session?.cancel()
     }
 
-    private func ingestPlan(planId: String, items: [RobotItem], insights: [RobotInsight]) {
+    private func ingestPlan(planId: String, items: [RobotItem], insights allInsights: [RobotInsight]) {
         self.planId = planId
+        // 守卫事件（section=guard_skipped）与空间洞察分流（r2 §P2）：
+        // 前者进提示条，后者进洞察卡——混着渲染两边都错。
+        guardBlockedApps = allInsights
+            .filter { $0.section == "guard_skipped" }
+            .map(\.label)
+        guardBarDismissed = false
+        let insights = allInsights.filter { $0.section != "guard_skipped" }
         self.insights = insights
         itemsById = [:]
         var order: [String] = []

@@ -85,6 +85,11 @@ run_clean_plan() {
 
     # Test hook: parse a pre-generated export file instead of running clean.
     export_file="${MOLE_ROBOT_EXPORT_FILE:-}"
+    # Test hook: emit guard insights from a fixture deferred file (the real
+    # path only materializes when the wrapped clean actually runs).
+    if [[ -n "$export_file" && -n "${MOLE_ROBOT_DEFERRED_FILE:-}" ]]; then
+        robot_emit_guard_insights "$MOLE_ROBOT_DEFERRED_FILE"
+    fi
 
     if [[ -z "$export_file" ]]; then
         if [[ "$(uname)" != "Darwin" ]]; then
@@ -98,16 +103,24 @@ run_clean_plan() {
         # ledger path, hand it to clean via MOLE_CLEAN_PREVIEW_LEDGER_FILE,
         # and stream progress from it so the GUI shows liveness during the
         # multi-minute scan.
-        local ledger_file clean_pid clean_rc=0
+        local ledger_file deferred_file clean_pid clean_rc=0
         ledger_file=$(umask 077 && mktemp "${TMPDIR:-/tmp}/mole.robot-ledger.XXXXXX") || {
             robot_emit_error "E_INTERNAL" "cannot create progress ledger" "true"
             exit 1
         }
+        # 守卫上报文件（r2 §P2）：clean 把"应用运行中被跳过"的家族名写进来
+        deferred_file=$(umask 077 && mktemp "${TMPDIR:-/tmp}/mole.robot-deferred.XXXXXX") || {
+            rm -f -- "$ledger_file" # SAFE: exact mktemp file created above
+            robot_emit_error "E_INTERNAL" "cannot create deferred-family file" "true"
+            exit 1
+        }
         if [[ -n "$external" ]]; then
-            MOLE_CLEAN_PREVIEW_LEDGER_FILE="$ledger_file" MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" \
+            MOLE_CLEAN_PREVIEW_LEDGER_FILE="$ledger_file" MOLE_CLEAN_DEFERRED_FILE="$deferred_file" \
+                MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" \
                 "$SCRIPT_DIR/bin/clean.sh" --dry-run --external "$external" > /dev/null 2>&2 &
         else
-            MOLE_CLEAN_PREVIEW_LEDGER_FILE="$ledger_file" MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" \
+            MOLE_CLEAN_PREVIEW_LEDGER_FILE="$ledger_file" MOLE_CLEAN_DEFERRED_FILE="$deferred_file" \
+                MOLE_TEST_NO_AUTH="${MOLE_TEST_NO_AUTH:-1}" \
                 "$SCRIPT_DIR/bin/clean.sh" --dry-run > /dev/null 2>&2 &
         fi
         clean_pid=$!
@@ -115,9 +128,12 @@ run_clean_plan() {
         wait "$clean_pid" || clean_rc=$?
         rm -f -- "$ledger_file" # SAFE: exact mktemp file created above
         if [[ $clean_rc -ne 0 ]]; then
+            rm -f -- "$deferred_file" # SAFE: exact mktemp file created above
             robot_emit_error "E_INTERNAL" "clean dry-run exited with $clean_rc" "true"
             exit 1
         fi
+        robot_emit_guard_insights "$deferred_file"
+        rm -f -- "$deferred_file" # SAFE: exact mktemp file created above
     fi
 
     if [[ ! -f "$export_file" ]]; then

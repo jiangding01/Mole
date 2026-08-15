@@ -1717,7 +1717,15 @@ perform_cleanup() {
     files_cleaned=0
     total_size_cleaned=0
     DEFERRED_CLEANUP_FAMILIES=()
-    DEFERRED_CLEANUP_FAMILIES_FILE=$(create_temp_file 2> /dev/null || true)
+    # Robot/GUI 守卫上报钩子（bin/robot.sh，同 ledger 注入模式）：router 预创建
+    # 固定路径读取"因应用运行被跳过"的家族名。仅非 root 生效，卫生检查同款。
+    if [[ -n "${MOLE_CLEAN_DEFERRED_FILE:-}" ]] && ! is_root_user &&
+        [[ -f "$MOLE_CLEAN_DEFERRED_FILE" && ! -L "$MOLE_CLEAN_DEFERRED_FILE" && -O "$MOLE_CLEAN_DEFERRED_FILE" ]]; then
+        DEFERRED_CLEANUP_FAMILIES_FILE="$MOLE_CLEAN_DEFERRED_FILE"
+        : > "$DEFERRED_CLEANUP_FAMILIES_FILE"
+    else
+        DEFERRED_CLEANUP_FAMILIES_FILE=$(create_temp_file 2> /dev/null || true)
+    fi
 
     local had_errexit=0
     [[ $- == *e* ]] && had_errexit=1

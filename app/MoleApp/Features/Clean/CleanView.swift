@@ -10,6 +10,8 @@ struct CleanView: View {
     @Environment(CleanStore.self) private var store
     @Environment(ScanSession.self) private var scanSession
     @State private var showsHistory = false
+    /// 守卫提示条"查看应用"展开态（视图态，不进 Store）。
+    @State private var guardExpanded = false
     private let look = Look.ink
     private let accent = ModuleAccent.clean
 
@@ -168,6 +170,10 @@ struct CleanView: View {
                     // Lazy 是硬要求：真实扫描 1854 项，普通 VStack 在 tab 再入时
                     // 主线程同步重建全部行（含每行的 hover 追踪区），冻结数秒。
                     LazyVStack(spacing: 10) {
+                        // 守卫提示条（r2 §P2）：洞察卡之上、info 级、可关闭
+                        if !store.guardBlockedApps.isEmpty, !store.guardBarDismissed {
+                            guardBar
+                        }
                         ForEach(store.groups) { group in
                             groupCard(group)
                         }
@@ -397,6 +403,82 @@ struct CleanView: View {
         if bytes >= 1 << 20 { return "\(bytes / (1 << 20)) MB" }
         if bytes > 0 { return "\(max(1, bytes / (1 << 10))) KB" }
         return "0 B"
+    }
+
+    /// 守卫提示条（r2 §P2）：冷灰 info 级、非阻断、可关闭。
+    /// 红线：全程不出现任何字节数——被挡目标未被扫描，给不出就不编。
+    /// 文案与设计稿的一处有意偏差：defer 记录只有应用名没有段名，
+    /// 因此说"N 个应用"而非"N 个分组"（诚实贴数据能力）。
+    private var guardBar: some View {
+        let tint = Color(red: 0.616, green: 0.690, blue: 0.776) // #9DB0C6
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(tint)
+                Text(L("clean.guard.headline", Int64(store.guardBlockedApps.count)))
+                    .font(Fonts.ui(12))
+                    .foregroundStyle(look.textDim)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { guardExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(L("clean.guard.viewApps"))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .rotationEffect(.degrees(guardExpanded ? 180 : 0))
+                    }
+                    .font(Fonts.ui(11.5, .medium))
+                    .foregroundStyle(tint)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+                Button {
+                    store.guardBarDismissed = true
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(look.textMute)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingCursor()
+            }
+            .padding(.horizontal, 13).padding(.vertical, 10)
+
+            if guardExpanded {
+                Divider().overlay(look.line)
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(store.guardBlockedApps, id: \.self) { name in
+                        HStack(spacing: 8) {
+                            Image(nsImage: Self.runningAppIcon(named: name))
+                                .resizable()
+                                .frame(width: 18, height: 18)
+                            Text(name)
+                                .font(Fonts.ui(12))
+                                .foregroundStyle(look.text)
+                        }
+                    }
+                    Text(L("clean.guard.footnote"))
+                        .font(Fonts.ui(10.5))
+                        .foregroundStyle(look.textMute)
+                        .padding(.top, 3)
+                }
+                .padding(.horizontal, 13).padding(.vertical, 10)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 11).fill(tint.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(tint.opacity(0.25), lineWidth: 1))
+    }
+
+    /// 被挡应用图标：按名称匹配运行中应用；退出了/匹配不到给通用图标。
+    private static func runningAppIcon(named name: String) -> NSImage {
+        NSWorkspace.shared.runningApplications
+            .first { $0.localizedName == name }?.icon
+            ?? NSWorkspace.shared.icon(for: .applicationBundle)
     }
 
     /// 空间洞察（info 级，不可勾，仅提示，去分析页处理）。

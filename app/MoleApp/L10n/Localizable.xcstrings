@@ -1921,6 +1921,57 @@
         }
       }
     },
+    "clean.guard.footnote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These targets were never scanned, so no reclaimable size can be given — they count toward the total only after a rescan."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些目标未被扫描，因此无法给出可释放体积——重新扫描后才会计入总量。"
+          }
+        }
+      }
+    },
+    "clean.guard.headline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld apps are running — related cleanup was skipped · rescan after quitting them"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个应用运行中，相关清理已跳过 · 退出后重新扫描可纳入"
+          }
+        }
+      }
+    },
+    "clean.guard.viewApps" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View apps"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看应用"
+          }
+        }
+      }
+    },
     "clean.header.found" : {
       "extractionState" : "manual",
       "localizations" : {
