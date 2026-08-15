@@ -168,6 +168,7 @@ Invariants for `app/` and the robot machine mode. Every one of these is a shippe
 - **Full-screen overlays are direct children of the root ZStack**. Nesting a modal inside a page container that animates `transform` creates a stacking context that traps it under the nav — a bug the design prototype itself hit and documented (HANDOFF §9.5).
 - **Debug builds sign with a real development certificate** (`Project.yml` pins the identity): ad-hoc signing binds TCC/FDA grants to a per-build cdhash, so every rebuild silently loses Full Disk Access. Dev-mode core resolution comes from `LSEnvironment.MOLE_CORE_PATH` (source-tree `mole`), falling back to the embedded core.
 - The xcodebuild scheme is `Mole` (not MoleApp). MoleKit tests run standalone: `cd app/MoleKit && swift test`.
+- **Debug builds are named `MoleDev`** (`Project.yml` Debug config overrides `PRODUCT_NAME`; display name follows): the developer machine also runs the installed production Mole (`com.tw93.MoleApp`), and identical app/process names confused Dock, Cmd-Tab, and pid lookups. Bundle id stays `com.mole.mac` so FDA/TCC grants survive. Release keeps `Mole`. Never `pkill Mole` by name on a dev machine — match the full DerivedData path.
 
 ## Verification
 

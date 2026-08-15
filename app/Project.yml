@@ -38,10 +38,17 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         # 内容延伸到标题栏（设计 §8.1）在代码中以 windowStyle 处理
+      configs:
+        # Debug 构建改名 MoleDev：开发机上与已安装的正式版 Mole（App 名、
+        # 进程名、Dock 标签均为 "Mole"）区分，避免 Cmd-Tab/菜单栏混淆与
+        # pgrep 误伤。bundle id 不变（com.mole.mac），FDA/TCC 授权跨构建保持。
+        Debug:
+          PRODUCT_NAME: MoleDev
     info:
       path: MoleApp/Info.plist
       properties:
-        CFBundleDisplayName: Mole
+        # 跟随 PRODUCT_NAME：Debug 显示 MoleDev、Release 显示 Mole。
+        CFBundleDisplayName: $(PRODUCT_NAME)
         LSMinimumSystemVersion: "14.0"
         # 内嵌字体（Instrument Serif，OFL 许可随包分发）：xcodegen 把资源平铺进
         # Resources 根，"." 让 AppKit 扫描根目录注册全部字体文件。
