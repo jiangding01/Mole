@@ -1015,6 +1015,22 @@ safe_remove() {
         return 1
     fi
 
+    # Last hop before rm, for callers whose exclusion depends on state this
+    # function cannot express as a parent/target inode pair. A candidate list
+    # that skipped a live owner root only proves where that root pointed when
+    # the list was built; re-asking here closes the rest of the window rather
+    # than leaving it open from discovery all the way to the unlink. Set
+    # _MOLE_SAFE_REMOVE_FINAL_GUARD to a function name that takes the path and
+    # returns non-zero to refuse.
+    local final_sink_guard="${_MOLE_SAFE_REMOVE_FINAL_GUARD:-}"
+    if [[ -n "$final_sink_guard" ]] && declare -f "$final_sink_guard" > /dev/null 2>&1; then
+        if ! "$final_sink_guard" "$path"; then
+            debug_log "Refusing removal after the final sink guard denied: $path"
+            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "SKIPPED" "$path" "sink guard denied"
+            return 1
+        fi
+    fi
+
     # Perform the deletion
     # Use || to capture the exit code so set -e won't abort on rm failures
     local error_msg

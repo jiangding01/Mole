@@ -21,6 +21,7 @@ source "$SCRIPT_DIR/../lib/core/common.sh"
 trap cleanup_temp_files EXIT INT TERM
 source "$SCRIPT_DIR/../lib/ui/menu_paginated.sh"
 source "$SCRIPT_DIR/../lib/ui/app_selector.sh"
+source "$SCRIPT_DIR/../lib/uninstall/steam.sh"
 source "$SCRIPT_DIR/../lib/uninstall/batch.sh"
 
 # State
@@ -48,6 +49,13 @@ readonly MOLE_UNINSTALL_INLINE_DU_MAX_COLD_ROWS="${MOLE_UNINSTALL_INLINE_DU_MAX_
 
 uninstall_normalize_size_display() {
     local size="${1:-}"
+    local app_path="${2:-}"
+
+    if [[ -n "$app_path" ]] && uninstall_app_is_steam_launcher "$app_path"; then
+        echo "N/A (Steam-managed)"
+        return 0
+    fi
+
     if [[ -z "$size" || "$size" == "0" || "$size" == "Unknown" ]]; then
         echo "N/A"
         return 0
@@ -1440,7 +1448,7 @@ uninstall_list_apps() {
             local source_label="App"
             [[ -n "$cask" ]] && source_label="Homebrew"
             local size_display
-            size_display=$(uninstall_normalize_size_display "$size")
+            size_display=$(uninstall_normalize_size_display "$size" "$app_path")
             if [[ $first -eq 1 ]]; then
                 first=0
                 printf '\n'
@@ -1482,7 +1490,7 @@ uninstall_list_apps() {
         fi
         local uninstall_name="${cask:-$app_name}"
         local size_display
-        size_display=$(uninstall_normalize_size_display "$size")
+        size_display=$(uninstall_normalize_size_display "$size" "$app_path")
 
         # Truncate by display columns, then adjust printf width for CJK.
         # printf counts bytes (LC_ALL=C), but CJK chars are 3 bytes yet only
@@ -1609,7 +1617,7 @@ main() {
         for selected_app in "${selected_apps[@]}"; do
             IFS='|' read -r _ app_path app_name _ size last_used _ <<< "$selected_app"
             local size_display
-            size_display=$(uninstall_normalize_size_display "$size")
+            size_display=$(uninstall_normalize_size_display "$size" "$app_path")
             local last_display
             last_display=$(uninstall_normalize_last_used_display "$last_used")
             printf "%d. %s  %s  |  Last: %s\n" "$index" "$app_name" "$size_display" "$last_display"
@@ -1728,11 +1736,11 @@ main() {
         local max_size_width=0
         local max_last_width=0
         for selected_app in "${selected_apps[@]}"; do
-            IFS='|' read -r _ _ app_name _ size last_used _ <<< "$selected_app"
+            IFS='|' read -r _ app_path app_name _ size last_used _ <<< "$selected_app"
             local name_width=$(get_display_width "$app_name")
             [[ $name_width -gt $max_name_display_width ]] && max_name_display_width=$name_width
             local size_display
-            size_display=$(uninstall_normalize_size_display "$size")
+            size_display=$(uninstall_normalize_size_display "$size" "$app_path")
             [[ ${#size_display} -gt $max_size_width ]] && max_size_width=${#size_display}
             local last_display
             last_display=$(uninstall_normalize_last_used_display "$last_used")
@@ -1772,7 +1780,7 @@ main() {
             [[ $current_width -gt $max_name_display_width ]] && max_name_display_width=$current_width
 
             local size_display
-            size_display=$(uninstall_normalize_size_display "$size")
+            size_display=$(uninstall_normalize_size_display "$size" "$app_path")
 
             local last_display
             last_display=$(uninstall_normalize_last_used_display "$last_used")

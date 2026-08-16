@@ -9,6 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Load Homebrew cask support (provides get_brew_cask_name, brew_uninstall_cask)
 [[ -f "$SCRIPT_DIR/lib/uninstall/brew.sh" ]] && source "$SCRIPT_DIR/lib/uninstall/brew.sh"
 
+# Load Steam launcher detection (identifies shortcut-only app bundles)
+[[ -f "$SCRIPT_DIR/lib/uninstall/steam.sh" ]] && source "$SCRIPT_DIR/lib/uninstall/steam.sh"
+
 # Batch uninstall with a single confirmation.
 
 is_uninstall_dry_run() {
@@ -1724,6 +1727,11 @@ _batch_preview_and_confirm() {
 
         local brew_tag=""
         [[ "$is_brew_cask" == "true" ]] && brew_tag=" ${CYAN}[Brew]${NC}"
+        local steam_managed=false
+        if uninstall_app_is_steam_launcher "$app_path"; then
+            steam_managed=true
+            app_size_display="N/A (Steam-managed)"
+        fi
         echo -e "${BLUE}${ICON_CONFIRM}${NC} ${app_name}${brew_tag} ${GRAY}, ${app_size_display}${NC}"
 
         # Show detailed file list for ALL apps (brew casks leave user data behind)
@@ -1737,6 +1745,10 @@ _batch_preview_and_confirm() {
             [[ -n "$system_files" ]] && echo "$system_files"
             echo "$diag_system_display"
         )
+
+        if [[ "$steam_managed" == "true" ]]; then
+            echo -e "  ${YELLOW}${ICON_WARNING}${NC} Steam launcher only; game files managed by Steam are not included"
+        fi
 
         local preview_path=""
         preview_path=$(format_uninstall_preview_path "$app_path") || return $?

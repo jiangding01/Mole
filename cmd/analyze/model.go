@@ -91,7 +91,6 @@ const (
 	liveScanChildDone
 	liveScanComplete
 	liveScanFailed
-	liveScanCanceled
 )
 
 type liveScanEventMsg struct {
