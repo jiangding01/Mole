@@ -105,6 +105,26 @@ readonly MOLE_PURGE_PROJECT_INDICATORS=(
 readonly MOLE_CACHEDIR_TAG_NAME="CACHEDIR.TAG"
 readonly MOLE_CACHEDIR_TAG_SIGNATURE="Signature: 8a477f597d28d172789f06886806bc55"
 
+# Normalize an integer or fractional timeout into the whole-second budget used
+# by SECONDS. Shared by clean's project-cache scan and purge's size pool so both
+# keep fractional overrides without duplicating deadline arithmetic.
+mole_purge_timeout_budget_seconds() {
+    local fallback_seconds="${2:-30}"
+    [[ "$fallback_seconds" =~ ^[1-9][0-9]*$ ]] || fallback_seconds=30
+    local timeout_seconds="${1:-$fallback_seconds}"
+    if [[ ! "$timeout_seconds" =~ ^[0-9]+(\.[0-9]+)?$ || "$timeout_seconds" =~ ^0+(\.0+)?$ ]]; then
+        timeout_seconds="$fallback_seconds"
+    fi
+
+    local timeout_whole="${timeout_seconds%%.*}"
+    local timeout_budget=$((10#$timeout_whole))
+    if [[ "$timeout_seconds" == *.* && "${timeout_seconds#*.}" =~ [1-9] ]]; then
+        timeout_budget=$((timeout_budget + 1))
+    fi
+    [[ $timeout_budget -ge 2 ]] || timeout_budget=2
+    printf '%s\n' "$timeout_budget"
+}
+
 # High-noise targets intentionally excluded from quick hint scans in mo clean.
 readonly MOLE_PURGE_QUICK_HINT_EXCLUDED_TARGETS=(
     "bin"

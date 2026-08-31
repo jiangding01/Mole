@@ -496,7 +496,7 @@ total_size_cleaned=0
 
 printf '\n' | batch_uninstall_applications > /dev/null 2>&1 || true
 
-[[ -d "$HOME/Applications/BrewBroken.app" ]]
+[[ -d "$HOME/Applications/BrewBroken.app" ]] || exit 1
 [[ ! -f "$HOME/remove.log" ]]
 EOF
 
@@ -555,7 +555,7 @@ total_size_cleaned=0
 
 printf '\n' | batch_uninstall_applications > /dev/null 2>&1
 
-[[ ! -d "$HOME/Applications/BrewCleanup.app" ]]
+[[ ! -d "$HOME/Applications/BrewCleanup.app" ]] || exit 1
 grep -q "SAFE_REMOVE:$HOME/Applications/BrewCleanup.app" "$HOME/remove.log"
 EOF
 
@@ -684,7 +684,7 @@ export -f brew
 cask_name='bad"; touch "$HOME/pwned"; #'
 brew_uninstall_cask "$cask_name"
 
-[[ ! -e "$HOME/pwned" ]]
+[[ ! -e "$HOME/pwned" ]] || exit 1
 grep -Fx '<bad"; touch "$HOME/pwned"; #>' "$HOME/brew_argv.log"
 EOF
 

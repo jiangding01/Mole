@@ -219,7 +219,7 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/manage/whitelist.sh"
 load_whitelist optimize
-[[ ${#CURRENT_WHITELIST_PATTERNS[@]} -eq 0 ]]
+[[ ${#CURRENT_WHITELIST_PATTERNS[@]} -eq 0 ]] || exit 1
 printf 'survived\n'
 EOF
 
@@ -362,7 +362,7 @@ while IFS='|' read -r name pattern _; do
         break
     fi
 done < <(get_all_cache_items)
-[[ "$github_cache_pattern" == "$XDG_CACHE_HOME/gh" ]]
+[[ "$github_cache_pattern" == "$XDG_CACHE_HOME/gh" ]] || exit 1
 save_whitelist_patterns "$github_cache_pattern"
 load_mole_whitelist "$HOME"
 

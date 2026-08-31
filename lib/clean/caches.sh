@@ -2,8 +2,10 @@
 # Cache Cleanup Module
 set -euo pipefail
 
+_MOLE_CACHES_MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_MOLE_CACHES_MODULE_PATH="$_MOLE_CACHES_MODULE_DIR/${BASH_SOURCE[0]##*/}"
 # shellcheck disable=SC1091
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/purge_shared.sh"
+source "$_MOLE_CACHES_MODULE_DIR/purge_shared.sh"
 # Preflight TCC prompts once to avoid mid-run interruptions.
 check_tcc_permissions() {
     [[ -t 1 ]] || return 0
@@ -242,12 +244,34 @@ pycache_has_bytecode() {
     [[ ${#bytecode_files[@]} -gt 0 ]]
 }
 
+_process_project_cache_scan_file() {
+    local root="$1"
+    local scan_file="$2"
+    local processed_file="$3"
+
+    while IFS= read -r match_path; do
+        [[ -z "$match_path" ]] && continue
+        # Skip __pycache__ dirs with no .pyc/.pyo files (empty or already cleaned)
+        if [[ "${match_path##*/}" == "__pycache__" ]]; then
+            pycache_has_bytecode "$match_path" || continue
+        fi
+        local project_root=""
+        project_root=$(project_cache_group_root "$root" "$match_path")
+        [[ -z "$project_root" ]] && project_root="$root"
+        printf '%s\t%s\n' "$project_root" "$match_path" >> "$processed_file"
+    done < "$scan_file"
+}
+
 # Scan a project root for supported build caches while pruning heavy subtrees.
 scan_project_cache_root() {
     local root="$1"
     local output_file="$2"
     local scan_timeout="${MOLE_PROJECT_CACHE_SCAN_TIMEOUT:-6}"
+    if [[ ! "$scan_timeout" =~ ^[0-9]+(\.[0-9]+)?$ || "$scan_timeout" =~ ^0+(\.0+)?$ ]]; then
+        scan_timeout=6
+    fi
     [[ -d "$root" ]] || return 0
+    : > "$output_file"
 
     local -a find_args=(
         find -P "$root" -maxdepth 9 -mount
@@ -258,30 +282,57 @@ scan_project_cache_root() {
         -print
     )
 
+    local scan_budget
+    scan_budget=$(mole_purge_timeout_budget_seconds "$scan_timeout" 6)
+    local scan_deadline=$((SECONDS + scan_budget))
+    local stage_timeout=""
     local status=0
-    local tmp_file
-    tmp_file=$(create_temp_file)
-    run_with_timeout "$scan_timeout" "${find_args[@]}" > "$tmp_file" 2> /dev/null || status=$?
-
-    if [[ -s "$tmp_file" ]]; then
-        while IFS= read -r match_path; do
-            [[ -z "$match_path" ]] && continue
-            # Skip __pycache__ dirs with no .pyc/.pyo files (empty or already cleaned)
-            if [[ "${match_path##*/}" == "__pycache__" ]]; then
-                pycache_has_bytecode "$match_path" || continue
-            fi
-            local project_root=""
-            project_root=$(project_cache_group_root "$root" "$match_path")
-            [[ -z "$project_root" ]] && project_root="$root"
-            printf '%s\t%s\n' "$project_root" "$match_path" >> "$output_file"
-        done < "$tmp_file"
+    local scan_file
+    scan_file=$(create_temp_file) || return 1
+    local processed_file
+    processed_file=$(create_temp_file) || {
+        rm -f "$scan_file" # SAFE: exact scratch file created by create_temp_file above
+        return 1
+    }
+    stage_timeout=$(_mole_timeout_with_deadline "$scan_timeout" "$scan_deadline") || status=$?
+    if [[ $status -eq 0 ]]; then
+        run_with_timeout "$stage_timeout" "${find_args[@]}" > "$scan_file" 2> /dev/null || status=$?
     fi
-    rm -f "$tmp_file"
 
-    if [[ $status -eq 124 ]]; then
-        debug_log "Project cache scan timed out: $root"
-    elif [[ $status -ne 0 ]]; then
-        debug_log "Project cache scan failed (${status}): $root"
+    if [[ $status -ne 0 ]]; then
+        rm -f "$scan_file" "$processed_file" # SAFE: exact scratch files created by create_temp_file above
+        if [[ $status -eq 124 ]]; then
+            debug_log "Project cache scan timed out: $root"
+        else
+            debug_log "Project cache scan failed (${status}): $root"
+        fi
+        return "$status"
+    fi
+
+    if [[ -s "$scan_file" ]]; then
+        stage_timeout=$(_mole_timeout_with_deadline "$scan_timeout" "$scan_deadline") || status=$?
+        if [[ $status -eq 0 ]]; then
+            # shellcheck disable=SC2016 # The child shell expands its own positional parameters.
+            run_with_timeout "$stage_timeout" /bin/bash --noprofile --norc -c '
+                set -euo pipefail
+                source "$1"
+                _process_project_cache_scan_file "$2" "$3" "$4"
+            ' _ "$_MOLE_CACHES_MODULE_PATH" "$root" "$scan_file" "$processed_file" || status=$?
+        fi
+    fi
+    rm -f "$scan_file" # SAFE: exact scratch file created by create_temp_file above
+    if [[ $status -ne 0 ]]; then
+        rm -f "$processed_file" # SAFE: exact scratch file created by create_temp_file above
+        if [[ $status -eq 124 ]]; then
+            debug_log "Project cache post-processing timed out: $root"
+        else
+            debug_log "Project cache post-processing failed (${status}): $root"
+        fi
+        return "$status"
+    fi
+    if ! mv "$processed_file" "$output_file"; then
+        rm -f "$processed_file" # SAFE: exact scratch file created by create_temp_file above
+        return 1
     fi
 
     return 0
@@ -445,7 +496,7 @@ clean_python_bytecode_cache_group() {
             dry_run_paths+=("$cache_dir")
             dry_run_sizes+=("$size_kb")
         else
-            if ! safe_remove "$cache_dir" true; then
+            if ! safe_remove "$cache_dir" true "$size_kb"; then
                 continue
             fi
         fi
@@ -501,40 +552,175 @@ clean_python_bytecode_cache_group() {
 clean_project_caches() {
     stop_inline_spinner 2> /dev/null || true
 
+    if [[ -t 1 ]]; then
+        MOLE_SPINNER_PREFIX="  "
+        start_inline_spinner "Searching project caches..."
+    fi
+
     local -a scan_roots=()
     local root
     while IFS= read -r root; do
         [[ -n "$root" ]] && scan_roots+=("$root")
     done < <(discover_project_cache_roots)
 
-    [[ ${#scan_roots[@]} -eq 0 ]] && return 0
-
-    if [[ -t 1 ]]; then
-        MOLE_SPINNER_PREFIX="  "
-        start_inline_spinner "Searching project caches..."
-    fi
-
-    for root in "${scan_roots[@]}"; do
-        local root_matches_file
-        root_matches_file=$(create_temp_file)
-        scan_project_cache_root "$root" "$root_matches_file"
-
+    if [[ ${#scan_roots[@]} -eq 0 ]]; then
         if [[ -t 1 ]]; then
             stop_inline_spinner
+        fi
+        return 0
+    fi
+
+    local -a root_matches_files=()
+    local -a scan_pids=()
+    local -a scan_statuses=()
+    local failed_scan_count=0
+    local scan_interrupt_status=0
+    local previous_scan_int_trap=""
+    local previous_scan_term_trap=""
+    local scan_traps_installed=false
+    local max_scan_jobs
+    max_scan_jobs=$(get_optimal_parallel_jobs io)
+    if ! [[ "$max_scan_jobs" =~ ^[0-9]+$ ]] || [[ "$max_scan_jobs" -lt 1 ]]; then
+        max_scan_jobs=1
+    elif [[ "$max_scan_jobs" -gt 4 ]]; then
+        max_scan_jobs=4
+    fi
+
+    _wait_for_project_cache_scan_batch() {
+        local scan_index scan_pid
+        for ((scan_index = 0; scan_index < ${#scan_pids[@]}; scan_index++)); do
+            scan_pid="${scan_pids[$scan_index]}"
+            local scan_rc=0
+            wait "$scan_pid" 2> /dev/null || scan_rc=$?
+            scan_statuses+=("$scan_rc")
+            if [[ $scan_rc -ge 128 ]]; then
+                local remaining_index
+                for ((remaining_index = scan_index + 1; remaining_index < ${#scan_pids[@]}; remaining_index++)); do
+                    kill "${scan_pids[$remaining_index]}" 2> /dev/null || true
+                done
+                for ((remaining_index = scan_index + 1; remaining_index < ${#scan_pids[@]}; remaining_index++)); do
+                    wait "${scan_pids[$remaining_index]}" 2> /dev/null || true
+                done
+                scan_pids=()
+                return "$scan_rc"
+            fi
+        done
+        scan_pids=()
+    }
+
+    # shellcheck disable=SC2329 # Invoked by the signal trap below.
+    _cleanup_project_cache_scan_workers() {
+        local scan_pid
+        for scan_pid in "${scan_pids[@]+"${scan_pids[@]}"}"; do
+            kill "$scan_pid" 2> /dev/null || true
+        done
+        for scan_pid in "${scan_pids[@]+"${scan_pids[@]}"}"; do
+            wait "$scan_pid" 2> /dev/null || true
+        done
+        scan_pids=()
+    }
+
+    # shellcheck disable=SC2329 # Invoked by the signal trap below.
+    _handle_project_cache_scan_interrupt() {
+        local interrupt_status="$1"
+        if [[ $scan_interrupt_status -lt 128 ]]; then
+            scan_interrupt_status="$interrupt_status"
+        fi
+        _cleanup_project_cache_scan_workers
+    }
+
+    _restore_project_cache_scan_traps() {
+        [[ "$scan_traps_installed" == "true" ]] || return 0
+        trap - INT TERM
+        scan_traps_installed=false
+        # eval: restore caller traps captured by $(trap -p)
+        [[ -n "$previous_scan_int_trap" ]] && eval "$previous_scan_int_trap"
+        [[ -n "$previous_scan_term_trap" ]] && eval "$previous_scan_term_trap"
+        return 0
+    }
+
+    previous_scan_int_trap=$(trap -p INT || true)
+    previous_scan_term_trap=$(trap -p TERM || true)
+    trap '_handle_project_cache_scan_interrupt 130' INT
+    trap '_handle_project_cache_scan_interrupt 143' TERM
+    scan_traps_installed=true
+
+    for root in "${scan_roots[@]}"; do
+        [[ $scan_interrupt_status -ge 128 ]] && break
+        local root_matches_file
+        if ! root_matches_file=$(create_temp_file); then
+            failed_scan_count=$((failed_scan_count + 1))
+            continue
+        fi
+        root_matches_files+=("$root_matches_file")
+        [[ $scan_interrupt_status -ge 128 ]] && break
+        scan_project_cache_root "$root" "$root_matches_file" < /dev/null &
+        scan_pids+=("$!")
+        if [[ ${#scan_pids[@]} -ge $max_scan_jobs ]]; then
+            _wait_for_project_cache_scan_batch || scan_interrupt_status=$?
+            if [[ $scan_interrupt_status -ge 128 ]]; then
+                break
+            fi
+        fi
+    done
+    if [[ $scan_interrupt_status -lt 128 ]]; then
+        _wait_for_project_cache_scan_batch || scan_interrupt_status=$?
+    fi
+    _restore_project_cache_scan_traps
+
+    if [[ -t 1 ]]; then
+        stop_inline_spinner
+    fi
+
+    if [[ $scan_interrupt_status -ge 128 ]]; then
+        local pending_file
+        for pending_file in "${root_matches_files[@]}"; do
+            rm -f "$pending_file" # SAFE: exact scratch file created by create_temp_file above
+        done
+        return "$scan_interrupt_status"
+    fi
+
+    local scan_index
+    for ((scan_index = 0; scan_index < ${#root_matches_files[@]}; scan_index++)); do
+        local preflight_rc="${scan_statuses[$scan_index]:-1}"
+        if [[ $preflight_rc -ge 128 ]]; then
+            local pending_file
+            for pending_file in "${root_matches_files[@]}"; do
+                rm -f "$pending_file"
+            done
+            return "$preflight_rc"
+        fi
+    done
+
+    for ((scan_index = 0; scan_index < ${#root_matches_files[@]}; scan_index++)); do
+        root_matches_file="${root_matches_files[$scan_index]}"
+        local scan_rc="${scan_statuses[$scan_index]:-1}"
+        if [[ $scan_rc -ne 0 ]]; then
+            failed_scan_count=$((failed_scan_count + 1))
+            rm -f "$root_matches_file"
+            continue
         fi
 
         local process_rc=0
         process_project_cache_matches "$root_matches_file" || process_rc=$?
         rm -f "$root_matches_file"
-        [[ $process_rc -eq 0 ]] || return "$process_rc"
-
-        if [[ -t 1 ]]; then
-            MOLE_SPINNER_PREFIX="  "
-            start_inline_spinner "Searching project caches..."
+        if [[ $process_rc -ne 0 ]]; then
+            local pending_file
+            for pending_file in "${root_matches_files[@]}"; do
+                rm -f "$pending_file"
+            done
+            return "$process_rc"
         fi
     done
 
-    if [[ -t 1 ]]; then
-        stop_inline_spinner
+    if [[ $failed_scan_count -gt 0 ]]; then
+        local scan_noun="root scans"
+        if [[ $failed_scan_count -eq 1 ]]; then
+            scan_noun="root scan"
+        fi
+        echo -e "  ${GRAY}${ICON_WARNING}${NC} Project caches · skipped ${failed_scan_count} slow/incomplete ${scan_noun}"
+        if declare -f note_activity > /dev/null 2>&1; then
+            note_activity
+        fi
     fi
 }

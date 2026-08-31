@@ -105,6 +105,7 @@ func newModel(path string, isOverview bool) model {
 		multiSelected:       make(map[string]bool),
 		largeMultiSelected:  make(map[string]bool),
 		liveSortMode:        liveScanSortModeFromEnv(),
+		snapshotRunner:      runLocalSnapshotCommand,
 	}
 
 	if isOverview {

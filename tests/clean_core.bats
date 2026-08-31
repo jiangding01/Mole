@@ -121,7 +121,23 @@ MOCK
 exit 1
 MOCK
 
-    chmod +x "$MOCK_TOOLCHAIN_BIN/brew" "$MOCK_TOOLCHAIN_BIN/xcrun"
+    cat > "$MOCK_TOOLCHAIN_BIN/lsof" << 'MOCK'
+#!/bin/bash
+# Shim: expose a complete root-process view, then report cleanup targets idle.
+case " $* " in
+    *" -p 1 "*) printf 'p1\nu0\n'; exit 0 ;;
+    *) exit 1 ;;
+esac
+MOCK
+
+    cat > "$MOCK_TOOLCHAIN_BIN/ps" << 'MOCK'
+#!/bin/bash
+# Shim: a reliable empty process table keeps candidate ownership deterministic.
+printf '  PID  PPID COMM ARGS\n'
+MOCK
+
+    chmod +x "$MOCK_TOOLCHAIN_BIN/brew" "$MOCK_TOOLCHAIN_BIN/xcrun" \
+        "$MOCK_TOOLCHAIN_BIN/lsof" "$MOCK_TOOLCHAIN_BIN/ps"
 }
 
 @test "safe_clean item count reflects cleaned items, not raw target count" {
@@ -318,6 +334,37 @@ EOF
     [[ "$output" != *"UNEXPECTED_GUARD"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_REGISTER"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_REMOVE"* ]]
+}
+
+@test "safe_clean skips missing targets before expensive policy probes" {
+    local base="$HOME/safe_clean_missing_fast_path"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 /bin/bash --noprofile --norc << EOF
+set -euo pipefail
+source "\$PROJECT_ROOT/lib/core/common.sh"
+source "\$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=true
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+note_activity() { :; }
+should_protect_path() { echo "UNEXPECTED_PROTECT:\$1"; return 1; }
+is_path_whitelisted() { echo "UNEXPECTED_WHITELIST:\$1"; return 1; }
+holds_compiled_model_cache() { echo "UNEXPECTED_MODEL:\$1"; return 1; }
+delete_guard() { echo "UNEXPECTED_GUARD:\$1"; return 1; }
+register_dry_run_cleanup_target() { echo "UNEXPECTED_REGISTER:\$1"; }
+safe_remove() { echo "UNEXPECTED_REMOVE:\$1"; }
+
+safe_clean_guarded delete_guard "$base/missing" "Missing cache"
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" != *"UNEXPECTED_"* ]] || return 1
 }
 
 @test "safe_clean propagates an interrupted parallel size worker before deletion" {
@@ -999,6 +1046,7 @@ PLIST
     set_mock_sudo_uncached "$test_home"
     set_mock_host_toolchains "$test_home"
     run env HOME="$test_home" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=1 \
+        MOLE_TIMEOUT_MEDIUM_PROBE_SEC=30 \
         PATH="$TEST_MOCK_BIN:$MOCK_TOOLCHAIN_BIN:$PATH" \
         "$PROJECT_ROOT/mole" clean --dry-run
 
@@ -1052,16 +1100,86 @@ EOF
     [[ "$output" == *"cache.bin  # size unknown"* ]] || return 1
 }
 
+@test "dry-run preview propagates live-cache and SQLite safety timeouts" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
+        bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/clean.sh"
+
+DRY_RUN=true
+MOLE_CURRENT_COMMAND=clean
+CLEAN_PREVIEW_LEDGER_FILE=""
+should_protect_path() { return 1; }
+is_path_whitelisted() { return 1; }
+holds_compiled_model_cache() { return 1; }
+register_dry_run_cleanup_target() { printf 'UNEXPECTED_REGISTER:%s\n' "$1"; }
+append_dry_run_cleanup_target() { printf 'UNEXPECTED_APPEND:%s\n' "$1"; }
+_mole_should_refuse_live_user_cache_path() {
+    printf 'PROBE:live-cache:%s\n' "$probe_mode"
+    [[ "$probe_mode" == "live-cache" && "$1" == "$HOME/live-cache.db" ]] && return 124
+    return 1
+}
+_mole_is_sqlite_database_path() {
+    [[ "$probe_mode" == "sqlite" ]]
+}
+_mole_sqlite_database_in_use() {
+    printf 'PROBE:sqlite:%s\n' "$probe_mode"
+    [[ "$1" == "$HOME/sqlite.db" ]] && return 124
+    return 1
+}
+
+for probe_mode in live-cache sqlite; do
+    candidate="$HOME/$probe_mode.db"
+    touch "$candidate"
+    MOLE_CLEAN_CANCEL_STATUS=0
+    rc=0
+    record_dry_run_cleanup_target "$candidate" 1 1 true || rc=$?
+    printf 'RESULT:%s:rc=%s:cancel=%s\n' \
+        "$probe_mode" "$rc" "$MOLE_CLEAN_CANCEL_STATUS"
+
+    later_candidate="$HOME/$probe_mode-later.db"
+    touch "$later_candidate"
+    later_rc=0
+    record_dry_run_cleanup_target "$later_candidate" 1 1 true || later_rc=$?
+    printf 'LATER:%s:rc=%s:cancel=%s\n' \
+        "$probe_mode" "$later_rc" "$MOLE_CLEAN_CANCEL_STATUS"
+done
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == *"PROBE:live-cache:live-cache"* ]] || return 1
+    [[ "$output" == *"PROBE:sqlite:sqlite"* ]] || return 1
+    [[ "$output" == *"RESULT:live-cache:rc=124:cancel=124"* ]] || return 1
+    [[ "$output" == *"RESULT:sqlite:rc=124:cancel=124"* ]] || return 1
+    [[ "$output" == *"LATER:live-cache:rc=124:cancel=124"* ]] || return 1
+    [[ "$output" == *"LATER:sqlite:rc=124:cancel=124"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_"* ]]
+}
+
 @test "mo clean --dry-run never previews a live SQLite database family (#1390)" {
     local test_home
     test_home="$(mktemp -d "${BATS_TEST_TMPDIR}/clean-1390-home.XXXXXX")"
     mkdir -p "$test_home/.config/mole" \
-        "$test_home/Library/Caches/com.autodesk.AcCoreConsole"
+        "$test_home/Library/Caches/com.autodesk.AcCoreConsole" \
+        "$test_home/toolchain-bin"
 
     local db="$test_home/Library/Caches/com.autodesk.AcCoreConsole/Cache.db"
     printf 'cache-db' > "$db"
     printf 'wal' > "$db-wal"
     printf 'shm' > "$db-shm"
+
+    cat > "$test_home/toolchain-bin/lsof" << 'MOCK'
+#!/bin/bash
+# Shim: pretend every SQLite family member is held open by a process.
+case " $* " in
+    *" -p 1 "*) printf 'p1\nu0\n'; exit 0 ;;
+    *) printf 'n%s\n' "$HOME/Library/Caches/com.autodesk.AcCoreConsole/Cache.db"; exit 0 ;;
+esac
+MOCK
+    chmod +x "$test_home/toolchain-bin/lsof"
 
     # Dry-run must not list the family even though the sweep reaches it: a
     # live WAL-mode database stays put, and the preview must agree with the
@@ -1070,7 +1188,7 @@ EOF
     # validate_path_for_deletion (tests/core_safe_functions.bats).
     set_mock_host_toolchains
     run env HOME="$test_home" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=1 \
-        PATH="$MOCK_TOOLCHAIN_BIN:$PATH" "$PROJECT_ROOT/mole" clean --dry-run
+        PATH="$test_home/toolchain-bin:$MOCK_TOOLCHAIN_BIN:$PATH" "$PROJECT_ROOT/mole" clean --dry-run
     [ "$status" -eq 0 ] || return 1
     [[ "$(grep -cF "Cache.db" "$test_home/.config/mole/clean-list.txt")" -eq 0 ]] || return 1
     [[ -f "$db" && -f "$db-wal" && -f "$db-shm" ]] || return 1
@@ -1495,6 +1613,7 @@ EOF
             # Set after sourcing: clean.sh assigns EXPORT_LIST_FILE at load time.
             EXPORT_LIST_FILE="$HOME/e5rt-list.txt"
             : > "$EXPORT_LIST_FILE"
+            _mole_user_cache_owner_process_state() { return 1; }
             e5rt_cache="$HOME/Library/Caches/com.example.ocr/com.apple.e5rt.e5bundlecache"
             mkdir -p "$e5rt_cache" "$HOME/Library/Caches/com.example.plain"
             # Both need real bytes: zero-sized entries never reach the export list.

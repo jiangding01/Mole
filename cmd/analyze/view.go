@@ -26,6 +26,18 @@ func (m model) View() string {
 			freeLabel = fmt.Sprintf("  %s(%s free)%s", colorGray, humanizeBytes(m.diskFree), colorReset)
 		}
 		fmt.Fprintf(&b, "%sAnalyze Disk%s%s\n", colorPurpleBold, colorReset, freeLabel)
+		if m.localSnapshotCount > 0 {
+			snapshotLabel := "snapshot"
+			if m.localSnapshotCount != 1 {
+				snapshotLabel = "snapshots"
+			}
+			freshnessLabel := ""
+			if !m.localSnapshotFresh {
+				freshnessLabel = " · last successful check"
+			}
+			fmt.Fprintf(&b, "%s%d Time Machine local %s · snapshot-only space is not listed below%s%s\n",
+				colorGray, m.localSnapshotCount, snapshotLabel, freshnessLabel, colorReset)
+		}
 		if m.overviewScanning {
 			if allOverviewEntriesPending(m.entries) {
 				fmt.Fprintf(&b, "%sSelect a location to explore:%s  ", colorGray, colorReset)

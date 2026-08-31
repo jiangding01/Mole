@@ -1885,6 +1885,50 @@ EOF
     [[ "$output" != *"$volumes_root/in-use-runtime"* ]]
 }
 
+@test "clean_xcode_simulator_runtime_volumes dry-run does not size mounted runtimes" {
+    local volumes_root="$HOME/sim-volumes-dry"
+    local cryptex_root="$HOME/sim-cryptex-dry"
+    mkdir -p "$volumes_root/in-use-runtime" "$volumes_root/unused-runtime" "$cryptex_root"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" \
+        MOLE_XCODE_SIM_RUNTIME_VOLUMES_ROOT="$volumes_root" \
+        MOLE_XCODE_SIM_RUNTIME_CRYPTEX_ROOT="$cryptex_root" \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+
+size_log="$HOME/dry-size-calls.log"
+: > "$size_log"
+DRY_RUN=true
+
+note_activity() { :; }
+is_path_whitelisted() { return 1; }
+should_protect_path() { return 1; }
+record_dry_run_cleanup_target() { return 0; }
+_sim_runtime_mount_points() {
+    printf '%s\n' "$MOLE_XCODE_SIM_RUNTIME_VOLUMES_ROOT/in-use-runtime"
+}
+_sim_runtime_size_kb() {
+    printf '%s\n' "$1" >> "$size_log"
+    echo "1024"
+}
+
+clean_xcode_simulator_runtime_volumes
+printf 'SIZE_CALLS=%s\n' "$(wc -l < "$size_log" | tr -d ' ')"
+cat "$size_log"
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == *"SIZE_CALLS=1"* ]] || return 1
+    [[ "$output" == *"$volumes_root/unused-runtime"* ]] || return 1
+    [[ "$output" == *"1 in use"* ]] || return 1
+    [[ "$output" == *"in-use not scanned"* ]] || return 1
+}
+
 @test "clean_xcode_simulator_runtime_volumes deletes nothing when mount enumeration fails" {
     local volumes_root="$HOME/sim-volumes"
     mkdir -p "$volumes_root/runtime-a" "$volumes_root/runtime-b"
@@ -2066,12 +2110,53 @@ EOF
     [[ "$output" == *"Developer tools"*"Nothing to clean"* ]]
 }
 
+@test "clean_dev_mobile uses one successful simctl list for probe and data" {
+    local call_log="$HOME/simctl-single-list.log"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=true \
+        SIMCTL_CALL_LOG="$call_log" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+check_android_ndk() { :; }
+clean_xcode_documentation_cache() { :; }
+clean_xcode_system_coresimulator_caches() { :; }
+clean_xcode_simulator_runtime_volumes() { :; }
+clean_xcode_xctest_devices() { :; }
+clean_xcode_device_support() { :; }
+_xcode_safe_clean_guarded() { :; }
+safe_clean() { :; }
+note_activity() { :; }
+debug_log() { :; }
+xcrun() { :; }
+_resolve_simctl_developer_dir() {
+    _MOLE_SIMCTL_RESOLUTION_STATUS="ready"
+    _MOLE_SIMCTL_DEVELOPER_DIR="$HOME/Xcode.app/Contents/Developer"
+}
+_run_simctl() {
+    shift
+    printf '%s\n' "$*" >> "$SIMCTL_CALL_LOG"
+    return 0
+}
+
+clean_dev_mobile
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [ "$(wc -l < "$call_log" | tr -d ' ')" -eq 1 ] || return 1
+    [ "$(< "$call_log")" = "list devices unavailable" ] || return 1
+}
+
 @test "clean_dev_mobile continues cleanup when simctl is unavailable" {
     local tmp_bin
     tmp_bin="$HOME/simctl-unavailable-bin"
     mkdir -p "$tmp_bin"
     cat > "$tmp_bin/xcrun" << 'XEOF'
 #!/bin/bash
+printf '%s\n' "$*" >> "$SIMCTL_CALL_LOG"
 exit 1
 XEOF
     cat > "$tmp_bin/xcode-select" << 'XEOF'
@@ -2080,7 +2165,9 @@ printf '/Library/Developer/CommandLineTools\n'
 XEOF
     chmod +x "$tmp_bin/xcrun" "$tmp_bin/xcode-select"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$tmp_bin:$PATH" /bin/bash --noprofile --norc << 'EOF'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$tmp_bin:$PATH" \
+        SIMCTL_CALL_LOG="$HOME/simctl-unavailable.log" \
+        /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/dev.sh"
@@ -2095,14 +2182,19 @@ clean_xcode_xctest_devices() { :; }
 clean_xcode_device_support() { echo "DEVICE_SUPPORT:$2"; }
 safe_clean() { echo "SAFE_CLEAN:$2"; }
 safe_clean_guarded() { echo "SAFE_CLEAN_GUARDED:$1:${*: -1}"; }
-note_activity() { :; }
+note_activity() { echo "ACTIVITY"; }
 debug_log() { :; }
 
 clean_dev_mobile
+echo "RESOLUTION_STATUS:$_MOLE_SIMCTL_RESOLUTION_STATUS"
 EOF
 
     [ "$status" -eq 0 ] || return 1
-    [[ "$output" == *"simctl could not be resolved"* ]] || return 1
+    [[ "$output" == *"RESOLUTION_STATUS:clt-only"* ]] || return 1
+    [[ "$output" != *"simctl could not be resolved"* ]] || return 1
+    [[ "$output" != *"Xcode unavailable simulators"* ]] || return 1
+    [[ "$output" != *"ACTIVITY"* ]] || return 1
+    [[ ! -e "$HOME/simctl-unavailable.log" ]] || return 1
     [[ "$output" == *"DEVICE_SUPPORT:iOS DeviceSupport"* ]] || return 1
     [[ "$output" == *"SAFE_CLEAN_GUARDED:_coresimulator_delete_guard_allows:Simulator runtime cache"* ]] || return 1
     [[ "$output" == *"SAFE_CLEAN_GUARDED:_xcode_delete_guard_allows:Xcode Interface Builder cache"* ]] || return 1
@@ -2117,9 +2209,8 @@ EOF
     #   - stub `run_with_timeout` so the first probe returns 124 (timeout) and
     #     the second returns 0, mirroring a cold-boot CoreSimulatorService
     #     warmup.
-    #   - the shim itself returns empty for the post-probe
-    #     `xcrun simctl list devices unavailable` call so we take the
-    #     "already clean" branch and don't try to delete anything.
+    #   - the successful retry returns an empty unavailable-device list so we
+    #     take the "already clean" branch and do not delete anything.
     local tmp_bin
     tmp_bin="$HOME/simctl-retry-bin"
     mkdir -p "$tmp_bin" "$HOME/Xcode.app/Contents/Developer"
@@ -2150,14 +2241,17 @@ debug_log() { echo "debug: $*"; }
 sleep() { echo "UNEXPECTED_SLEEP:$*"; return 99; }
 
 # First call (5s timeout) simulates cold-boot warmup → return 124.
-# Second call (8s timeout) succeeds.
-__rwt_count=0
+# Second call (the package-list timeout) succeeds.
+SIMCTL_PROBE_STATE="$HOME/simctl-retry.state"
 run_with_timeout() {
     shift
     case " $* " in
-        *" xcrun simctl list devices ")
-            __rwt_count=$((__rwt_count + 1))
-            if [[ $__rwt_count -eq 1 ]]; then
+        *" xcrun simctl list devices unavailable ")
+            local probe_count=0
+            [[ -f "$SIMCTL_PROBE_STATE" ]] && probe_count=$(< "$SIMCTL_PROBE_STATE")
+            probe_count=$((probe_count + 1))
+            printf '%s\n' "$probe_count" > "$SIMCTL_PROBE_STATE"
+            if [[ $probe_count -eq 1 ]]; then
                 return 124
             fi
             ;;
@@ -2206,16 +2300,16 @@ _resolve_simctl_developer_dir() {
 _run_simctl() {
     local timeout_seconds="$1"
     shift
-    if [[ "$*" == "list devices" ]]; then
-        __probe_call=$((__probe_call + 1))
+    if [[ "$*" == "list devices unavailable" ]]; then
+        local probe_call=0
+        [[ -f "$PROBE_STATE" ]] && probe_call=$(< "$PROBE_STATE")
+        probe_call=$((probe_call + 1))
+        printf '%s\n' "$probe_call" > "$PROBE_STATE"
         printf '%b' "$PROBE_STDERR" >&2
-        if [[ $__probe_call -eq 1 ]]; then
+        if [[ $probe_call -eq 1 ]]; then
             return "$PROBE_FIRST_STATUS"
         fi
         return "$PROBE_RETRY_STATUS"
-    fi
-    if [[ "$*" == "list devices unavailable" ]]; then
-        return 0
     fi
     return 1
 }
@@ -2224,7 +2318,8 @@ run_probe_case() {
     local label="$1"
     PROBE_FIRST_STATUS="$2"
     PROBE_RETRY_STATUS="$3"
-    __probe_call=0
+    PROBE_STATE="$HOME/simctl-probe-$label.state"
+    : > "$PROBE_STATE"
     PROBE_STDERR="$HOME/Library/Developer/private"$'\n\033[31mprobe failed\033[0m\n'
     printf 'CASE:%s\n' "$label"
     clean_dev_mobile
@@ -2261,9 +2356,6 @@ if [[ "$*" == "--find simctl" ]]; then
 fi
 printf '%s|%s\n' "${DEVELOPER_DIR:-}" "$*" >> "$SIMCTL_CALL_LOG"
 case "$*" in
-    "simctl list devices")
-        exit 0
-        ;;
     "simctl list devices unavailable")
         printf '    iPhone 12 (ABCDEF01-2345-6789-ABCD-EF0123456789) (Shutdown) (unavailable)\n'
         exit 0
@@ -2476,7 +2568,7 @@ EOF
     cat > "$tmp_bin/xcrun" << 'XEOF'
 #!/bin/bash
 case "$*" in
-    "--find simctl" | "simctl list devices")
+    "--find simctl")
         exit 0
         ;;
     "simctl list devices unavailable")
@@ -2533,7 +2625,7 @@ EOF
     cat > "$tmp_bin/xcrun" << 'XEOF'
 #!/bin/bash
 case "$*" in
-    "--find simctl" | "simctl list devices")
+    "--find simctl")
         exit 0
         ;;
     "simctl list devices unavailable")
@@ -2613,9 +2705,6 @@ scenario="list-timeout"
 _run_simctl() {
     shift
     case "$*" in
-        "list devices")
-            return 0
-            ;;
         "list devices unavailable")
             if [[ "$scenario" == "list-timeout" ]]; then
                 echo "    iPhone 12 (ABCDEF01-2345-6789-ABCD-EF0123456789) (Shutdown) (unavailable)"
@@ -2647,7 +2736,7 @@ printf 'DELETE_COUNT=%s\n' "$(wc -l < "$SIMCTL_SAFETY_LOG" | tr -d ' ')"
 EOF
 
     [ "$status" -eq 0 ] || return 1
-    [[ "$output" == *"simctl list failed (exit=124)"* ]] || return 1
+    [[ "$output" == *"simctl probe timed out"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_DELETE_AFTER_LIST_TIMEOUT"* ]] || return 1
     [[ "$output" == *"cleanup completed, unable to verify remaining devices"* ]] || return 1
     [[ "$output" == *"DELETE_COUNT=1"* ]] || return 1
@@ -2684,7 +2773,6 @@ _run_simctl() {
     shift
     printf '%s\n' "$*" >> "$SIMCTL_CALL_LOG"
     case "$*" in
-        "list devices") return 0 ;;
         "list devices unavailable")
             printf '    iPhone 12 (ABCDEF01-2345-6789-ABCD-EF0123456789) (Shutdown) (unavailable)\n'
             return 0

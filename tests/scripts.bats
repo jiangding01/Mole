@@ -112,6 +112,19 @@ EOF
     [ -x "$PROJECT_ROOT/scripts/check_release_minos.sh" ]
 }
 
+@test "release workflow rejects a tag that differs from the source version" {
+    local workflow="$PROJECT_ROOT/.github/workflows/release.yml"
+
+    run grep -F 'name: Verify release tag matches source version' "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F "SOURCE_VERSION=\$(sed -n" "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F "EXPECTED_TAG=\"V\${SOURCE_VERSION}\"" "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F "\"\$RELEASE_TAG\" != \"\$EXPECTED_TAG\"" "$workflow"
+    [ "$status" -eq 0 ]
+}
+
 @test "release workflow keeps the Homebrew Core PR open (#1209)" {
     local workflow="$PROJECT_ROOT/.github/workflows/release.yml"
 
@@ -124,6 +137,12 @@ EOF
     run grep -F 'core_status=published' "$workflow"
     [ "$status" -eq 0 ]
     run grep -F 'core_status=pr-open' "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F 'url_matches != 1 || sha_matches != 1' "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F 'already exists; refusing to overwrite it.' "$workflow"
+    [ "$status" -eq 0 ]
+    run grep -F "git push \"--force-with-lease=refs/heads/\${BRANCH}:\" origin \"\$BRANCH\"" "$workflow"
     [ "$status" -eq 0 ]
 
     run awk '

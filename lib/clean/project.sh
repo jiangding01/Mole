@@ -52,6 +52,24 @@ is_project_container() {
     [[ "$basename" == "Pictures" ]] && return 1
     [[ "$basename" == "Public" ]] && return 1
 
+    # A purge target is an artifact, never a container. A stray ~/node_modules
+    # is otherwise globbed as one: every npm package ships package.json, the
+    # first project indicator, so the maxdepth-2 probe matches immediately and
+    # each package becomes a "project root". The scan then starts below the
+    # artifact, so filter_nested_artifacts never sees node_modules itself and
+    # emits package-internal dist/ and build/ instead. Deleting those leaves
+    # the package half-installed: package.json stays, npm reports the tree as
+    # up to date, and recovery needs a network restore, which purge must never
+    # require (#1459). Same shape for vendor/ and Pods/. A container that
+    # happens to share an artifact name stays reachable through
+    # ~/.config/mole/purge_paths, which bypasses discovery.
+    local purge_target
+    for purge_target in "${PURGE_TARGETS[@]}"; do
+        if [[ "$basename" == "$purge_target" ]]; then
+            return 1
+        fi
+    done
+
     # Single find expression for indicators.
     local -a find_args=("$dir" "-maxdepth" "$max_depth" "(")
     local first=true
@@ -276,6 +294,25 @@ is_purge_project_root() {
 
 # Args: $1 - path to check
 # Safe cleanup requires the path be inside a project directory.
+is_safe_project_artifact_under_root() {
+    local path="${1%/}"
+    local search_path="${2%/}"
+
+    [[ "$path" == /* && "$search_path" == /* && "$search_path" != "/" ]] || return 1
+    [[ "$path" == "$search_path/"* ]] || return 1
+
+    local relative_path="${path#"$search_path"/}"
+    local relative_without_slashes="${relative_path//\//}"
+    local depth=$((${#relative_path} - ${#relative_without_slashes}))
+    if [[ $depth -lt 1 ]]; then
+        # Allow direct-child artifacts only when the search path is itself
+        # a project root (single-project mode).
+        is_purge_project_root "$search_path"
+        return $?
+    fi
+    return 0
+}
+
 is_safe_project_artifact() {
     local path="$1"
     local search_path="$2"
@@ -313,19 +350,7 @@ is_safe_project_artifact() {
         return 1
     fi
 
-    # Must not be a direct child of the search root.
-    local relative_path="${path#"$search_path"/}"
-    local _rel_stripped="${relative_path//\//}"
-    local depth=$((${#relative_path} - ${#_rel_stripped}))
-    if [[ $depth -lt 1 ]]; then
-        # Allow direct-child artifacts only when the search path is itself
-        # a project root (single-project mode).
-        if is_purge_project_root "$search_path"; then
-            return 0
-        fi
-        return 1
-    fi
-    return 0
+    is_safe_project_artifact_under_root "$path" "$search_path"
 }
 
 # Revalidate a selected artifact against the configured scan roots immediately
@@ -338,8 +363,19 @@ is_safe_configured_purge_artifact() {
     [[ ${#PURGE_SEARCH_PATHS[@]} -gt 0 ]] || return 1
 
     local search_path
+    # Ordinary configured roots retain their lexical prefix in scan results.
+    # Check those roots first so one candidate does not resolve every unrelated
+    # root physically. The second pass preserves support for symlink aliases.
     for search_path in "${PURGE_SEARCH_PATHS[@]}"; do
         [[ -n "$search_path" ]] || continue
+        [[ "$search_path" == "/" || "$path" == "${search_path%/}/"* ]] || continue
+        if is_safe_project_artifact "$path" "$search_path"; then
+            return 0
+        fi
+    done
+    for search_path in "${PURGE_SEARCH_PATHS[@]}"; do
+        [[ -n "$search_path" ]] || continue
+        [[ "$search_path" != "/" && "$path" != "${search_path%/}/"* ]] || continue
         if is_safe_project_artifact "$path" "$search_path"; then
             return 0
         fi
@@ -370,12 +406,12 @@ is_php_project_root() {
 
 # Decide whether a "bin" directory is a .NET directory
 is_dotnet_bin_dir() {
-    local path="$1"
-    [[ "$(basename "$path")" == "bin" ]] || return 1
+    local path="${1%/}"
+    [[ "${path##*/}" == "bin" ]] || return 1
 
     # Check if parent directory has a .csproj/.fsproj/.vbproj file
-    local parent_dir
-    parent_dir="$(dirname "$path")"
+    local parent_dir="${path%/*}"
+    [[ -n "$parent_dir" ]] || parent_dir="/"
     find "$parent_dir" -maxdepth 1 \( -name "*.csproj" -o -name "*.fsproj" -o -name "*.vbproj" \) 2> /dev/null | grep -q . || return 1
 
     # Check if bin directory contains Debug/ or Release/ subdirectories
@@ -388,12 +424,11 @@ is_dotnet_bin_dir() {
 # Expects path to be a vendor directory (basename == vendor)
 # Strategy: Only clean PHP Composer vendor, protect all others
 is_protected_vendor_dir() {
-    local path="$1"
-    local base
-    base=$(basename "$path")
+    local path="${1%/}"
+    local base="${path##*/}"
     [[ "$base" == "vendor" ]] || return 1
-    local parent_dir
-    parent_dir=$(dirname "$path")
+    local parent_dir="${path%/*}"
+    [[ -n "$parent_dir" ]] || parent_dir="/"
 
     # PHP Composer vendor can be safely regenerated with 'composer install'
     # Do NOT protect it (return 1 = not protected = can be cleaned)
@@ -417,9 +452,8 @@ is_protected_vendor_dir() {
 
 # Check if an artifact should be protected from purge
 is_protected_purge_artifact() {
-    local path="$1"
-    local base
-    base=$(basename "$path")
+    local path="${1%/}"
+    local base="${path##*/}"
 
     case "$base" in
         bin)
@@ -474,13 +508,22 @@ scan_purge_targets() {
 
     local cachedir_tag_min_depth=$((min_depth + 1))
     local cachedir_tag_max_depth=$((max_depth + 1))
+    local scan_timeout="${MO_PURGE_SCAN_TIMEOUT_SEC:-60}"
+    [[ "$scan_timeout" =~ ^[1-9][0-9]*$ ]] || scan_timeout=60
+    [[ "$scan_timeout" -ge 2 ]] || scan_timeout=2
+    local scan_deadline=$((SECONDS + scan_timeout))
+    local scan_stage_timeout=""
 
     # Update current scanning path
     local stats_dir="${XDG_CACHE_HOME:-$HOME/.cache}/mole"
     echo "$search_path" > "$stats_dir/purge_scanning" 2> /dev/null || true
 
     emit_valid_cachedir_tag_dirs() {
+        local deadline="$1"
         while IFS= read -r tag_file; do
+            if [[ $SECONDS -ge $deadline ]]; then
+                return 124
+            fi
             [[ -n "$tag_file" ]] || continue
             local cache_dir="${tag_file%/*}"
             if [[ -n "$cache_dir" ]] && mole_dir_has_cachedir_tag "$cache_dir"; then
@@ -492,23 +535,33 @@ scan_purge_targets() {
     # Helper to process raw results
     process_scan_results() {
         local input_file="$1"
+        local deadline="$2"
         if [[ -f "$input_file" ]]; then
             local process_status=0
-            (
-                while IFS= read -r item; do
-                    # Check if we should abort (scanning file removed by Ctrl+C)
-                    if [[ ! -f "$stats_dir/purge_scanning" ]]; then
-                        exit 130
-                    fi
+            local nested_filter_timeout=""
+            nested_filter_timeout=$(_mole_timeout_with_deadline "$scan_timeout" "$deadline") || process_status=$?
+            if [[ $process_status -ne 0 ]]; then
+                return "$process_status"
+            fi
+            filter_nested_artifacts "$nested_filter_timeout" < "$input_file" |
+                (
+                    while IFS= read -r item; do
+                        if [[ $SECONDS -ge $deadline ]]; then
+                            exit 124
+                        fi
+                        # Check if we should abort (scanning file removed by Ctrl+C)
+                        if [[ ! -f "$stats_dir/purge_scanning" ]]; then
+                            exit 130
+                        fi
 
-                    if [[ -n "$item" ]] && is_safe_project_artifact "$item" "$search_path"; then
-                        echo "$item"
-                        # Update scanning path to show current project directory
-                        local project_dir="${item%/*}"
-                        echo "$project_dir" > "$stats_dir/purge_scanning" 2> /dev/null || true
-                    fi
-                done < "$input_file"
-            ) | filter_nested_artifacts | filter_protected_artifacts > "$processed_output" || process_status=$?
+                        if [[ -n "$item" ]] && is_safe_project_artifact "$item" "$search_path"; then
+                            echo "$item"
+                            # Update scanning path to show current project directory
+                            local project_dir="${item%/*}"
+                            echo "$project_dir" > "$stats_dir/purge_scanning" 2> /dev/null || true
+                        fi
+                    done
+                ) | filter_protected_artifacts "$deadline" > "$processed_output" || process_status=$?
 
             if [[ $process_status -ne 0 ]]; then
                 rm -f "$processed_output" 2> /dev/null || true
@@ -547,6 +600,7 @@ scan_purge_targets() {
             "--min-depth" "$min_depth"
             "--max-depth" "$max_depth"
             "--threads" "8"
+            "--prune"
             "--exclude" ".git"
             "--exclude" "Library"
             "--exclude" ".Trash"
@@ -565,23 +619,32 @@ scan_purge_targets() {
             "--exclude" ".Trash"
             "--exclude" "Applications"
         )
+        local purge_target
+        for purge_target in "${PURGE_TARGETS[@]}"; do
+            fd_tag_args+=("--exclude" "$purge_target")
+        done
 
         # Trust fd when it exits successfully, including an empty result set.
         # Empty scans are common in healthy project trees; falling back to find
         # doubles the scan cost and can make "nothing to clean" feel slow.
-        local _scan_timeout="${MO_PURGE_SCAN_TIMEOUT_SEC:-60}"
         local fd_status=0
-        run_with_timeout "$_scan_timeout" fd "${fd_args[@]}" "$pattern" "$search_path" \
-            2> /dev/null > "$target_output" || fd_status=$?
+        scan_stage_timeout=$(_mole_timeout_with_deadline "$scan_timeout" "$scan_deadline") || fd_status=$?
         if [[ $fd_status -eq 0 ]]; then
-            run_with_timeout "$_scan_timeout" fd "${fd_tag_args[@]}" "^${MOLE_CACHEDIR_TAG_NAME}$" "$search_path" \
+            run_with_timeout "$scan_stage_timeout" fd "${fd_args[@]}" "$pattern" "$search_path" \
+                2> /dev/null > "$target_output" || fd_status=$?
+        fi
+        if [[ $fd_status -eq 0 ]]; then
+            scan_stage_timeout=$(_mole_timeout_with_deadline "$scan_timeout" "$scan_deadline") || fd_status=$?
+        fi
+        if [[ $fd_status -eq 0 ]]; then
+            run_with_timeout "$scan_stage_timeout" fd "${fd_tag_args[@]}" "^${MOLE_CACHEDIR_TAG_NAME}$" "$search_path" \
                 2> /dev/null > "$tag_output" || fd_status=$?
         fi
         if [[ $fd_status -eq 0 ]]; then
-            emit_valid_cachedir_tag_dirs < "$tag_output" >> "$target_output" || fd_status=$?
+            emit_valid_cachedir_tag_dirs "$scan_deadline" < "$tag_output" >> "$target_output" || fd_status=$?
         fi
         if [[ $fd_status -eq 0 ]]; then
-            process_scan_results "$target_output" || fd_status=$?
+            process_scan_results "$target_output" "$scan_deadline" || fd_status=$?
         fi
         if [[ $fd_status -eq 0 ]]; then
             debug_log "Using fd for scanning"
@@ -614,24 +677,29 @@ scan_purge_targets() {
 
         # Use plain `find` here for compatibility with environments where
         # `command find` behaves inconsistently in this complex expression.
-        local _scan_timeout="${MO_PURGE_SCAN_TIMEOUT_SEC:-60}"
         local find_status=0
-        run_with_timeout "$_scan_timeout" find "$search_path" -mindepth "$min_depth" -maxdepth "$max_depth" -type d \
-            \( "${prune_expr[@]}" \) -prune -o \
-            \( "${target_expr[@]}" \) -print -prune \
-            2> /dev/null > "$target_output" || find_status=$?
+        scan_stage_timeout=$(_mole_timeout_with_deadline "$scan_timeout" "$scan_deadline") || find_status=$?
+        if [[ $find_status -eq 0 ]]; then
+            run_with_timeout "$scan_stage_timeout" find "$search_path" -mindepth "$min_depth" -maxdepth "$max_depth" -type d \
+                \( "${prune_expr[@]}" \) -prune -o \
+                \( "${target_expr[@]}" \) -print -prune \
+                2> /dev/null > "$target_output" || find_status=$?
+        fi
 
         if [[ $find_status -eq 0 ]]; then
-            run_with_timeout "$_scan_timeout" find "$search_path" -mindepth "$cachedir_tag_min_depth" -maxdepth "$cachedir_tag_max_depth" \
-                \( "${prune_expr[@]}" \) -prune -o \
+            scan_stage_timeout=$(_mole_timeout_with_deadline "$scan_timeout" "$scan_deadline") || find_status=$?
+        fi
+        if [[ $find_status -eq 0 ]]; then
+            run_with_timeout "$scan_stage_timeout" find "$search_path" -mindepth "$cachedir_tag_min_depth" -maxdepth "$cachedir_tag_max_depth" \
+                \( -type d \( \( "${prune_expr[@]}" \) -o \( "${target_expr[@]}" \) \) \) -prune -o \
                 -type f -name "$MOLE_CACHEDIR_TAG_NAME" -print \
                 2> /dev/null > "$tag_output" || find_status=$?
         fi
         if [[ $find_status -eq 0 ]]; then
-            emit_valid_cachedir_tag_dirs < "$tag_output" >> "$target_output" || find_status=$?
+            emit_valid_cachedir_tag_dirs "$scan_deadline" < "$tag_output" >> "$target_output" || find_status=$?
         fi
         if [[ $find_status -eq 0 ]]; then
-            process_scan_results "$target_output" || find_status=$?
+            process_scan_results "$target_output" "$scan_deadline" || find_status=$?
         fi
 
         cleanup_scan_outputs
@@ -645,11 +713,9 @@ scan_purge_targets() {
 # Filter out nested artifacts (e.g. node_modules inside node_modules, .build inside build).
 # Optimized: Sort paths to put parents before children, then filter in single pass.
 filter_nested_artifacts() {
-    # 1. Append trailing slash to each path (to ensure /foo/bar starts with /foo/)
-    # 2. Sort to group parents and children (LC_COLLATE=C ensures standard sorting)
-    # 3. Use awk to filter out paths that start with the previous kept path
-    # 4. Remove trailing slash
-    sed 's|[^/]$|&/|' | LC_COLLATE=C sort | awk '
+    local timeout_seconds="${1:-}"
+    # shellcheck disable=SC2016 # Awk expands its own variables.
+    local nested_filter_program='
         BEGIN { last_kept = "" }
         {
             current = $0
@@ -660,11 +726,34 @@ filter_nested_artifacts() {
                 last_kept = current
             }
         }
-    ' | sed 's|/$||'
+    '
+    # shellcheck disable=SC2016 # The child shell expands its own positional parameters.
+    local -a filter_command=(
+        /bin/bash -o pipefail -c
+        'sed "$1" | LC_COLLATE=C sort | awk "$2" | sed "$3"'
+        _
+        's|[^/]$|&/|'
+        "$nested_filter_program"
+        's|/$||'
+    )
+
+    # 1. Append trailing slash to each path (to ensure /foo/bar starts with /foo/)
+    # 2. Sort to group parents and children (LC_COLLATE=C ensures standard sorting)
+    # 3. Use awk to filter out paths that start with the previous kept path
+    # 4. Remove trailing slash
+    if [[ -n "$timeout_seconds" ]]; then
+        run_with_timeout "$timeout_seconds" "${filter_command[@]}"
+    else
+        "${filter_command[@]}"
+    fi
 }
 
 filter_protected_artifacts() {
+    local deadline="${1:-}"
     while IFS= read -r item; do
+        if [[ "$deadline" =~ ^[0-9]+$ && $SECONDS -ge $deadline ]]; then
+            return 124
+        fi
         if ! is_protected_purge_artifact "$item"; then
             echo "$item"
         fi
@@ -768,20 +857,43 @@ purge_target_activity_still_safe() {
     [[ "$_PURGE_ACTIVITY_STATE" == "old" || "$_PURGE_ACTIVITY_STATE" == "uncertain" ]]
 }
 
-# Final safe_remove hook for purge. Candidate identity is checked separately by
-# safe_remove; this hook rebinds the policy that depends on current contents so
-# a project cannot become active or protected in the last pre-delete window.
+# Final safe_remove hook for purge. The caller supplies the exact scan-root and
+# candidate identities through dynamically scoped locals. Recheck them after
+# the stateful activity probe so no filesystem walk separates identity proof
+# from safe_remove's deletion sink.
 _mole_purge_final_remove_guard() {
     local path="$1"
     is_safe_configured_purge_artifact "$path" || return 1
     is_protected_purge_artifact "$path" && return 1
-    purge_target_activity_still_safe "$path" "${_MOLE_PURGE_FINAL_WAS_RECENT:-true}"
+    purge_target_activity_still_safe "$path" "${_MOLE_PURGE_FINAL_WAS_RECENT:-true}" || return 1
+
+    _mole_path_matches_identity \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT:-}" \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT_PARENT:-}" \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT_PARENT_ID:-}" \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT_TARGET_ID:-}" || return 1
+    _mole_path_matches_identity \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL:-}" \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL_PARENT:-}" \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL_PARENT_ID:-}" \
+        "${_MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL_TARGET_ID:-}" || return 1
+    _mole_path_matches_identity \
+        "$path" \
+        "${_MOLE_PURGE_FINAL_EXPECTED_PARENT:-}" \
+        "${_MOLE_PURGE_FINAL_EXPECTED_PARENT_ID:-}" \
+        "${_MOLE_PURGE_FINAL_EXPECTED_TARGET_ID:-}" || return 1
+
+    local current_physical_path="${_MOLE_PATH_SNAPSHOT_PARENT%/}/${path##*/}"
+    [[ "$_MOLE_PATH_SNAPSHOT_PARENT" == "/" ]] && current_physical_path="/${path##*/}"
+    is_safe_project_artifact_under_root \
+        "$current_physical_path" "${_MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL:-}"
 }
 
-# Args: $1 - path
+# Args: $1 - path, $2 - optional shared deadline in SECONDS
 # Get directory size in KB.
 get_dir_size_kb() {
     local path="$1"
+    local deadline="${2:-}"
     if [[ ! -d "$path" ]]; then
         echo "0"
         return
@@ -790,6 +902,13 @@ get_dir_size_kb() {
     local timeout_seconds="${MO_PURGE_SIZE_TIMEOUT_SEC:-15}"
     if [[ ! "$timeout_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
         timeout_seconds=15
+    fi
+    if [[ -n "$deadline" ]]; then
+        timeout_seconds=$(_mole_timeout_with_deadline "$timeout_seconds" "$deadline") || {
+            debug_log "Size calculation budget exhausted before: $path"
+            echo "TIMEOUT"
+            return
+        }
     fi
 
     local du_output=""
@@ -823,6 +942,10 @@ get_dir_size_kb() {
         debug_log "Size calculation returned invalid output: $path"
         echo "ERROR"
     fi
+}
+
+_mole_purge_size_budget_seconds() {
+    mole_purge_timeout_budget_seconds "${1:-$MOLE_TIMEOUT_DISK_VERIFY_SEC}" 30
 }
 
 # Resolve the owning project for a purge artifact. Monorepo indicators take
@@ -1349,6 +1472,7 @@ clean_project_artifacts() {
     local -a safe_expected_parents=()
     local -a safe_expected_parent_ids=()
     local -a safe_expected_target_ids=()
+    local -a safe_scan_root_indexes=()
     local previous_int_trap=""
     local previous_term_trap=""
     local trap_installed_by_this_call=false
@@ -1366,6 +1490,10 @@ clean_project_artifacts() {
         for pid in "${scan_pids[@]+"${scan_pids[@]}"}"; do
             kill "$pid" 2> /dev/null || true
         done
+        for pid in "${scan_pids[@]+"${scan_pids[@]}"}"; do
+            wait "$pid" 2> /dev/null || true
+        done
+        scan_pids=()
         # Clean up temp files
         for temp in "${scan_temps[@]+"${scan_temps[@]}"}"; do
             rm -f "$temp" "${temp}.targets" "${temp}.tags" "${temp}.processed" 2> /dev/null || true
@@ -1381,13 +1509,31 @@ clean_project_artifacts() {
     previous_term_trap=$(trap -p TERM || true)
     trap cleanup_scan INT TERM
     trap_installed_by_this_call=true
+    _restore_purge_scan_traps() {
+        [[ "$trap_installed_by_this_call" == "true" ]] || return 0
+        trap - INT TERM
+        trap_installed_by_this_call=false
+        local saved_int_trap="$previous_int_trap"
+        local saved_term_trap="$previous_term_trap"
+        previous_int_trap=""
+        previous_term_trap=""
+        # eval: restore caller traps captured by $(trap -p)
+        [[ -n "$saved_int_trap" ]] && eval "$saved_int_trap"
+        [[ -n "$saved_term_trap" ]] && eval "$saved_term_trap"
+        return 0
+    }
     local -a scan_statuses=()
     local -a scan_root_parents=()
     local -a scan_root_parent_ids=()
     local -a scan_root_target_ids=()
+    local -a scan_root_physical_paths=()
+    local -a scan_root_physical_parents=()
+    local -a scan_root_physical_parent_ids=()
+    local -a scan_root_physical_target_ids=()
     local -a failed_scan_roots=()
     local -a failed_scan_statuses=()
     local failed_scan_count=0
+    local scan_interrupt_status=0
     local max_scan_jobs
     max_scan_jobs=$(get_optimal_parallel_jobs io)
     if ! [[ "$max_scan_jobs" =~ ^[0-9]+$ ]] || [[ "$max_scan_jobs" -lt 1 ]]; then
@@ -1397,8 +1543,9 @@ clean_project_artifacts() {
     fi
 
     _wait_for_purge_scan_batch() {
-        local pid
-        for pid in "${scan_pids[@]+"${scan_pids[@]}"}"; do
+        local scan_index pid
+        for ((scan_index = 0; scan_index < ${#scan_pids[@]}; scan_index++)); do
+            pid="${scan_pids[$scan_index]}"
             local scan_status=0
             if wait "$pid" 2> /dev/null; then
                 scan_status=0
@@ -1406,6 +1553,17 @@ clean_project_artifacts() {
                 scan_status=$?
             fi
             scan_statuses+=("$scan_status")
+            if [[ $scan_status -ge 128 ]]; then
+                local remaining_index
+                for ((remaining_index = scan_index + 1; remaining_index < ${#scan_pids[@]}; remaining_index++)); do
+                    kill "${scan_pids[$remaining_index]}" 2> /dev/null || true
+                done
+                for ((remaining_index = scan_index + 1; remaining_index < ${#scan_pids[@]}; remaining_index++)); do
+                    wait "${scan_pids[$remaining_index]}" 2> /dev/null || true
+                done
+                scan_pids=()
+                return "$scan_status"
+            fi
         done
         scan_pids=()
     }
@@ -1414,6 +1572,7 @@ clean_project_artifacts() {
     # Keep root-level concurrency bounded because each fd scan has its own
     # worker pool. Batches preserve launch-order alignment with scan_statuses.
     for path in "${PURGE_SEARCH_PATHS[@]}"; do
+        [[ $scan_interrupt_status -ge 128 ]] && break
         if [[ -d "$path" ]]; then
             if ! _mole_snapshot_path_identity "$path"; then
                 failed_scan_count=$((failed_scan_count + 1))
@@ -1422,23 +1581,63 @@ clean_project_artifacts() {
                 debug_log "Purge scan root identity unavailable: $path"
                 continue
             fi
+            local scan_root_parent="$_MOLE_PATH_SNAPSHOT_PARENT"
+            local scan_root_parent_id="$_MOLE_PATH_SNAPSHOT_PARENT_ID"
+            local scan_root_target_id="$_MOLE_PATH_SNAPSHOT_TARGET_ID"
+            local scan_root_physical_path=""
+            scan_root_physical_path=$(cd -P "$path" 2> /dev/null && pwd -P) || {
+                failed_scan_count=$((failed_scan_count + 1))
+                failed_scan_roots+=("$path")
+                failed_scan_statuses+=("1")
+                debug_log "Purge scan root physical path unavailable: $path"
+                continue
+            }
+            if ! _mole_snapshot_path_identity "$scan_root_physical_path"; then
+                failed_scan_count=$((failed_scan_count + 1))
+                failed_scan_roots+=("$path")
+                failed_scan_statuses+=("1")
+                debug_log "Purge scan root physical identity unavailable: $path"
+                continue
+            fi
             local scan_output
             scan_output=$(mktemp)
             scan_temps+=("$scan_output")
             scan_roots+=("$path")
-            scan_root_parents+=("$_MOLE_PATH_SNAPSHOT_PARENT")
-            scan_root_parent_ids+=("$_MOLE_PATH_SNAPSHOT_PARENT_ID")
-            scan_root_target_ids+=("$_MOLE_PATH_SNAPSHOT_TARGET_ID")
+            scan_root_parents+=("$scan_root_parent")
+            scan_root_parent_ids+=("$scan_root_parent_id")
+            scan_root_target_ids+=("$scan_root_target_id")
+            scan_root_physical_paths+=("$scan_root_physical_path")
+            scan_root_physical_parents+=("$_MOLE_PATH_SNAPSHOT_PARENT")
+            scan_root_physical_parent_ids+=("$_MOLE_PATH_SNAPSHOT_PARENT_ID")
+            scan_root_physical_target_ids+=("$_MOLE_PATH_SNAPSHOT_TARGET_ID")
             # Launch scan in background for true parallelism
             scan_purge_targets "$path" "$scan_output" < /dev/null &
             local scan_pid=$!
             scan_pids+=("$scan_pid")
             if [[ ${#scan_pids[@]} -ge $max_scan_jobs ]]; then
-                _wait_for_purge_scan_batch
+                _wait_for_purge_scan_batch || scan_interrupt_status=$?
+                [[ $scan_interrupt_status -ge 128 ]] && break
             fi
         fi
     done
-    _wait_for_purge_scan_batch
+    if [[ $scan_interrupt_status -lt 128 ]]; then
+        _wait_for_purge_scan_batch || scan_interrupt_status=$?
+    fi
+
+    if [[ $scan_interrupt_status -ge 128 ]]; then
+        local interrupted_stats_dir="${XDG_CACHE_HOME:-$HOME/.cache}/mole"
+        rm -f "$interrupted_stats_dir/purge_scanning" 2> /dev/null || true
+        local interrupted_temp
+        for interrupted_temp in "${scan_temps[@]+"${scan_temps[@]}"}"; do
+            rm -f "$interrupted_temp" "${interrupted_temp}.targets" \
+                "${interrupted_temp}.tags" "${interrupted_temp}.processed" 2> /dev/null || true
+        done
+        _restore_purge_scan_traps
+        if [[ -t 1 ]]; then
+            stop_inline_spinner
+        fi
+        return "$scan_interrupt_status"
+    fi
 
     # Stop the scanning monitor (removes purge_scanning file to signal completion)
     local stats_dir="${XDG_CACHE_HOME:-$HOME/.cache}/mole"
@@ -1466,6 +1665,15 @@ clean_project_artifacts() {
             scan_status=1
             scan_statuses[scan_index]=1
             debug_log "Purge scan root changed before results were collected: ${scan_roots[$scan_index]}"
+        fi
+        if [[ $scan_status -eq 0 ]] && ! _mole_path_matches_identity \
+            "${scan_root_physical_paths[$scan_index]}" \
+            "${scan_root_physical_parents[$scan_index]}" \
+            "${scan_root_physical_parent_ids[$scan_index]}" \
+            "${scan_root_physical_target_ids[$scan_index]}"; then
+            scan_status=1
+            scan_statuses[scan_index]=1
+            debug_log "Purge scan root target changed before results were collected: ${scan_roots[$scan_index]}"
         fi
         if [[ $scan_status -eq 0 && ! -f "$scan_output" ]]; then
             scan_status=1
@@ -1495,12 +1703,7 @@ clean_project_artifacts() {
     fi
     rm -f "$dedupe_output"
     # Restore caller traps after this function completes.
-    if [[ "$trap_installed_by_this_call" == "true" ]]; then
-        trap - INT TERM
-        # eval: restore caller traps captured by $(trap -p)
-        [[ -n "$previous_int_trap" ]] && eval "$previous_int_trap"
-        [[ -n "$previous_term_trap" ]] && eval "$previous_term_trap"
-    fi
+    _restore_purge_scan_traps
     if [[ $failed_scan_count -gt 0 ]]; then
         local root_text="root"
         [[ $failed_scan_count -ne 1 ]] && root_text="roots"
@@ -1539,17 +1742,42 @@ clean_project_artifacts() {
         _activity_total_timeout="$MOLE_TIMEOUT_HINT_SCAN_SEC"
     fi
     local _PURGE_ACTIVITY_DEADLINE_EPOCH=$((_now_epoch + _activity_total_timeout))
-    for item in "${all_found_items[@]}"; do
+    local candidate_index
+    for ((candidate_index = 0; candidate_index < ${#all_found_items[@]}; candidate_index++)); do
+        item="${all_found_items[$candidate_index]}"
         local candidate_bound=false
         local candidate_parent=""
         local candidate_parent_id=""
         local candidate_target_id=""
         local root_index
+        local scan_root
+        local -a candidate_root_indexes=()
         for ((root_index = 0; root_index < ${#scan_roots[@]}; root_index++)); do
             [[ ${scan_statuses[$root_index]:-1} -eq 0 ]] || continue
-            if ! is_safe_project_artifact "$item" "${scan_roots[$root_index]}"; then
-                continue
+            scan_root="${scan_roots[$root_index]}"
+            if [[ "$scan_root" == "/" || "$item" == "${scan_root%/}/"* ]]; then
+                candidate_root_indexes+=("$root_index")
             fi
+        done
+        # A scan root may be a symlink while fd/find reports the physical path.
+        # Fall back to the full physical containment check only for that rare
+        # alias case; normal candidates stay on their lexical roots.
+        if [[ ${#candidate_root_indexes[@]} -eq 0 ]]; then
+            for ((root_index = 0; root_index < ${#scan_roots[@]}; root_index++)); do
+                [[ ${scan_statuses[$root_index]:-1} -eq 0 ]] || continue
+                candidate_root_indexes+=("$root_index")
+            done
+        fi
+        if [[ ! -d "$item" || -L "$item" ]] || ! _mole_snapshot_path_identity "$item"; then
+            continue
+        fi
+        candidate_parent="$_MOLE_PATH_SNAPSHOT_PARENT"
+        candidate_parent_id="$_MOLE_PATH_SNAPSHOT_PARENT_ID"
+        candidate_target_id="$_MOLE_PATH_SNAPSHOT_TARGET_ID"
+        local candidate_physical_path="${candidate_parent%/}/${item##*/}"
+        [[ "$candidate_parent" == "/" ]] && candidate_physical_path="/${item##*/}"
+        local candidate_scan_root_index=-1
+        for root_index in "${candidate_root_indexes[@]}"; do
             if ! _mole_path_matches_identity \
                 "${scan_roots[$root_index]}" \
                 "${scan_root_parents[$root_index]}" \
@@ -1557,29 +1785,22 @@ clean_project_artifacts() {
                 "${scan_root_target_ids[$root_index]}"; then
                 continue
             fi
-            if [[ ! -d "$item" || -L "$item" ]] || ! _mole_snapshot_path_identity "$item"; then
-                continue
-            fi
-            candidate_parent="$_MOLE_PATH_SNAPSHOT_PARENT"
-            candidate_parent_id="$_MOLE_PATH_SNAPSHOT_PARENT_ID"
-            candidate_target_id="$_MOLE_PATH_SNAPSHOT_TARGET_ID"
-            # Bind the candidate only while both endpoints still match the
-            # completed scan. Rechecking the root after the candidate snapshot
-            # closes a replacement between those two observations.
             if ! _mole_path_matches_identity \
-                "${scan_roots[$root_index]}" \
-                "${scan_root_parents[$root_index]}" \
-                "${scan_root_parent_ids[$root_index]}" \
-                "${scan_root_target_ids[$root_index]}"; then
+                "${scan_root_physical_paths[$root_index]}" \
+                "${scan_root_physical_parents[$root_index]}" \
+                "${scan_root_physical_parent_ids[$root_index]}" \
+                "${scan_root_physical_target_ids[$root_index]}"; then
                 continue
             fi
             if ! _mole_path_matches_identity \
                 "$item" "$candidate_parent" "$candidate_parent_id" "$candidate_target_id"; then
                 continue
             fi
-            if ! is_safe_project_artifact "$item" "${scan_roots[$root_index]}"; then
+            if ! is_safe_project_artifact_under_root \
+                "$candidate_physical_path" "${scan_root_physical_paths[$root_index]}"; then
                 continue
             fi
+            candidate_scan_root_index="$root_index"
             candidate_bound=true
             break
         done
@@ -1612,6 +1833,7 @@ clean_project_artifacts() {
         safe_expected_parents+=("$candidate_parent")
         safe_expected_parent_ids+=("$candidate_parent_id")
         safe_expected_target_ids+=("$candidate_target_id")
+        safe_scan_root_indexes+=("$candidate_scan_root_index")
     done
     if [[ -t 1 ]]; then
         stop_inline_spinner
@@ -1626,6 +1848,9 @@ clean_project_artifacts() {
     # filesystem cache, making du timeout and display "unknown" sizes.
     local -a _size_tmpfiles=()
     local -a _size_pids=()
+    local _size_total_timeout
+    _size_total_timeout=$(_mole_purge_size_budget_seconds "$MOLE_TIMEOUT_DISK_VERIFY_SEC")
+    local _size_deadline=$((SECONDS + _size_total_timeout))
     local _max_size_jobs
     _max_size_jobs=$(get_optimal_parallel_jobs io)
     if ! [[ "$_max_size_jobs" =~ ^[0-9]+$ ]] || [[ "$_max_size_jobs" -lt 1 ]]; then
@@ -1658,21 +1883,85 @@ clean_project_artifacts() {
         fi
     }
 
+    local _size_previous_int_trap=""
+    local _size_previous_term_trap=""
+    local _size_interrupt_status=0
+    local _size_traps_installed=false
+    # shellcheck disable=SC2329 # Invoked by the signal trap below.
+    _cleanup_purge_size_workers() {
+        local size_pid
+        for size_pid in "${_size_pids[@]+"${_size_pids[@]}"}"; do
+            kill "$size_pid" 2> /dev/null || true
+        done
+        for size_pid in "${_size_pids[@]+"${_size_pids[@]}"}"; do
+            wait "$size_pid" 2> /dev/null || true
+        done
+        _size_pids=()
+    }
+    # shellcheck disable=SC2329 # Invoked by the signal trap below.
+    _handle_purge_size_interrupt() {
+        local interrupt_status="$1"
+        if [[ $_size_interrupt_status -lt 128 ]]; then
+            _size_interrupt_status="$interrupt_status"
+        fi
+        _cleanup_purge_size_workers
+    }
+    _restore_purge_size_traps() {
+        [[ "$_size_traps_installed" == "true" ]] || return 0
+        trap - INT TERM
+        _size_traps_installed=false
+        local saved_int_trap="$_size_previous_int_trap"
+        local saved_term_trap="$_size_previous_term_trap"
+        _size_previous_int_trap=""
+        _size_previous_term_trap=""
+        # eval: restore caller traps captured by $(trap -p)
+        [[ -n "$saved_int_trap" ]] && eval "$saved_int_trap"
+        [[ -n "$saved_term_trap" ]] && eval "$saved_term_trap"
+        return 0
+    }
+
+    _size_previous_int_trap=$(trap -p INT || true)
+    _size_previous_term_trap=$(trap -p TERM || true)
+    trap '_handle_purge_size_interrupt 130' INT
+    trap '_handle_purge_size_interrupt 143' TERM
+    _size_traps_installed=true
+
     for _sz_item in "${safe_to_clean[@]}"; do
+        [[ $_size_interrupt_status -ge 128 ]] && break
         local _stmp
         _stmp=$(mktemp)
         register_temp_file "$_stmp"
         _size_tmpfiles+=("$_stmp")
-        (get_dir_size_kb "$_sz_item" > "$_stmp" 2> /dev/null) < /dev/null &
+        if [[ $SECONDS -ge $_size_deadline ]]; then
+            printf 'TIMEOUT\n' > "$_stmp"
+            continue
+        fi
+        (get_dir_size_kb "$_sz_item" "$_size_deadline" > "$_stmp" 2> /dev/null) < /dev/null &
         _size_pids+=($!)
 
         if [[ ${#_size_pids[@]} -ge $_max_size_jobs ]]; then
             _reap_one_size_pid
+            [[ $_size_interrupt_status -ge 128 ]] && break
         fi
     done
-    for _spid in "${_size_pids[@]+"${_size_pids[@]}"}"; do
-        wait "$_spid" 2> /dev/null || true
-    done
+    if [[ $_size_interrupt_status -lt 128 ]]; then
+        for _spid in "${_size_pids[@]+"${_size_pids[@]}"}"; do
+            wait "$_spid" 2> /dev/null || true
+        done
+        _size_pids=()
+    fi
+    _restore_purge_size_traps
+
+    if [[ $_size_interrupt_status -ge 128 ]]; then
+        local interrupted_size_temp
+        for interrupted_size_temp in "${_size_tmpfiles[@]+"${_size_tmpfiles[@]}"}"; do
+            rm -f "$interrupted_size_temp" 2> /dev/null || true # SAFE: exact scratch file created by mktemp above
+        done
+        if [[ -t 1 ]]; then
+            stop_inline_spinner
+        fi
+        return "$_size_interrupt_status"
+    fi
 
     local -a menu_options=()
     local -a item_paths=()
@@ -1684,6 +1973,7 @@ clean_project_artifacts() {
     local -a item_expected_parents=()
     local -a item_expected_parent_ids=()
     local -a item_expected_target_ids=()
+    local -a item_scan_root_indexes=()
     # Helper to get artifact display name
     # For duplicate artifact names within same project, include parent directory for context
     get_artifact_display_name() {
@@ -1860,6 +2150,7 @@ clean_project_artifacts() {
         item_expected_parents+=("${safe_expected_parents[$item_index]}")
         item_expected_parent_ids+=("${safe_expected_parent_ids[$item_index]}")
         item_expected_target_ids+=("${safe_expected_target_ids[$item_index]}")
+        item_scan_root_indexes+=("${safe_scan_root_indexes[$item_index]}")
         # Build human-readable age label (bash 3.2 compatible, no assoc arrays).
         local _mod_time _age_secs _age_d
         _mod_time=$(get_file_mtime "$item" 2> /dev/null || echo "0")
@@ -2010,6 +2301,7 @@ clean_project_artifacts() {
         local -a sorted_item_expected_parents=()
         local -a sorted_item_expected_parent_ids=()
         local -a sorted_item_expected_target_ids=()
+        local -a sorted_item_scan_root_indexes=()
 
         for idx in "${sorted_indices[@]}"; do
             sorted_menu_options+=("${menu_options[idx]}")
@@ -2025,6 +2317,7 @@ clean_project_artifacts() {
             sorted_item_expected_parents+=("${item_expected_parents[idx]}")
             sorted_item_expected_parent_ids+=("${item_expected_parent_ids[idx]}")
             sorted_item_expected_target_ids+=("${item_expected_target_ids[idx]}")
+            sorted_item_scan_root_indexes+=("${item_scan_root_indexes[idx]}")
         done
 
         # Replace original arrays with sorted versions
@@ -2041,6 +2334,7 @@ clean_project_artifacts() {
         item_expected_parents=("${sorted_item_expected_parents[@]}")
         item_expected_parent_ids=("${sorted_item_expected_parent_ids[@]}")
         item_expected_target_ids=("${sorted_item_expected_target_ids[@]}")
+        item_scan_root_indexes=("${sorted_item_scan_root_indexes[@]}")
     fi
     if [[ -t 1 ]]; then
         stop_inline_spinner
@@ -2171,12 +2465,33 @@ clean_project_artifacts() {
         local expected_parent="${item_expected_parents[idx]}"
         local expected_parent_id="${item_expected_parent_ids[idx]}"
         local expected_target_id="${item_expected_target_ids[idx]}"
+        local expected_scan_root_index="${item_scan_root_indexes[idx]}"
+        local expected_scan_root="${scan_roots[$expected_scan_root_index]}"
+        local expected_scan_root_physical="${scan_root_physical_paths[$expected_scan_root_index]}"
+        if ! _mole_path_matches_identity \
+            "$expected_scan_root" \
+            "${scan_root_parents[$expected_scan_root_index]}" \
+            "${scan_root_parent_ids[$expected_scan_root_index]}" \
+            "${scan_root_target_ids[$expected_scan_root_index]}"; then
+            echo -e "${YELLOW}${ICON_WARNING}${NC} Skipped $display_item_path (scan root changed after review)"
+            continue
+        fi
+        if ! _mole_path_matches_identity \
+            "$expected_scan_root_physical" \
+            "${scan_root_physical_parents[$expected_scan_root_index]}" \
+            "${scan_root_physical_parent_ids[$expected_scan_root_index]}" \
+            "${scan_root_physical_target_ids[$expected_scan_root_index]}"; then
+            echo -e "${YELLOW}${ICON_WARNING}${NC} Skipped $display_item_path (scan root target changed after review)"
+            continue
+        fi
         if ! _mole_path_matches_identity \
             "$item_path" "$expected_parent" "$expected_parent_id" "$expected_target_id"; then
             echo -e "${YELLOW}${ICON_WARNING}${NC} Skipped $display_item_path (path changed after review)"
             continue
         fi
-        if ! is_safe_configured_purge_artifact "$item_path"; then
+        local current_item_physical_path="${_MOLE_PATH_SNAPSHOT_PARENT%/}/${item_path##*/}"
+        [[ "$_MOLE_PATH_SNAPSHOT_PARENT" == "/" ]] && current_item_physical_path="/${item_path##*/}"
+        if ! is_safe_project_artifact_under_root "$current_item_physical_path" "$expected_scan_root_physical"; then
             debug_log "Skipping purge target outside configured safe roots: ${item_path:-<empty>}"
             continue
         fi
@@ -2194,6 +2509,17 @@ clean_project_artifacts() {
         local removal_recorded=false
         if [[ -e "$item_path" ]]; then
             local _MOLE_PURGE_FINAL_WAS_RECENT="${item_recent_flags[idx]:-true}"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT="$expected_scan_root"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT_PARENT="${scan_root_parents[$expected_scan_root_index]}"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT_PARENT_ID="${scan_root_parent_ids[$expected_scan_root_index]}"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT_TARGET_ID="${scan_root_target_ids[$expected_scan_root_index]}"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL="$expected_scan_root_physical"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL_PARENT="${scan_root_physical_parents[$expected_scan_root_index]}"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL_PARENT_ID="${scan_root_physical_parent_ids[$expected_scan_root_index]}"
+            local _MOLE_PURGE_FINAL_SCAN_ROOT_PHYSICAL_TARGET_ID="${scan_root_physical_target_ids[$expected_scan_root_index]}"
+            local _MOLE_PURGE_FINAL_EXPECTED_PARENT="$expected_parent"
+            local _MOLE_PURGE_FINAL_EXPECTED_PARENT_ID="$expected_parent_id"
+            local _MOLE_PURGE_FINAL_EXPECTED_TARGET_ID="$expected_target_id"
             local _MOLE_SAFE_REMOVE_FINAL_GUARD="_mole_purge_final_remove_guard"
             if safe_remove "$item_path" true "$size_kb" "" \
                 "$expected_parent" "$expected_parent_id" "$expected_target_id"; then

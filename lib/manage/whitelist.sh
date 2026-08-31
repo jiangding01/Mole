@@ -341,8 +341,12 @@ ${GRAY}Edit: ${display_config}${NC}"
         items_source=$(get_all_cache_items)
         active_config_file="$WHITELIST_CONFIG_CLEAN"
         local display_config="${active_config_file/#$HOME/~}"
+        # Naming the file was not enough: users read the category list as the
+        # whole feature and did not know the file also takes arbitrary paths,
+        # so a cache Mole cleans but does not list looked unprotectable
+        # (discussion #1436). Say what the file accepts, not just where it is.
         menu_title="Whitelist Manager, Select caches to protect
-${GRAY}Edit: ${display_config}${NC}"
+${GRAY}Edit: ${display_config}, any path added there is protected too${NC}"
     fi
 
     while IFS='|' read -r display_name pattern _; do

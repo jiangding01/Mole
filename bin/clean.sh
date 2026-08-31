@@ -258,27 +258,45 @@ append_dry_run_cleanup_target() {
 # prepared ledger retain the legacy in-memory duplicate check.
 record_dry_run_cleanup_target() {
     local path="$1"
-    if declare -f should_protect_path > /dev/null 2>&1 && should_protect_path "$path" 2> /dev/null; then
-        return 1
+    local pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
+    if [[ "${MOLE_CURRENT_COMMAND:-}" == "clean" &&
+        ("$pending_clean_cancel" -eq 124 || "$pending_clean_cancel" -ge 128) ]]; then
+        return "$pending_clean_cancel"
     fi
-    if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$path" 2> /dev/null; then
-        return 1
-    fi
-    if declare -f holds_compiled_model_cache > /dev/null 2>&1 && holds_compiled_model_cache "$path" 2> /dev/null; then
-        return 1
-    fi
-    # Keep preview eligibility identical to real cleanup (#1390 / PR #1391).
-    if declare -f _mole_should_refuse_live_user_cache_path > /dev/null 2>&1 &&
-        _mole_should_refuse_live_user_cache_path "$path"; then
-        return 1
-    fi
-    if declare -f _mole_is_sqlite_database_path > /dev/null 2>&1 &&
-        _mole_is_sqlite_database_path "$path" &&
-        declare -f _mole_sqlite_database_in_use > /dev/null 2>&1; then
-        local sqlite_state=0
-        _mole_sqlite_database_in_use "$path" || sqlite_state=$?
-        if [[ $sqlite_state -eq 0 || $sqlite_state -eq 2 ]]; then
+    if [[ "${_MOLE_DRY_RUN_TARGET_PREVALIDATED:-false}" != "true" ]]; then
+        if declare -f should_protect_path > /dev/null 2>&1 && should_protect_path "$path" 2> /dev/null; then
             return 1
+        fi
+        if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$path" 2> /dev/null; then
+            return 1
+        fi
+        if declare -f holds_compiled_model_cache > /dev/null 2>&1 && holds_compiled_model_cache "$path" 2> /dev/null; then
+            return 1
+        fi
+        # Keep preview eligibility identical to real cleanup (#1390 / PR #1391).
+        if declare -f _mole_should_refuse_live_user_cache_path > /dev/null 2>&1; then
+            local live_cache_state=0
+            _mole_should_refuse_live_user_cache_path "$path" || live_cache_state=$?
+            if [[ $live_cache_state -eq 0 || $live_cache_state -eq 2 ]]; then
+                return 1
+            fi
+            if [[ $live_cache_state -eq 124 || $live_cache_state -ge 128 ]]; then
+                _mole_record_clean_cancellation "$live_cache_state"
+                return "$live_cache_state"
+            fi
+        fi
+        if declare -f _mole_is_sqlite_database_path > /dev/null 2>&1 &&
+            _mole_is_sqlite_database_path "$path" &&
+            declare -f _mole_sqlite_database_in_use > /dev/null 2>&1; then
+            local sqlite_state=0
+            _mole_sqlite_database_in_use "$path" || sqlite_state=$?
+            if [[ $sqlite_state -eq 0 || $sqlite_state -eq 2 ]]; then
+                return 1
+            fi
+            if [[ $sqlite_state -eq 124 || $sqlite_state -ge 128 ]]; then
+                _mole_record_clean_cancellation "$sqlite_state"
+                return "$sqlite_state"
+            fi
         fi
     fi
 
@@ -833,20 +851,12 @@ _safe_clean_impl() {
 
     local -a valid_targets=()
     for target in "${targets[@]}"; do
-        # Optimization: If target is a glob literal and parent dir missing, skip it.
-        if [[ "$target" == *"*"* && ! -e "$target" ]]; then
-            local base_path="${target%%\**}"
-            local parent_dir
-            if [[ "$base_path" == */ ]]; then
-                parent_dir="${base_path%/}"
-            else
-                parent_dir="${base_path%/*}"
-            fi
-
-            if [[ ! -d "$parent_dir" ]]; then
-                # debug_log "Skipping nonexistent parent: $parent_dir for $target"
-                continue
-            fi
+        # Missing targets cannot become less safe by being skipped. Filter them
+        # before the protection, whitelist, and compiled-model probes below;
+        # every target that still exists is fully checked again at the sink.
+        # Preserve broken symlinks so the deletion policy can classify them.
+        if [[ ! -e "$target" && ! -L "$target" ]]; then
+            continue
         fi
         valid_targets+=("$target")
     done
@@ -1644,8 +1654,12 @@ perform_cleanup() {
         if [[ $pending_clean_cancel -eq 124 || $pending_clean_cancel -ge 128 ]]; then
             return "$pending_clean_cancel"
         fi
+        local step_name="${1:-cleanup step}"
+        local _perf_step_start
+        debug_timer_start _perf_step_start
         local step_rc=0
         "$@" || step_rc=$?
+        debug_timer_end "cleanup step: $step_name" _perf_step_start
         pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
         if [[ $step_rc -eq 124 || $step_rc -ge 128 ]]; then
             MOLE_CLEAN_CANCEL_STATUS=$step_rc
@@ -1705,13 +1719,16 @@ perform_cleanup() {
             # Force shell fallback so timeout runs in this shell context.
             # The Cloud/Office cleaners rely on helpers (safe_clean, whitelist checks)
             # defined in this script and sourced modules.
-            if run_with_shell_timeout 300 run_cloud_and_office_cleanup; then
-                : # completed successfully
-            else
-                local ret=$?
-                if [[ $ret -eq 124 ]]; then
-                    log_warning "Cloud & Office cleanup timed out after 5 minutes, skipping remaining items"
-                elif [[ $ret -ge 128 ]]; then
+            local _perf_cloud_office_start
+            debug_timer_start _perf_cloud_office_start
+            local cloud_office_rc=0
+            run_with_shell_timeout 300 run_cloud_and_office_cleanup || cloud_office_rc=$?
+            debug_timer_end "cleanup step: run_cloud_and_office_cleanup" \
+                _perf_cloud_office_start
+            if [[ $cloud_office_rc -ne 0 ]]; then
+                local ret=$cloud_office_rc
+                if [[ $ret -eq 124 || $ret -ge 128 ]]; then
+                    _mole_record_clean_cancellation "$ret"
                     return "$ret"
                 else
                     log_warning "Cloud & Office cleanup failed with exit code $ret"
@@ -1973,8 +1990,28 @@ run_with_shell_timeout() {
 
 # shellcheck disable=SC2329  # Invoked indirectly via run_with_timeout fallback.
 run_cloud_and_office_cleanup() {
-    clean_cloud_storage
-    clean_office_applications
+    local cleanup_rc=0
+    local pending_clean_cancel=0
+
+    clean_cloud_storage || cleanup_rc=$?
+    pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
+    if [[ $cleanup_rc -eq 124 || $cleanup_rc -ge 128 ]]; then
+        return "$cleanup_rc"
+    fi
+    if [[ $pending_clean_cancel -eq 124 || $pending_clean_cancel -ge 128 ]]; then
+        return "$pending_clean_cancel"
+    fi
+
+    cleanup_rc=0
+    clean_office_applications || cleanup_rc=$?
+    pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
+    if [[ $cleanup_rc -eq 124 || $cleanup_rc -ge 128 ]]; then
+        return "$cleanup_rc"
+    fi
+    if [[ $pending_clean_cancel -eq 124 || $pending_clean_cancel -ge 128 ]]; then
+        return "$pending_clean_cancel"
+    fi
+    return 0
 }
 
 main() {

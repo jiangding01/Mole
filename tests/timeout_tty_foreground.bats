@@ -43,7 +43,7 @@ setup() {
 	run grep -nF "scan_purge_targets \"\$path\" \"\$scan_output\" < /dev/null &" "$PROJECT_ROOT/lib/clean/project.sh"
 	[ "$status" -eq 0 ] || return 1
 
-	run grep -nF "(get_dir_size_kb \"\$_sz_item\" > \"\$_stmp\" 2> /dev/null) < /dev/null &" "$PROJECT_ROOT/lib/clean/project.sh"
+	run grep -nF "(get_dir_size_kb \"\$_sz_item\" \"\$_size_deadline\" > \"\$_stmp\" 2> /dev/null) < /dev/null &" "$PROJECT_ROOT/lib/clean/project.sh"
 	[ "$status" -eq 0 ] || return 1
 }
 

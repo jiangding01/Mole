@@ -1160,6 +1160,7 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/dev.sh"
+_MOLE_COMPLETE_LSOF_MODE=direct
 pgrep() { return 1; }
 lsof() { return 1; }
 run_with_timeout() { shift; "$@"; }

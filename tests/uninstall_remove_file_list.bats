@@ -39,6 +39,25 @@ source "$PROJECT_ROOT/lib/uninstall/batch.sh"
 EOF
 }
 
+@test "remove_file_list refuses shared XDG roots regardless of display-name casing (#1446)" {
+    mkdir -p "$HOME/.Local/bin" "$HOME/.Config" "$HOME/.Cache"
+    touch "$HOME/.Local/bin/unrelated-cli" "$HOME/.Config/unrelated-config" "$HOME/.Cache/unrelated-cache"
+    local list
+    printf -v list '%s\n%s\n%s' "$HOME/.Local" "$HOME/.Config" "$HOME/.Cache"
+
+    run /bin/bash --noprofile --norc <<EOF
+$(prelude)
+remove_file_list "$list" "false"
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"0"* ]]
+    [[ -f "$HOME/.Local/bin/unrelated-cli" ]]
+    [[ -f "$HOME/.Config/unrelated-config" ]]
+    [[ -f "$HOME/.Cache/unrelated-cache" ]]
+    [[ ! -d "$MOLE_TEST_TRASH_DIR" ]]
+}
+
 @test "remove_file_list batches eligible Trash moves into a single helper call" {
     local f1="$SANDBOX/a.plist"
     local f2="$SANDBOX/b.plist"
@@ -95,7 +114,42 @@ EOF
     # Audit log records one ok line per moved path.
     local ok_lines
     ok_lines=$(awk -F'\t' '$4 == "ok" && $2 == "trash"' "$MOLE_DELETE_LOG" | wc -l | tr -d ' ')
-    [ "$ok_lines" -eq 5 ]
+	[ "$ok_lines" -eq 5 ]
+}
+
+@test "Trash batches refresh live-owner evidence before each move" {
+	local first_cache="$HOME/Library/Caches/com.example.One"
+	local second_cache="$HOME/Library/Caches/com.example.Two"
+	mkdir -p "$first_cache" "$second_cache" "$HOME/.cache/mole"
+	printf 'one\n' > "$first_cache/data"
+	printf 'two\n' > "$second_cache/data"
+	local ps_count="$SANDBOX/ps-count"
+	: > "$ps_count"
+
+	run env PROJECT_ROOT="$PROJECT_ROOT" PS_COUNT="$ps_count" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+ps() {
+	printf 'x' >> "$PS_COUNT"
+	local calls
+	calls=$(wc -c < "$PS_COUNT" | tr -d ' ')
+	printf '  PID  PPID COMM ARGS\n'
+	if [[ $calls -ge 2 ]]; then
+		printf '9000 1 /Applications/ExampleTwo /Applications/ExampleTwo --bundle com.example.Two\n'
+	fi
+}
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+remove_file_list "$(printf '%s\n%s\n' \
+	"$HOME/Library/Caches/com.example.One" \
+	"$HOME/Library/Caches/com.example.Two")" false
+printf 'PS_CALLS=%s ONE=%s TWO=%s\n' \
+	"$(wc -c < "$PS_COUNT" | tr -d ' ')" \
+	"$([[ -e "$HOME/Library/Caches/com.example.One" ]] && printf yes || printf no)" \
+	"$([[ -e "$HOME/Library/Caches/com.example.Two" ]] && printf yes || printf no)"
+EOF
+
+	[ "$status" -eq 0 ] || return 1
+	[[ "$output" == *"PS_CALLS=3 ONE=no TWO=yes"* ]] || return 1
 }
 
 @test "remove_file_list preserves unmoved paths when the guarded batch helper fails" {
@@ -150,7 +204,7 @@ _mole_snapshot_path_identity() {
 }
 mole_delete() { echo "UNEXPECTED_FALLBACK:\$1"; return 99; }
 remove_file_list "$list" "false"
-[[ -f "$outside_parent/cache/OUTSIDE_SENTINEL" ]]
+[[ -f "$outside_parent/cache/OUTSIDE_SENTINEL" ]] || exit 1
 [[ -f "$original_parent/cache/OWNED_SENTINEL" ]]
 EOF
 

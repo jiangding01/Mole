@@ -80,6 +80,49 @@ EOF
     [[ "$output" == *"was interrupted (exit 130)"* ]]
 }
 
+@test "cloud safety cancellation crosses the timeout worker and stops later sections" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/clean.sh"
+
+for fn in clean_user_essentials clean_finder_metadata clean_app_caches \
+    clean_browsers clean_user_gui_applications clean_virtualization_tools \
+    clean_application_support_logs clean_orphaned_app_data \
+    clean_orphaned_system_services clean_orphaned_container_stubs \
+    show_user_launch_agent_hint_notice clean_apple_silicon_caches \
+    clean_cached_device_firmware clean_time_machine_failed_backups \
+    check_large_file_candidates show_project_artifact_hint_notice; do
+    eval "$fn() { return 0; }"
+done
+
+clean_cloud_storage() {
+    MOLE_CLEAN_CANCEL_STATUS=124
+    export MOLE_CLEAN_CANCEL_STATUS
+    return 0
+}
+clean_office_applications() {
+    echo "UNEXPECTED_OFFICE"
+}
+clean_developer_tools() {
+    echo "UNEXPECTED_LATER_SECTION"
+}
+run_with_shell_timeout() {
+    shift
+    "$@" &
+    local worker_pid=$!
+    wait "$worker_pid"
+}
+
+perform_cleanup
+EOF
+
+    [ "$status" -eq 124 ] || return 1
+    [[ "$output" == *"Cleanup cancelled"* ]] || return 1
+    [[ "$output" == *"Remaining cleanup was skipped"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_"* ]]
+}
+
 @test "successful run still prints a complete summary" {
     run_perform_cleanup_with 0
 
